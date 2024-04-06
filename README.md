@@ -48,3 +48,17 @@
 <p>[🇹🇷] easy_localization paketinden kaynaklı olarak [...lowerCamelCase identifier] problemlerini engellemek için proje dizininde yer alan analysis_options.yaml dosyasında [rules:] ifadesinin altına [constant_identifier_names: false] tanımlamasını eklemeniz yeterli olacaktır.</p>
 
 ![problem_1](https://github.com/enescerrahoglu/template_app_bloc/assets/76053138/d1ca7d89-4067-432d-8c01-7c0a3b72f232)
+
+#
+## Things to know
+#
+<p>[🇺🇸] After adding new string definitions to the [language-code].json (such as en.json, tr.json) file, run the following codes in the terminal one by one so that the easy_localization structure can recognize these changes:</p>
+<p>[🇹🇷] [language-code].json (en.json, tr.json gibi) dosyasına yeni string tanımları ekledikten sonra easy_localization yapısının bu değişiklikleri tanıyabilmesi için aşağıdaki kodları terminalde tek tek çalıştırın:</p>
+
+```
+dart run easy_localization:generate --source-dir assets/translations
+```
+
+```
+dart run easy_localization:generate -S assets/translations -f keys -o locale_keys.g.dart
+```
