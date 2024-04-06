@@ -43,7 +43,7 @@
 
 #
 ## Problems you may encounter
-#
+
 <p>[🇺🇸] To prevent [...lowerCamelCase identifier] problems caused by the easy_localization package, it will be sufficient to add the [constant_identifier_names: false] definition under the [rules:] statement in the analysis_options.yaml file in the project directory.</p>
 <p>[🇹🇷] easy_localization paketinden kaynaklı olarak [...lowerCamelCase identifier] problemlerini engellemek için proje dizininde yer alan analysis_options.yaml dosyasında [rules:] ifadesinin altına [constant_identifier_names: false] tanımlamasını eklemeniz yeterli olacaktır.</p>
 
@@ -51,7 +51,7 @@
 
 #
 ## Things to know
-#
+
 <p>[🇺🇸] After adding new string definitions to the [language-code].json (such as en.json, tr.json) file, run the following codes in the terminal one by one so that the easy_localization structure can recognize these changes:</p>
 <p>[🇹🇷] [language-code].json (en.json, tr.json gibi) dosyasına yeni string tanımları ekledikten sonra easy_localization yapısının bu değişiklikleri tanıyabilmesi için aşağıdaki kodları terminalde tek tek çalıştırın:</p>
 
