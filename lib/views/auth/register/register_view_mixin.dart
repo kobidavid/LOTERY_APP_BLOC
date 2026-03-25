@@ -28,13 +28,14 @@ mixin RegisterViewMixin on State<RegisterView> {
     );
     if (httpResponseModel.statusCode == 200) {
       registerBloc.add(
-        CheckButtonPressed(
+        RegisterButtonPressed(
           email: _emailTextEditingController.text.trim(),
           password: _passwordTextEditingController.text.trim(),
         ),
       );
     } else {
-      AppHelper.showErrorMessage(context: context, content: httpResponseModel.message);
+      AppHelper.showErrorMessage(
+          context: context, content: httpResponseModel.message);
     }
   }
 
@@ -51,10 +52,12 @@ mixin RegisterViewMixin on State<RegisterView> {
           );
         }
       } else {
-        AppHelper.showErrorMessage(context: context, content: LocaleKeys.user_exists_message.tr());
+        AppHelper.showErrorMessage(
+            context: context, content: LocaleKeys.user_exists_message.tr());
       }
     } else if (state is CheckFailed) {
-      AppHelper.showErrorMessage(context: context, content: LocaleKeys.something_went_wrong.tr());
+      AppHelper.showErrorMessage(
+          context: context, content: LocaleKeys.something_went_wrong.tr());
     }
   }
 }

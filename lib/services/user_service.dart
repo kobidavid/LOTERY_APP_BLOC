@@ -5,13 +5,18 @@ import 'package:template_app_bloc/interfaces/user_interface.dart';
 import 'package:template_app_bloc/models/http_response_model.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:template_app_bloc/models/user_model.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class UserService extends UserInterface {
   final String _baseUrl = dotenv.env['BASE_URL'] ?? "";
   final String _authTokenKey = dotenv.env['AUTH_TOKEN_KEY'] ?? "";
-
-  @override
-  Future<HttpResponseModel> login({required String email, required String password}) async {
+  final FirebaseDatabase database = FirebaseDatabase.instance;
+  final FirebaseAuth auth = FirebaseAuth.instance;
+  /*  @override
+  Future<HttpResponseModel> login(
+      {required String email, required String password}) async {
     try {
       var url = Uri.parse('$_baseUrl/login');
       var response = await http.post(
@@ -32,24 +37,50 @@ class UserService extends UserInterface {
         message: 'An error occurred: $e',
       );
     }
+  } */
+
+  @override
+  Future<HttpResponseModel> login(
+      {required String email, required String password}) async {
+    // Get a reference to the collection
+
+    //CollectionReference collection =
+    //    FirebaseFirestore.instance.collection("users/doc");
+    DocumentReference docs = FirebaseFirestore.instance.doc("users/docs");
+    // Add the data to the collection
+    await docs.update({"email": "kakakak"});
+    return HttpResponseModel();
   }
 
   @override
-  Future<HttpResponseModel> create({required String email, required String password}) async {
+  Future<String> create({required UserModel userModel}) async {
+    // Get a reference to the collection
+
+    //CollectionReference collection =
+    final db = FirebaseFirestore.instance;
+    final alovelaceDocumentRef = db.collection("users").doc("kobi_david");
+    // Add the data to the collection
+    await alovelaceDocumentRef.set(userModel.toMap());
+    return "new user added";
+  }
+
+  @override
+  Future<HttpResponseModel> create22(
+      {required String email, required String password}) async {
     try {
-      var url = Uri.parse('$_baseUrl/users');
-      var response = await http.post(
-        url,
-        body: jsonEncode({
-          'email': email,
-          'password': password,
-        }),
-      );
+      // Get a reference to the collection
+      CollectionReference collection =
+          FirebaseFirestore.instance.collection("users");
+
+      // Add the data to the collection
+      await collection.add({"email": "addfd"});
 
       return HttpResponseModel(
-        statusCode: response.statusCode,
-        data: jsonDecode(response.body)["data"],
-        message: jsonDecode(response.body)["message"],
+        statusCode: 200,
+        //data: jsonDecode("response.body")["data"],  user sign up successfuly
+        data: "data_data",
+        //message: jsonDecode("response.body")["message"],
+        message: "user sign up successfuly",
       );
     } catch (e) {
       return HttpResponseModel(
@@ -194,7 +225,8 @@ class UserService extends UserInterface {
   }
 
   @override
-  Future<HttpResponseModel> updatePassword({required String userId, required String password}) async {
+  Future<HttpResponseModel> updatePassword(
+      {required String userId, required String password}) async {
     try {
       var url = Uri.parse('$_baseUrl/users/$userId');
       var response = await http.put(

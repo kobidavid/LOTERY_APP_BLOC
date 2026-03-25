@@ -15,26 +15,31 @@ import 'package:template_app_bloc/models/http_response_model.dart';
 import 'package:uuid/uuid.dart';
 
 class AppHelper {
-  static HttpResponseModel checkEmailAndPassword({required String email, required String password}) {
+  static HttpResponseModel checkEmailAndPassword(
+      {required String email, required String password}) {
     if (!AppConstants.emailRegex.hasMatch(email)) {
-      return HttpResponseModel(statusCode: 401, message: LocaleKeys.enter_valid_email.tr());
+      return HttpResponseModel(
+          statusCode: 401, message: LocaleKeys.enter_valid_password.tr());
     }
     if (!AppConstants.passwordRegex.hasMatch(password)) {
-      return HttpResponseModel(statusCode: 401, message: LocaleKeys.enter_valid_password.tr());
+      return HttpResponseModel(
+          statusCode: 401, message: LocaleKeys.enter_valid_password.tr());
     }
     return HttpResponseModel(statusCode: 200);
   }
 
   static HttpResponseModel checkEmail({required String email}) {
     if (!AppConstants.emailRegex.hasMatch(email)) {
-      return HttpResponseModel(statusCode: 401, message: LocaleKeys.enter_valid_email.tr());
+      return HttpResponseModel(
+          statusCode: 401, message: LocaleKeys.enter_valid_email.tr());
     }
     return HttpResponseModel(statusCode: 200);
   }
 
   static HttpResponseModel checkPassword({required String password}) {
     if (!AppConstants.passwordRegex.hasMatch(password)) {
-      return HttpResponseModel(statusCode: 401, message: LocaleKeys.enter_valid_password.tr());
+      return HttpResponseModel(
+          statusCode: 401, message: LocaleKeys.enter_valid_password.tr());
     }
     return HttpResponseModel(statusCode: 200);
   }
@@ -86,7 +91,8 @@ class AppHelper {
         }
         if (permissionStatus.isGranted) {
           try {
-            final image = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 100, maxWidth: 1920);
+            final image = await ImagePicker().pickImage(
+                source: ImageSource.gallery, imageQuality: 100, maxWidth: 1920);
             if (image == null) return null;
             final imageTemp = File(image.path);
             File? croppedImage = await cropImage(imageTemp);
@@ -102,7 +108,8 @@ class AppHelper {
       }
     } else if (Platform.isIOS) {
       try {
-        final image = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 100, maxWidth: 1920);
+        final image = await ImagePicker().pickImage(
+            source: ImageSource.gallery, imageQuality: 100, maxWidth: 1920);
         if (image == null) return null;
         final imageTemp = File(image.path);
         File? croppedImage = await cropImage(imageTemp);
@@ -122,7 +129,8 @@ class AppHelper {
         var permissionStatus = await Permission.camera.status;
         if (permissionStatus.isGranted) {
           try {
-            final image = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 100, maxWidth: 1920);
+            final image = await ImagePicker().pickImage(
+                source: ImageSource.camera, imageQuality: 100, maxWidth: 1920);
             if (image == null) return null;
             final imageTemp = File(image.path);
             File? croppedImage = await cropImage(imageTemp);
@@ -138,7 +146,8 @@ class AppHelper {
       }
     } else if (Platform.isIOS) {
       try {
-        final image = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 100, maxWidth: 1920);
+        final image = await ImagePicker().pickImage(
+            source: ImageSource.camera, imageQuality: 100, maxWidth: 1920);
         if (image == null) return null;
         final imageTemp = File(image.path);
         File? croppedImage = await cropImage(imageTemp);
@@ -179,7 +188,8 @@ class AppHelper {
     try {
       final response = await http.get(Uri.parse(url));
       final documentDirectory = await getApplicationDocumentsDirectory();
-      final File file = File('${documentDirectory.path}/${const Uuid().v1()}.jpg');
+      final File file =
+          File('${documentDirectory.path}/${const Uuid().v1()}.jpg');
       await file.writeAsBytes(response.bodyBytes);
       await Gal.putImage(file.path);
       await file.delete();

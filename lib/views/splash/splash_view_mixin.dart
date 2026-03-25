@@ -10,9 +10,10 @@ mixin SplashViewMixin on State<SplashView> {
     if (authToken == null) {
       loginBloc.add(const LogoutButtonPressed());
       if (context.mounted) {
+        //Future.delayed(Duration(seconds: 10));
         Navigator.pushAndRemoveUntil(
           context,
-          CupertinoPageRoute(builder: (context) => const LoginView()),
+          CupertinoPageRoute(builder: (context) => MyApp()),
           (route) => false,
         );
       }
@@ -32,14 +33,18 @@ mixin SplashViewMixin on State<SplashView> {
   }
 
   void _listener(LoginState state,
-      {required LoginBloc loginBloc, required RegisterBloc registerBloc, required ProfileBloc profileBloc}) {
+      {required LoginBloc loginBloc,
+      required RegisterBloc registerBloc,
+      required ProfileBloc profileBloc}) {
     if (state is ValidateSuccess) {
       profileBloc.add(SetUser(user: state.user));
       registerBloc.add(const ClearRegisterData());
       Navigator.pushAndRemoveUntil(
         context,
         CupertinoPageRoute(
-          builder: (context) => _checkValues(state.user) ? const NavigationView() : const ProfileView(),
+          builder: (context) => _checkValues(state.user)
+              ? const NavigationView()
+              : const ProfileView(),
         ),
         (route) => false,
       );
@@ -53,7 +58,8 @@ mixin SplashViewMixin on State<SplashView> {
         ),
         (route) => false,
       );
-      AppHelper.showErrorMessage(context: context, content: LocaleKeys.session_terminated.tr());
+      AppHelper.showErrorMessage(
+          context: context, content: LocaleKeys.session_terminated.tr());
     }
   }
 }

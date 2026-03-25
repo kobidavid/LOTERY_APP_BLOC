@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:template_app_bloc/blocs/auth/login/login_bloc.dart';
 import 'package:template_app_bloc/blocs/auth/register/register_bloc.dart';
+import 'package:template_app_bloc/blocs/counter/counter_bloc.dart';
 import 'package:template_app_bloc/blocs/profile/profile_bloc.dart';
 import 'package:template_app_bloc/blocs/theme/theme_bloc.dart';
 import 'package:template_app_bloc/blocs/theme/theme_event.dart';
@@ -23,14 +24,20 @@ void main() async {
   await ThemeService.getTheme();
   WidgetsFlutterBinding.ensureInitialized();
   await EasyLocalization.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   runApp(
     MultiBlocProvider(
       providers: [
-        BlocProvider(create: (context) => LoginBloc(userService: UserService())),
-        BlocProvider(create: (context) => RegisterBloc(userService: UserService())),
-        BlocProvider(create: (context) => ProfileBloc(userService: UserService())),
+        BlocProvider(
+            create: (context) => LoginBloc(userService: UserService())),
+        BlocProvider(
+            create: (context) => RegisterBloc(userService: UserService())),
+        BlocProvider(
+            create: (context) => ProfileBloc(userService: UserService())),
+        BlocProvider(create: (context) => CounterBloc()),
         BlocProvider(create: (context) => ThemeBloc()),
       ],
       child: EasyLocalization(
@@ -55,12 +62,14 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     themeBloc = BlocProvider.of<ThemeBloc>(context);
-    var brightness = SchedulerBinding.instance.platformDispatcher.platformBrightness;
+    var brightness =
+        SchedulerBinding.instance.platformDispatcher.platformBrightness;
     bool isDarkMode = ThemeService.isDark;
     if (ThemeService.useDeviceTheme) {
       isDarkMode = brightness == Brightness.dark;
     }
-    themeBloc.add(ChangeTheme(useDeviceTheme: ThemeService.useDeviceTheme, isDark: isDarkMode));
+    themeBloc.add(ChangeTheme(
+        useDeviceTheme: ThemeService.useDeviceTheme, isDark: isDarkMode));
 
     super.initState();
   }
@@ -75,7 +84,8 @@ class _MyAppState extends State<MyApp> {
     if (ThemeService.useDeviceTheme) {
       isDarkMode = brightness == Brightness.dark;
     }
-    themeBloc.add(ChangeTheme(useDeviceTheme: ThemeService.useDeviceTheme, isDark: isDarkMode));
+    themeBloc.add(ChangeTheme(
+        useDeviceTheme: ThemeService.useDeviceTheme, isDark: isDarkMode));
   }
 
   @override

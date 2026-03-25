@@ -14,8 +14,17 @@ import 'package:template_app_bloc/helpers/app_helper.dart';
 import 'package:template_app_bloc/models/user_model.dart';
 import 'package:template_app_bloc/services/user_service.dart';
 import 'package:template_app_bloc/views/auth/login/login_view.dart';
+import 'package:template_app_bloc/views/home/custom_widget_page.dart';
+import 'package:template_app_bloc/views/home/home_view.dart';
 import 'package:template_app_bloc/views/navigation/navigation_view.dart';
 import 'package:template_app_bloc/views/profile/profile_view.dart';
+
+import '../home/counter.dart';
+import '../home/my_app.dart';
+import '../home/my_app2.dart';
+import '../home/overlay.dart';
+import '../home/test.dart';
+import '../home/text_fields.dart';
 part "splash_view_mixin.dart";
 
 class SplashView extends StatefulWidget {
@@ -38,7 +47,10 @@ class _SplashViewState extends State<SplashView> with SplashViewMixin {
           return BlocListener<LoginBloc, LoginState>(
             listener: (context, state) {
               if (snapshot.hasData) {
-                _listener(state, loginBloc: loginBloc, profileBloc: profileBloc, registerBloc: registerBloc);
+                _listener(state,
+                    loginBloc: loginBloc,
+                    profileBloc: profileBloc,
+                    registerBloc: registerBloc);
               }
             },
             child: const Center(

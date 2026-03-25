@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "462078938105",
+    "project_id": "lotogroup-1ea8a",
+    "storage_bucket": "lotogroup-1ea8a.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:462078938105:android:1a84a81fb9e2dd094f0b28",
+        "android_client_info": {
+          "package_name": "com.enescerrahoglu.template_app_bloc"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDPu2R1yA7OZzrtUJxCrmWiEsPMp7JJFLk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

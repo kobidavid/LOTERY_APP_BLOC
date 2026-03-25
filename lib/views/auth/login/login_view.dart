@@ -60,7 +60,8 @@ class _LoginViewState extends State<LoginView> with LoginViewMixin {
                                 const TitleWidget(),
                                 const SizedBox(height: 20),
                                 CustomTextField(
-                                  textEditingController: _emailTextEditingController,
+                                  textEditingController:
+                                      _emailTextEditingController,
                                   enabled: !state.isLoading,
                                   placeholder: LocaleKeys.email.tr(),
                                   prefixIcon: CupertinoIcons.mail,
@@ -68,7 +69,8 @@ class _LoginViewState extends State<LoginView> with LoginViewMixin {
                                 ),
                                 const SizedBox(height: 10),
                                 CustomTextField(
-                                  textEditingController: _passwordTextEditingController,
+                                  textEditingController:
+                                      _passwordTextEditingController,
                                   placeholder: LocaleKeys.password.tr(),
                                   textInputAction: TextInputAction.done,
                                   enabled: !state.isLoading,
@@ -80,12 +82,11 @@ class _LoginViewState extends State<LoginView> with LoginViewMixin {
                                     onPressed: () {
                                       _showForgotPasswordModalPopup();
                                     },
-                                    child: Icon(
-                                      CupertinoIcons.question_circle,
-                                      color: themeState.isDark
-                                          ? ColorConstants.darkSecondaryIcon
-                                          : ColorConstants.lightSecondaryIcon,
-                                    ),
+                                    child: Icon(CupertinoIcons.question_circle,
+                                        color: themeState.isDark
+                                            ? ColorConstants.darkSecondaryIcon
+                                            : ColorConstants
+                                                .lightSecondaryIcon),
                                   ),
                                   obscureText: true,
                                   prefixIcon: CupertinoIcons.lock,
