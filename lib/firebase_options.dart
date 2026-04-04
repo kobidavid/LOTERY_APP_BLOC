@@ -59,12 +59,11 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyAAB2bVNgyvr9np3HDZCadpE4xYEf_FlFE',
-    appId: '1:462078938105:ios:b8f619d84b968e9d4f0b28',
+    apiKey: 'AIzaSyDWIsTQDIECSHeGSv7jcx6q-ny-w85d6Ng',
+    appId: '1:462078938105:ios:e839b2bb33f567414f0b28',
     messagingSenderId: '462078938105',
     projectId: 'lotogroup-1ea8a',
-    storageBucket: 'lotogroup-1ea8a.appspot.com',
-    iosBundleId: 'com.enescerrahoglu.templateAppBloc',
+    storageBucket: 'lotogroup-1ea8a.firebasestorage.app',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -73,7 +72,6 @@ class DefaultFirebaseOptions {
     messagingSenderId: '462078938105',
     projectId: 'lotogroup-1ea8a',
     storageBucket: 'lotogroup-1ea8a.appspot.com',
-    iosBundleId: 'com.enescerrahoglu.templateAppBloc',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(

@@ -5,9 +5,11 @@
 *.swp
 .DS_Store
 .atom/
+.build/
 .buildlog/
 .history
 .svn/
+.swiftpm/
 migrate_working_dir/
 
 # IntelliJ related
@@ -45,10 +47,14 @@ app.*.map.json
 build/
 .dart_tool/
 .packages
-pubspec.lock
 ios/Pods/
 android/.gradle/
 *.log
 *.zip
 *.apk
 *.ipa
+
+# Local generated output / tooling artifacts
+functions/output/
+output/
+package-lock.json

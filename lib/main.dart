@@ -1,106 +1,130 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/scheduler.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:template_app_bloc/blocs/auth/login/login_bloc.dart';
-import 'package:template_app_bloc/blocs/auth/register/register_bloc.dart';
-import 'package:template_app_bloc/blocs/counter/counter_bloc.dart';
-import 'package:template_app_bloc/blocs/profile/profile_bloc.dart';
-import 'package:template_app_bloc/blocs/theme/theme_bloc.dart';
-import 'package:template_app_bloc/blocs/theme/theme_event.dart';
-import 'package:template_app_bloc/blocs/theme/theme_state.dart';
-import 'package:template_app_bloc/constants/supported_locales.dart';
-import 'package:template_app_bloc/firebase_options.dart';
-import 'package:template_app_bloc/generated/codegen_loader.g.dart';
-import 'package:template_app_bloc/helpers/ui_helper.dart';
-import 'package:template_app_bloc/services/theme_service.dart';
-import 'package:template_app_bloc/services/user_service.dart';
-import 'package:template_app_bloc/views/splash/splash_view.dart';
 
-void main() async {
-  await dotenv.load();
-  await ThemeService.getTheme();
+import 'features/auth/auth_cubit.dart';
+import 'features/auth/auth_state.dart';
+import 'features/auth/sign_in_page.dart';
+import 'features/main_shell_page.dart';
+import 'firebase_options.dart';
+import 'repositories/auth_repository.dart';
+import 'services/firebase_auth_service.dart';
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await EasyLocalization.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
+  await _ensureFirebaseInitialized();
+  final AuthRepository authRepository = AuthRepository(
+    authService: FirebaseAuthService(),
   );
 
-  runApp(
-    MultiBlocProvider(
-      providers: [
-        BlocProvider(
-            create: (context) => LoginBloc(userService: UserService())),
-        BlocProvider(
-            create: (context) => RegisterBloc(userService: UserService())),
-        BlocProvider(
-            create: (context) => ProfileBloc(userService: UserService())),
-        BlocProvider(create: (context) => CounterBloc()),
-        BlocProvider(create: (context) => ThemeBloc()),
-      ],
-      child: EasyLocalization(
-        supportedLocales: SuppertedLocales.supportedLocales,
-        path: 'assets/translations',
-        assetLoader: const CodegenLoader(),
-        child: const MyApp(),
-      ),
-    ),
-  );
+  runApp(LotoGroupApp(authRepository: authRepository));
 }
 
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+class LotoGroupApp extends StatelessWidget {
+  const LotoGroupApp({
+    super.key,
+    required this.authRepository,
+  });
 
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  late ThemeBloc themeBloc;
-  @override
-  void initState() {
-    themeBloc = BlocProvider.of<ThemeBloc>(context);
-    var brightness =
-        SchedulerBinding.instance.platformDispatcher.platformBrightness;
-    bool isDarkMode = ThemeService.isDark;
-    if (ThemeService.useDeviceTheme) {
-      isDarkMode = brightness == Brightness.dark;
-    }
-    themeBloc.add(ChangeTheme(
-        useDeviceTheme: ThemeService.useDeviceTheme, isDark: isDarkMode));
-
-    super.initState();
-  }
-
-  @override
-  Future<void> didChangeDependencies() async {
-    super.didChangeDependencies();
-    var brightness = MediaQuery.of(context).platformBrightness;
-    await ThemeService.getTheme();
-
-    bool isDarkMode = ThemeService.isDark;
-    if (ThemeService.useDeviceTheme) {
-      isDarkMode = brightness == Brightness.dark;
-    }
-    themeBloc.add(ChangeTheme(
-        useDeviceTheme: ThemeService.useDeviceTheme, isDark: isDarkMode));
-  }
+  final AuthRepository authRepository;
 
   @override
   Widget build(BuildContext context) {
-    UIHelper.initialize(context);
-    return BlocBuilder<ThemeBloc, ThemeState>(builder: (context, themeState) {
-      return CupertinoApp(
-        localizationsDelegates: context.localizationDelegates,
-        supportedLocales: context.supportedLocales,
-        locale: context.locale,
-        title: 'Template App',
-        theme: ThemeService.buildTheme(themeState),
+    return BlocProvider(
+      create: (_) => AuthCubit(authRepository: authRepository),
+      child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        home: const SplashView(),
-      );
-    });
+        title: 'LotoGroup',
+        themeMode: ThemeMode.system,
+        theme: _buildTheme(Brightness.light),
+        darkTheme: _buildTheme(Brightness.dark),
+        home: _AuthGate(authRepository: authRepository),
+      ),
+    );
+  }
+
+  ThemeData _buildTheme(Brightness brightness) {
+    final bool isDark = brightness == Brightness.dark;
+    final ColorScheme colorScheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFFE91E63),
+      brightness: brightness,
+      surface: isDark ? const Color(0xFF17171B) : const Color(0xFFF8F3F7),
+    );
+
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: colorScheme.surface,
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: isDark ? const Color(0xFF2B2B33) : Colors.black87,
+        contentTextStyle: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      appBarTheme: AppBarTheme(
+        centerTitle: true,
+        backgroundColor:
+            isDark ? const Color(0xFF2D1C26) : const Color(0xFFF3B7CC),
+        foregroundColor: isDark ? Colors.white : Colors.black,
+        titleTextStyle: TextStyle(
+          color: isDark ? Colors.white : Colors.black,
+          fontSize: 30,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
+Future<FirebaseApp> _ensureFirebaseInitialized() async {
+  if (Firebase.apps.isNotEmpty) {
+    return Firebase.app();
+  }
+
+  try {
+    return await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } on FirebaseException catch (error) {
+    if (error.code == 'duplicate-app' && Firebase.apps.isNotEmpty) {
+      return Firebase.app();
+    }
+    rethrow;
+  }
+}
+
+class _AuthGate extends StatelessWidget {
+  const _AuthGate({
+    required this.authRepository,
+  });
+
+  final AuthRepository authRepository;
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<AuthCubit, AuthState>(
+      builder: (context, state) {
+        switch (state.status) {
+          case AuthStatus.loading:
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          case AuthStatus.authenticated:
+            return MainShellPage(
+              user: state.user!,
+              authRepository: authRepository,
+            );
+          case AuthStatus.failure:
+          case AuthStatus.unauthenticated:
+            return const SignInPage();
+        }
+      },
+    );
   }
 }

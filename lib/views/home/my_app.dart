@@ -1,968 +1,967 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter_expandable_fab/flutter_expandable_fab.dart';
+import 'dart:math';
 
-void main() {
-  runApp(MyApp());
-}
+import 'package:flutter/material.dart';
+
+import 'printing/lottery_print_preview_page.dart';
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Number Input',
-      home: NumberInputScreen(),
+      debugShowCheckedModeBanner: false,
+      title: 'LotoGroup',
+      themeMode: ThemeMode.system,
+      theme: _buildLotteryTheme(Brightness.light),
+      darkTheme: _buildLotteryTheme(Brightness.dark),
+      home: const NumberInputScreen(),
+    );
+  }
+
+  ThemeData _buildLotteryTheme(Brightness brightness) {
+    final bool isDark = brightness == Brightness.dark;
+    final ColorScheme colorScheme = ColorScheme.fromSeed(
+      brightness: brightness,
+      seedColor: const Color(0xFFE91E63),
+      surface: isDark ? const Color(0xFF17171B) : const Color(0xFFF8F3F7),
+    );
+
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: colorScheme.surface,
+      appBarTheme: AppBarTheme(
+        elevation: 0,
+        backgroundColor:
+            isDark ? const Color(0xFF33212A) : const Color(0xFFF3B7CC),
+        foregroundColor: isDark ? Colors.white : Colors.black,
+        titleTextStyle: TextStyle(
+          fontSize: 28,
+          fontWeight: FontWeight.w900,
+          color: isDark ? Colors.white : Colors.black,
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
     );
   }
 }
 
 class NumberInputScreen extends StatefulWidget {
+  const NumberInputScreen({super.key});
+
   @override
-  _NumberInputScreenState createState() => _NumberInputScreenState();
+  State<NumberInputScreen> createState() => _NumberInputScreenState();
 }
 
 class _NumberInputScreenState extends State<NumberInputScreen> {
-  final List<List<TextEditingController>> _controllers = List.generate(
-    14,
-    (_) => List.generate(7, (_) => TextEditingController()),
-  );
+  static const int _rowCount = 14;
+  static const int _regularCount = 6;
+  static const int _strongIndex = 6;
+  static const double _rowLabelWidth = 92;
 
-  final List<List<FocusNode>> _focusNodes =
-      List.generate(14, (_) => List.generate(7, (_) => FocusNode()));
-  final List<int> _enteredNumbers =
-      List.filled(7, 0); // Initialize a list to store the entered numbers
-  //List<bool> _isSelected = [false, false, false];
+  final Random _random = Random();
+  final List<List<int?>> _rows =
+      List.generate(_rowCount, (_) => List<int?>.filled(7, null));
+  final ScrollController _rowsScrollController = ScrollController();
+  late final PageController _keyboardPageController;
 
-  final List<List<List<bool>>> buttonStates = List.generate(
-      14, (i) => List.generate(5, (k) => List.generate(10, (j) => false)));
-
-  int _currentGroup = 0;
-  int _currentIndex = 0;
-  final int pageCount = 7;
-  final int buttonCount = 37;
-  final List<int> nullPosstion = [];
-  final List<int> indexPosstion = [];
-  late PageController _pageController;
-  int highlightedRowIndex = 0;
-
-  void toggleNextRowHighlight() {
-    setState(() {
-      highlightedRowIndex =
-          (highlightedRowIndex + 1) % _controllers[_currentGroup].length;
-    });
-  }
-
-  void _handleNumberButtonPress(String number) {
-    setState(() {
-      int x = 0;
-      nullPosstion.clear();
-      //final List<int> nullPosstion = [];
-      for (var i = 0; i < _controllers[_currentGroup].length; i++) {
-        if (_controllers[_currentGroup][i].text == number) {
-          x++;
-          indexPosstion.add(i);
-          print('_controllers[_currentGroup][i].text == number)');
-        } else if (_controllers[_currentGroup][i].text.isEmpty) {
-          print('_controllers[_currentGroup][i].text == ""');
-          nullPosstion.add(i);
-        }
-      }
-
-      if (x == 0) {
-        if (_currentIndex < 7) {
-          //setState(() {
-
-          if (nullPosstion.isNotEmpty) {
-            _currentIndex = nullPosstion.first;
-            _controllers[_currentGroup][_currentIndex].text = number.toString();
-            nullPosstion.removeAt(0);
-            print("old_currentGroup");
-            print(_currentIndex);
-            print(nullPosstion.length);
-
-            //nullPosstion.clear();
-            //_controllers[_currentGroup].sort((a, b) {
-            // Parse the text to integers
-            //int valueA = int.tryParse(a.text) ?? 0;
-            //int valueB = int.tryParse(b.text) ?? 0;
-
-            // Compare the integer values
-            //return valueA.compareTo(valueB);
-            //});
-          } else {
-            //highlightedRowIndex = (_currentGroup + 1) % _controllers.length;
-            //nullPosstion.clear();
-            print("new_currentGroup");
-            print(nullPosstion.length);
-            _currentIndex = 0;
-            ++_currentGroup;
-
-            _controllers[_currentGroup][_currentIndex].text = number.toString();
-
-            //_controllers[_currentGroup].sort((a, b) {
-            // Parse the text to integers
-            //  int valueA = int.tryParse(a.text) ?? 0;
-            //  int valueB = int.tryParse(b.text) ?? 0;
-
-            // Compare the integer values
-            //  return valueA.compareTo(valueB);
-            //});
-          }
-          // });
-        } else {
-          //setState(() {
-          //_currentGroup++;
-
-          print("_currentGroup");
-          toggleNextRowHighlight();
-          _currentIndex = nullPosstion[0];
-          _controllers[_currentGroup][_currentIndex].text = number.toString();
-          _currentGroup = highlightedRowIndex;
-
-          //_controllers[_currentGroup].sort((a, b) {
-          // Parse the text to integers
-          //  int valueA = int.tryParse(a.text) ?? 0;
-          //  int valueB = int.tryParse(b.text) ?? 0;
-
-          // Compare the integer values
-          // return valueA.compareTo(valueB);
-          //  });
-          // _currentIndex++;
-          //});
-        }
-      } else {
-        //setState(() {
-        //_currentIndex = nullPosstion[0];
-        _currentIndex = indexPosstion[0];
-        _controllers[_currentGroup][indexPosstion[0]].text = "";
-        //  _controllers[_currentGroup].sort((a, b) {
-        // Parse the text to integers
-        //    int valueA = int.tryParse(a.text) ?? 0;
-        //    int valueB = int.tryParse(b.text) ?? 0;
-
-        // Compare the integer values
-        //    return valueA.compareTo(valueB);
-        //  });
-        //_currentIndex--;
-        //nullPosstion.clear();
-        indexPosstion.clear();
-        print("exist and lower then 7");
-        //  });
-      }
-    });
-  }
-
-  bool isAnyFieldEmpty() {
-    return _controllers[_currentGroup]
-        .any((controller) => controller.text.trim().isEmpty);
-  }
-
-  bool scrollingAllowed = false;
-  //int currentIndex = 0;
+  int _activeRowIndex = 0;
+  int _maxUnlockedRowIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _focusNodes[0][0].requestFocus();
-    _isScrollingAllowed; // Set focus on the first square initially
-    //buttonStates = List.generate(
-    //  pageCount, (_) => List.generate(buttonCount, (_) => false));
-
-    _pageController = PageController();
+    _keyboardPageController = PageController();
   }
 
-  void toggleButton(int pageIndex, int btnRowNum, int buttonId) {
+  bool _rowRegularComplete(int rowIndex) {
+    return _rows[rowIndex].take(_regularCount).every((value) => value != null);
+  }
+
+  bool _rowComplete(int rowIndex) {
+    return _rows[rowIndex].every((value) => value != null);
+  }
+
+  int _firstEmptyRegularIndex(int rowIndex) {
+    return _rows[rowIndex]
+        .take(_regularCount)
+        .toList()
+        .indexWhere((value) => value == null);
+  }
+
+  void _compactRegularNumbers(int rowIndex) {
+    final List<int?> compacted = _rows[rowIndex]
+        .take(_regularCount)
+        .whereType<int>()
+        .cast<int?>()
+        .toList();
+    while (compacted.length < _regularCount) {
+      compacted.add(null);
+    }
+    for (int index = 0; index < _regularCount; index++) {
+      _rows[rowIndex][index] = compacted[index];
+    }
+  }
+
+  void _scrollToActiveRow() {
+    if (!_rowsScrollController.hasClients) {
+      return;
+    }
+
+    final double targetOffset = (_activeRowIndex * 60).toDouble().clamp(
+          0,
+          _rowsScrollController.position.maxScrollExtent,
+        );
+
+    _rowsScrollController.animateTo(
+      targetOffset,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _setActiveRow(int rowIndex, {bool animateKeyboard = true}) {
     setState(() {
-      buttonStates[pageIndex][btnRowNum][buttonId] =
-          !buttonStates[pageIndex][btnRowNum][buttonId];
+      _activeRowIndex = rowIndex;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToActiveRow();
+      if (animateKeyboard && _keyboardPageController.hasClients) {
+        _keyboardPageController.animateToPage(
+          rowIndex,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
-  bool _isScrollingAllowed() {
-    return _controllers[_currentGroup].every((controller) {
-      String text = controller.text.trim();
-      scrollingAllowed = text.isNotEmpty && int.tryParse(text) != null;
-      return scrollingAllowed;
+  void _toggleRegularNumber(int number) {
+    final int selectedIndex =
+        _rows[_activeRowIndex].take(_regularCount).toList().indexWhere(
+              (value) => value == number,
+            );
+
+    setState(() {
+      if (selectedIndex != -1) {
+        _rows[_activeRowIndex][selectedIndex] = null;
+        _compactRegularNumbers(_activeRowIndex);
+        return;
+      }
+
+      final int emptyIndex = _firstEmptyRegularIndex(_activeRowIndex);
+      if (emptyIndex == -1) {
+        return;
+      }
+
+      _rows[_activeRowIndex][emptyIndex] = number;
     });
   }
 
-  void _showEnteredNumbers() {
-    if (_enteredNumbers.every((number) => number != 0)) {
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Entered Numbers'),
-          content: Text('$_enteredNumbers'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    } else {
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Incomplete Input'),
-          content: const Text('Please fill all the squares.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
+  void _toggleStrongNumber(int number) {
+    if (!_rowRegularComplete(_activeRowIndex)) {
+      return;
+    }
+
+    setState(() {
+      _rows[_activeRowIndex][_strongIndex] =
+          _rows[_activeRowIndex][_strongIndex] == number ? null : number;
+    });
+
+    if (_rowComplete(_activeRowIndex) && _activeRowIndex < _rowCount - 1) {
+      _maxUnlockedRowIndex = max(_maxUnlockedRowIndex, _activeRowIndex + 1);
+      _setActiveRow(_activeRowIndex + 1);
     }
   }
 
-  Alignment upperBtnAlign = const Alignment(0.93, -0.6);
-  Alignment lowerBtnAlign = const Alignment(0.93, -0.6);
-  bool fabClick = false;
-
-  void changeBtnAlign() {
-    if (fabClick) {
-      setState(() {
-        upperBtnAlign = const Alignment(0.5, -0.53);
-        lowerBtnAlign = const Alignment(0.1, -0.53);
-      });
-    } else {
-      setState(() {
-        upperBtnAlign = const Alignment(0.93, -0.6);
-        lowerBtnAlign = const Alignment(0.93, -0.6);
-      });
+  void _handleRowTap(int rowIndex) {
+    final bool canOpen = rowIndex <= _maxUnlockedRowIndex;
+    if (!canOpen || rowIndex == _activeRowIndex) {
+      return;
     }
+
+    _setActiveRow(rowIndex);
+  }
+
+  void _handleKeyboardPageChanged(int rowIndex) {
+    if (rowIndex == _activeRowIndex) {
+      return;
+    }
+
+    final bool canMoveBackward = rowIndex < _activeRowIndex;
+    final bool canMoveForward = rowIndex <= _maxUnlockedRowIndex;
+
+    if (canMoveBackward || canMoveForward) {
+      _setActiveRow(rowIndex, animateKeyboard: false);
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_keyboardPageController.hasClients) {
+        _keyboardPageController.animateToPage(
+          _activeRowIndex,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<bool> _showConfirmationDialog(String message) async {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor:
+                isDark ? const Color(0xFF23232A) : const Color(0xFFFFFBFD),
+            title: Text(
+              'אישור',
+              style: TextStyle(color: isDark ? Colors.white : Colors.black),
+            ),
+            content: Text(
+              message,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: isDark ? Colors.white70 : Colors.black87,
+                fontSize: 17,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('ביטול'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('אישור'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> _showActionsSheet() async {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor:
+          isDark ? const Color(0xFF202028) : const Color(0xFFFFFBFD),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  leading: const Icon(Icons.auto_awesome),
+                  title: const Text('מילוי אוטומטי'),
+                  onTap: () async {
+                    Navigator.of(context).pop();
+                    final bool confirmed = await _showConfirmationDialog(
+                      'האם אתה בטוח שאתה רוצה למלא טופס אוטומטי?',
+                    );
+                    if (confirmed) {
+                      _autoFillForm();
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  leading: const Icon(Icons.delete_outline),
+                  title: const Text('נקה טופס'),
+                  onTap: () async {
+                    Navigator.of(context).pop();
+                    final bool confirmed = await _showConfirmationDialog(
+                      'האם אתה בטוח שאתה רוצה לנקות את הטופס?',
+                    );
+                    if (confirmed) {
+                      _clearForm();
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _autoFillForm() {
+    setState(() {
+      for (int rowIndex = 0; rowIndex < _rowCount; rowIndex++) {
+        final List<int> regulars = List<int>.generate(37, (index) => index + 1)
+          ..shuffle(_random);
+        final List<int> selected = regulars.take(6).toList()..sort();
+        for (int i = 0; i < _regularCount; i++) {
+          _rows[rowIndex][i] = selected[i];
+        }
+        _rows[rowIndex][_strongIndex] = _random.nextInt(7) + 1;
+      }
+      _activeRowIndex = 0;
+      _maxUnlockedRowIndex = _rowCount - 1;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _rowsScrollController.jumpTo(0);
+      if (_keyboardPageController.hasClients) {
+        _keyboardPageController.jumpToPage(0);
+      }
+    });
+  }
+
+  void _clearForm() {
+    setState(() {
+      for (final row in _rows) {
+        for (int index = 0; index < row.length; index++) {
+          row[index] = null;
+        }
+      }
+      _activeRowIndex = 0;
+      _maxUnlockedRowIndex = 0;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _rowsScrollController.jumpTo(0);
+      if (_keyboardPageController.hasClients) {
+        _keyboardPageController.jumpToPage(0);
+      }
+    });
+  }
+
+  void _openPrintPreview() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LotteryPrintPreviewPage(
+          rows: _rows.map((row) => List<int?>.from(row)).toList(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _rowsScrollController.dispose();
+    _keyboardPageController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    var screenSize = MediaQuery.of(context).size;
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-        //todo what should this button do exactly?
-        /* floatingActionButton: FloatingActionButton(
-          heroTag: "addButton",
-          backgroundColor: const Color(0xff89cff0),
-          foregroundColor: Colors.white,
-          splashColor: Colors.orangeAccent,
-          child: const Icon(
-            Icons.add,
-            size: 40,
-          ),
-          onPressed: () {
-            setState(() {
-              fabClick = !fabClick;
-            });
-            changeBtnAlign();
-          },
-        ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.endTop, */
-        appBar: PreferredSize(
-            preferredSize:
-                const Size.fromHeight(30.0), // here the desired height
-            child: AppBar(
-              //shape: CircleBorder(side: BorderSide.none, eccentricity: 1),
-              centerTitle: true,
-              title: const Align(
-                  alignment: Alignment.center,
-                  child: Text('LotoGroup',
-                      style: TextStyle(
-                          fontSize: 28, fontWeight: FontWeight.w900))),
-              backgroundColor: Colors.pink[100],
-            )),
-        body: Column(children: [
-          Stack(
-            //fit: StackFit.expand,
-            children: [
-              SizedBox(
-                //margin: EdgeInsets.only(top: 50),
-                height: 608,
-                //height: MediaQuery.of(context).size.height - 80,
-                width: MediaQuery.of(context).size.width,
-                child: Row(
-                  children: [
-                    Column(
-                      children: [
-                        Container(
-                          width: screenSize.width,
-                          alignment: Alignment.centerRight,
-                          child: Column(
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                children: [
-                                  ElevatedButton(
-                                    style: ButtonStyle(
-                                        foregroundColor:
-                                            WidgetStateProperty.all(
-                                                Colors.black),
-                                        backgroundColor:
-                                            WidgetStateProperty.all(
-                                                Colors.black),
-                                        shape: WidgetStateProperty.all<
-                                                RoundedRectangleBorder>(
-                                            RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(5.0),
-                                                side: const BorderSide(
-                                                    color: Colors.white)))),
-                                    onPressed: () {},
-                                    child: const Text("איזור אישי",
-                                        style: TextStyle(color: Colors.white)),
-                                  ),
-                                ],
+      backgroundColor: colors.surface,
+      appBar: AppBar(
+        centerTitle: true,
+        title: const Text('LotoGroup'),
+      ),
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final double keyboardHeight =
+                (constraints.maxHeight * 0.30).clamp(210.0, 252.0);
+
+            return Stack(
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    10,
+                    6,
+                    10,
+                    keyboardHeight + 10,
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isDark
+                                  ? const Color(0xFF111318)
+                                  : Colors.black,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 14,
                               ),
-                            ],
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            onPressed: () {},
+                            child: const Text(
+                              'איזור אישי',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          FilledButton(
+                            onPressed: _openPrintPreview,
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 14,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Text(
+                              'Print',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const Spacer(),
+                          FloatingActionButton.small(
+                            heroTag: 'actions_button',
+                            backgroundColor: isDark
+                                ? const Color(0xFF5CAACE)
+                                : const Color(0xFF8DD0F1),
+                            foregroundColor: Colors.white,
+                            onPressed: _showActionsSheet,
+                            child: const Icon(Icons.add),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton(
+                          onPressed: _openPrintPreview,
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
+                            side: BorderSide(
+                              color: isDark
+                                  ? Colors.white24
+                                  : colors.primary.withValues(alpha: 0.45),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const Text(
+                            'Open Print Debug Preview',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                        const SizedBox(
-                          height: 20,
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: ListView.separated(
+                          controller: _rowsScrollController,
+                          padding: EdgeInsets.zero,
+                          itemCount: _rowCount,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, rowIndex) {
+                            return LotteryRowCard(
+                              rowIndex: rowIndex,
+                              values: _rows[rowIndex],
+                              isActive: rowIndex == _activeRowIndex,
+                              isEnabled: rowIndex <= _maxUnlockedRowIndex,
+                              onTap: () => _handleRowTap(rowIndex),
+                            );
+                          },
                         ),
-                        Column(
-                          //crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(
-                                  maxWidth: 300, maxHeight: 220),
-                              child: ListView.builder(
-                                scrollDirection: Axis.vertical,
-                                shrinkWrap: true,
-                                itemCount: 14,
-                                itemBuilder: (context, int groupIndex) {
-                                  return GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTap: !isAnyFieldEmpty() ||
-                                              _currentGroup == groupIndex
-                                          ? () {
-                                              setState(() {
-                                                _currentGroup = groupIndex;
-                                              });
-                                              _pageController.animateToPage(
-                                                groupIndex,
-                                                duration: const Duration(
-                                                    milliseconds: 100),
-                                                curve: Curves.easeInOutExpo,
-                                              );
-                                            }
-                                          : null,
-                                      child: Column(
-                                        children: [
-                                          Container(
-                                            height: 40, width: 300,
-                                            //width: screenSize.width / 1.2,
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: LotteryKeyboardSheet(
+                    height: keyboardHeight,
+                    controller: _keyboardPageController,
+                    rows: _rows,
+                    activeRowIndex: _activeRowIndex,
+                    onPageChanged: _handleKeyboardPageChanged,
+                    onRegularTap: _toggleRegularNumber,
+                    onStrongTap: _toggleStrongNumber,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
 
-                                            decoration: BoxDecoration(
-                                                color: groupIndex ==
-                                                        highlightedRowIndex
-                                                    ? Colors.blue
-                                                    : Colors.black,
-                                                border: Border.all(),
-                                                borderRadius:
-                                                    const BorderRadius.all(
-                                                        Radius.circular(5))),
-                                            child: Column(
-                                              children: [
-                                                Row(children: [
-                                                  Container(
-                                                    margin:
-                                                        const EdgeInsets.only(
-                                                            left: 2,
-                                                            right: 2,
-                                                            top: 4,
-                                                            bottom: 4),
-                                                    child: ConstrainedBox(
-                                                      constraints:
-                                                          const BoxConstraints(
-                                                              minWidth: 50,
-                                                              maxWidth: 50,
-                                                              minHeight: 27,
-                                                              maxHeight: 27),
-                                                      child: ElevatedButton(
-                                                        style: ElevatedButton.styleFrom(
-                                                            padding: EdgeInsets
-                                                                .zero,
-                                                            shape: RoundedRectangleBorder(
-                                                                borderRadius:
-                                                                    BorderRadius
-                                                                        .circular(
-                                                                            4.0)),
-                                                            minimumSize:
-                                                                Size.infinite,
-                                                            side:
-                                                                const BorderSide(
-                                                                    width: 1.0,
-                                                                    color: Colors
-                                                                        .pink),
-                                                            foregroundColor:
-                                                                Colors.white,
-                                                            backgroundColor:
-                                                                Colors.pink),
-                                                        onPressed: () {},
-                                                        child: Text(
-                                                            "טבלה ${groupIndex + 1}",
-                                                            style: const TextStyle(
-                                                                fontSize: 15,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w800)),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  ...List.generate(
-                                                    7,
-                                                    (colIndex) {
-                                                      return IgnorePointer(
-                                                        child: Container(
-                                                          width: 30,
-                                                          height: 27,
-                                                          margin:
-                                                              const EdgeInsets
-                                                                  .all(2),
-                                                          decoration: colIndex !=
-                                                                  6
-                                                              ? BoxDecoration(
-                                                                  color: Colors
-                                                                      .pink,
-                                                                  borderRadius:
-                                                                      BorderRadius
-                                                                          .circular(
-                                                                              8),
-                                                                )
-                                                              : BoxDecoration(
-                                                                  color: const Color
-                                                                      .fromARGB(
-                                                                      255,
-                                                                      226,
-                                                                      233,
-                                                                      30),
-                                                                  borderRadius:
-                                                                      BorderRadius
-                                                                          .circular(
-                                                                              8),
-                                                                ),
-                                                          child: SizedBox(
-                                                            width: 27,
-                                                            height: 27,
-                                                            child: TextField(
-                                                              readOnly: true,
-                                                              cursorHeight: 0,
-                                                              cursorWidth: 0,
-                                                              decoration:
-                                                                  const InputDecoration(
-                                                                contentPadding:
-                                                                    EdgeInsets.symmetric(
-                                                                        horizontal:
-                                                                            5,
-                                                                        vertical:
-                                                                            5),
-                                                                border:
-                                                                    InputBorder
-                                                                        .none,
-                                                                counterText: "",
-                                                              ),
-                                                              controller:
-                                                                  // _controllers[groupIndex][index],
-                                                                  _controllers[
-                                                                          groupIndex]
-                                                                      [
-                                                                      colIndex],
-                                                              focusNode:
-                                                                  _focusNodes[
-                                                                          groupIndex]
-                                                                      [
-                                                                      colIndex],
-                                                              textAlign:
-                                                                  TextAlign
-                                                                      .center,
-                                                              style: colIndex ==
-                                                                      6
-                                                                  ? const TextStyle(
-                                                                      fontSize:
-                                                                          15,
-                                                                      height:
-                                                                          20,
-                                                                      color: Colors
-                                                                          .blue)
-                                                                  : const TextStyle(
-                                                                      fontSize:
-                                                                          17,
-                                                                      height:
-                                                                          20,
-                                                                      color: Colors
-                                                                          .white),
-                                                              keyboardType:
-                                                                  TextInputType
-                                                                      .text,
-                                                              textInputAction:
-                                                                  TextInputAction
-                                                                      .done,
-                                                              maxLength: 2,
-                                                              onTap: () {
-                                                                if (_currentIndex ==
-                                                                        6 &&
-                                                                    groupIndex ==
-                                                                        highlightedRowIndex) {
-                                                                  toggleNextRowHighlight();
-                                                                  // Focus on the first TextField of the next row
-                                                                  FocusScope.of(
-                                                                          context)
-                                                                      .requestFocus(_focusNodes[(groupIndex +
-                                                                              1) %
-                                                                          _controllers[groupIndex]
-                                                                              .length][0]);
-                                                                }
-                                                                //  (value) {
-                                                                //if (index ==
-                                                                //        6 &&
-                                                                //    value
-                                                                //        .isNotEmpty) {
-                                                                // updateHighlightedRow(
-                                                                //      groupIndex);
-                                                                //}
-                                                              },
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ]),
-                                              ],
-                                            ),
-                                          ),
-                                          const SizedBox(
-                                            height: 1,
-                                          )
-                                        ],
-                                      ));
-                                },
-                              ),
-                            ),
-                            /* Container(
-                              //width: screenSize.width / 1.2,
-                              width: 270,
-                              decoration: const BoxDecoration(
-                                  color: Colors.black,
-                                  //border: Border.all(),
-                                  borderRadius:
-                                      BorderRadius.all(Radius.circular(5))),
-                              child: Column(
-                                children: [
-                                  TextFieldLineOfTable(
-                                      controllers: _controllers,
-                                      focusNodes: _focusNodes),
-                                  const Divider(
-                                    height: 1,
-                                  ),
-                                  TextFieldLineOfTable(
-                                      controllers: _controllers,
-                                      focusNodes: _focusNodes),
-                                ],
-                              ),
-                            ), */
-                          ],
-                        ),
-                        const SizedBox(
-                          height: 5,
-                        ),
-                        /*  ElevatedButton(
-                          onPressed: _showEnteredNumbers,
-                          child: const Text('Show Entered Numbers'),
-                        ),
-                        const SizedBox(height: 20),
-                        TextButton(
-                          onPressed: () {},
-                          child: const Text('111'),
-                        ), */
-                      ],
+class LotteryRowCard extends StatelessWidget {
+  const LotteryRowCard({
+    super.key,
+    required this.rowIndex,
+    required this.values,
+    required this.isActive,
+    required this.isEnabled,
+    required this.onTap,
+  });
+
+  final int rowIndex;
+  final List<int?> values;
+  final bool isActive;
+  final bool isEnabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color rowBackground = isActive
+        ? (isDark ? const Color(0xFF274056) : const Color(0xFF80D568))
+        : (isDark ? const Color(0xFF090A0F) : Colors.black);
+
+    return Opacity(
+      opacity: isEnabled ? 1 : 0.55,
+      child: InkWell(
+        onTap: isEnabled ? onTap : null,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          height: 52,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          decoration: BoxDecoration(
+            color: rowBackground,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isActive
+                  ? (isDark ? Colors.white70 : const Color(0xFF17301F))
+                  : Colors.transparent,
+              width: 1.2,
+            ),
+          ),
+          child: Row(
+            children: [
+              _RowLabel(
+                text: 'טבלה ${rowIndex + 1}',
+                width: _NumberInputScreenState._rowLabelWidth,
+              ),
+              const SizedBox(width: 6),
+              ...List.generate(
+                values.length,
+                (index) => Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      right: index == values.length - 1 ? 0 : 5,
                     ),
-                  ],
-                ),
-              ),
-              Positioned(
-                bottom: 0,
-                child: Container(
-                  //padding: const EdgeInsets.all(0),
-                  //margin: const EdgeInsets.all(0),
-                  width: MediaQuery.of(context).size.width,
-                  height: 192,
-                  decoration: const BoxDecoration(
-                      color: Colors.white70,
-                      //border: Border.all(),
-                      borderRadius: BorderRadius.all(Radius.circular(5))),
-                  child: PageView.builder(
-                    controller: _pageController,
-                    //shrinkWrap: true,
-                    physics: _isScrollingAllowed()
-                        ? null
-                        : const NeverScrollableScrollPhysics(),
-                    scrollDirection: Axis.horizontal,
-                    itemCount: 14, // Number of containers
-                    onPageChanged: (index) {
-                      // if (_controllers[_currentGroup].length == 7) {
-                      //print(_controllers[_currentGroup].length);
-                      setState(() {
-                        _currentGroup = index;
-                      });
-                      //} else {}
-                    },
-                    itemBuilder: (context, tableIndex) {
-                      return Center(
-                        child: Column(
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Container(
-                                  margin: const EdgeInsets.only(
-                                      left: 2, right: 2, top: 4, bottom: 4),
-                                  child: ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                        minWidth: 90,
-                                        maxWidth: 90,
-                                        minHeight: 27,
-                                        maxHeight: 27),
-                                    child: ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                          padding: EdgeInsets.zero,
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(4.0)),
-                                          minimumSize: Size.infinite,
-                                          side: const BorderSide(
-                                              width: 1.0, color: Colors.pink),
-                                          foregroundColor: Colors.white,
-                                          backgroundColor: Colors.pink),
-                                      onPressed: () {},
-                                      child: Text("טבלה ${_currentGroup + 1}",
-                                          style: const TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w800)),
-                                    ),
-                                  ),
-                                ),
-                                ...List.generate(
-                                  7,
-                                  (index) {
-                                    final buttonNumber = index + 1;
-                                    return Flexible(
-                                        child: _buildButton('$buttonNumber',
-                                            tableIndex, 0, index));
-                                  },
-                                ),
-                              ],
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
-                              children: List.generate(
-                                10,
-                                (index) {
-                                  final buttonNumber = index + 8;
-                                  return Flexible(
-                                      child: _buildButton('$buttonNumber',
-                                          tableIndex, 1, index));
-                                },
-                              ),
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
-                              children: List.generate(
-                                10,
-                                (index) {
-                                  final buttonNumber = index + 18;
-                                  return Flexible(
-                                      child: _buildButton('$buttonNumber',
-                                          tableIndex, 2, index));
-                                },
-                              ),
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
-                              children: List.generate(
-                                10,
-                                (index) {
-                                  final buttonNumber = index + 28;
-                                  return Flexible(
-                                      child: _buildButton('$buttonNumber',
-                                          tableIndex, 3, index));
-                                },
-                              ),
-                            ),
-                            const Divider(),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              children: [
-                                ...List.generate(
-                                  7,
-                                  (index) {
-                                    final buttonNumber = index + 1;
-                                    return Flexible(
-                                        child: _buildButton('$buttonNumber',
-                                            tableIndex, 4, index));
-                                  },
-                                ),
-                                Container(
-                                  margin: const EdgeInsets.only(
-                                      left: 2, right: 2, top: 4, bottom: 4),
-                                  child: ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                        minWidth: 100,
-                                        maxWidth: 100,
-                                        minHeight: 27,
-                                        maxHeight: 27),
-                                    child: ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                          padding: EdgeInsets.zero,
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(4.0)),
-                                          minimumSize: Size.infinite,
-                                          side: const BorderSide(
-                                              width: 1.0, color: Colors.pink),
-                                          foregroundColor: Colors.black,
-                                          backgroundColor: Colors.yellow),
-                                      onPressed: () {},
-                                      child: const Text("המספר החזק",
-                                          style: const TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w800)),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+                    child: _LotteryCell(
+                      value: values[index],
+                      isStrong: index == 6,
+                    ),
                   ),
-                ),
-              ),
-              Positioned(
-                height: 100,
-                width: screenSize.width,
-                child: AnimatedAlign(
-                  alignment: upperBtnAlign,
-                  //curve: Curves.easeInCirc,
-                  duration: const Duration(milliseconds: 300),
-                  onEnd: () {
-                    debugPrint("ANIMATION ENDED");
-                  },
-                  child: FloatingActionButton(
-                    mini: true,
-                    heroTag: "upperButton",
-                    backgroundColor: const Color(0xff89cf95),
-                    foregroundColor: Colors.white,
-                    child: const Icon(Icons.edit),
-                    onPressed: () {},
-                  ),
-                ),
-              ),
-              Positioned(
-                height: 100,
-                width: screenSize.width,
-                child: AnimatedAlign(
-                  alignment: lowerBtnAlign,
-                  //curve: Curves.bounceOut,
-                  duration: const Duration(milliseconds: 300),
-                  onEnd: () {
-                    debugPrint("ANIMATION ENDED");
-                  },
-                  child: FloatingActionButton(
-                    mini: true,
-                    heroTag: "lowerButton",
-                    backgroundColor: const Color(0xffF4C2C2),
-                    foregroundColor: Colors.white,
-                    child: const Icon(Icons.add_a_photo),
-                    onPressed: () {},
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 10,
-                right: 10,
-                child: FloatingActionButton(
-                  mini: true,
-                  heroTag: "addButton",
-                  backgroundColor: const Color(0xff89cff0),
-                  foregroundColor: Colors.white,
-                  //splashColor: Colors.orangeAccent,
-                  child: const Icon(
-                    Icons.add,
-                    size: 40,
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      fabClick = !fabClick;
-                    });
-                    changeBtnAlign();
-                  },
                 ),
               ),
             ],
           ),
-        ]));
+        ),
+      ),
+    );
   }
+}
+
+class LotteryKeyboardSheet extends StatelessWidget {
+  const LotteryKeyboardSheet({
+    super.key,
+    required this.height,
+    required this.controller,
+    required this.rows,
+    required this.activeRowIndex,
+    required this.onPageChanged,
+    required this.onRegularTap,
+    required this.onStrongTap,
+  });
+
+  final double height;
+  final PageController controller;
+  final List<List<int?>> rows;
+  final int activeRowIndex;
+  final ValueChanged<int> onPageChanged;
+  final ValueChanged<int> onRegularTap;
+  final ValueChanged<int> onStrongTap;
 
   @override
-  void dispose() {
-    for (TextEditingController controller in _controllers[_currentGroup]) {
-      controller.dispose();
-    }
-    for (FocusNode focusNode in _focusNodes[_currentGroup]) {
-      focusNode.dispose();
-    }
-    super.dispose();
-  }
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
-  Widget _buildButton(String text, int group, int rowNum, int index,
-      {VoidCallback? onPressed}) {
-    return Container(
-      margin: const EdgeInsets.only(left: 2, right: 2, top: 4, bottom: 4),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-            minWidth: 27, maxWidth: 27, minHeight: 27, maxHeight: 27),
-        child: ElevatedButton(
-          onPressed: onPressed ??
-              () {
-                _handleNumberButtonPress(text);
-                toggleButton(_currentGroup, rowNum, index);
-              },
-          style: ElevatedButton.styleFrom(
-              padding: EdgeInsets.zero,
-              //shape: RoundedRectangleBorder(
-              //   borderRadius: BorderRadius.circular(8.0)),
-              //minimumSize: Size.infinite,
-              side: const BorderSide(width: 1.0, color: Colors.pink),
-              foregroundColor: Colors.black,
-              backgroundColor: buttonStates[_currentGroup][rowNum][index]
-                  ? Colors.yellow
-                  : Colors.white),
-          child: Align(
-            child: Text(
-              text,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+    return Material(
+      elevation: 18,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      child: Container(
+        height: height,
+        padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF18181D) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: PageView.builder(
+          controller: controller,
+          onPageChanged: onPageChanged,
+          itemCount: rows.length,
+          itemBuilder: (context, rowIndex) {
+            return LotteryKeyboardPage(
+              rowIndex: rowIndex,
+              rowValues: rows[rowIndex],
+              isActive: rowIndex == activeRowIndex,
+              rowLabelWidth: _NumberInputScreenState._rowLabelWidth,
+              onRegularTap: onRegularTap,
+              onStrongTap: onStrongTap,
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class LotteryKeyboardPage extends StatelessWidget {
+  const LotteryKeyboardPage({
+    super.key,
+    required this.rowIndex,
+    required this.rowValues,
+    required this.isActive,
+    required this.rowLabelWidth,
+    required this.onRegularTap,
+    required this.onStrongTap,
+  });
+
+  final int rowIndex;
+  final List<int?> rowValues;
+  final bool isActive;
+  final double rowLabelWidth;
+  final ValueChanged<int> onRegularTap;
+  final ValueChanged<int> onStrongTap;
+
+  bool get _regularComplete =>
+      rowValues.take(6).every((value) => value != null);
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const double gap = 6;
+        final double labelWidth = rowLabelWidth;
+        final double rowHeight = (constraints.maxHeight - (gap * 5) - 1) / 5;
+        final double topKeySize =
+            (constraints.maxWidth - labelWidth - (gap * 7) - 16) / 7;
+        final double regularKeySize =
+            (constraints.maxWidth - (gap * 9) - 16) / 10;
+        final double strongKeySize =
+            (constraints.maxWidth - (gap * 7) - 140 - 16) / 7;
+
+        return Column(
+          children: [
+            SizedBox(
+              height: rowHeight,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: labelWidth,
+                    child: _RowLabel(
+                      text: 'טבלה ${rowIndex + 1}',
+                      width: rowLabelWidth,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  ...List.generate(
+                    7,
+                    (index) => Padding(
+                      padding: EdgeInsets.only(right: index == 6 ? 0 : gap),
+                      child: LotteryNumberKey(
+                        label: '${index + 1}',
+                        size: topKeySize,
+                        selected: rowValues.take(6).contains(index + 1),
+                        enabled: isActive &&
+                            (!_regularComplete ||
+                                rowValues.take(6).contains(index + 1)),
+                        onPressed: () => onRegularTap(index + 1),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            _RegularKeyboardRow(
+              numbers: List.generate(10, (index) => index + 8),
+              rowValues: rowValues,
+              keySize: regularKeySize,
+              rowHeight: rowHeight,
+              gap: gap,
+              isActive: isActive,
+              regularComplete: _regularComplete,
+              onTap: onRegularTap,
+            ),
+            const SizedBox(height: 6),
+            _RegularKeyboardRow(
+              numbers: List.generate(10, (index) => index + 18),
+              rowValues: rowValues,
+              keySize: regularKeySize,
+              rowHeight: rowHeight,
+              gap: gap,
+              isActive: isActive,
+              regularComplete: _regularComplete,
+              onTap: onRegularTap,
+            ),
+            const SizedBox(height: 6),
+            _RegularKeyboardRow(
+              numbers: List.generate(10, (index) => index + 28),
+              rowValues: rowValues,
+              keySize: regularKeySize,
+              rowHeight: rowHeight,
+              gap: gap,
+              isActive: isActive,
+              regularComplete: _regularComplete,
+              onTap: onRegularTap,
+            ),
+            const SizedBox(height: 6),
+            Divider(
+              height: 1,
+              thickness: 1,
+              color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: rowHeight,
+              child: Row(
+                children: [
+                  ...List.generate(
+                    7,
+                    (index) => Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: LotteryNumberKey(
+                        label: '${index + 1}',
+                        size: strongKeySize,
+                        selected: rowValues[6] == index + 1,
+                        enabled: isActive && _regularComplete,
+                        onPressed: () => onStrongTap(index + 1),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Container(
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.yellow,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.pink, width: 1.2),
+                      ),
+                      child: const Text(
+                        'המספר החזק',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _RegularKeyboardRow extends StatelessWidget {
+  const _RegularKeyboardRow({
+    required this.numbers,
+    required this.rowValues,
+    required this.keySize,
+    required this.rowHeight,
+    required this.gap,
+    required this.isActive,
+    required this.regularComplete,
+    required this.onTap,
+  });
+
+  final List<int> numbers;
+  final List<int?> rowValues;
+  final double keySize;
+  final double rowHeight;
+  final double gap;
+  final bool isActive;
+  final bool regularComplete;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: rowHeight,
+      child: Row(
+        children: List.generate(
+          numbers.length,
+          (index) => Padding(
+            padding:
+                EdgeInsets.only(right: index == numbers.length - 1 ? 0 : gap),
+            child: LotteryNumberKey(
+              label: '${numbers[index]}',
+              size: keySize,
+              selected: rowValues.take(6).contains(numbers[index]),
+              enabled: isActive &&
+                  (!regularComplete ||
+                      rowValues.take(6).contains(numbers[index])),
+              onPressed: () => onTap(numbers[index]),
             ),
           ),
         ),
       ),
     );
   }
-
-// 3
-  void _input(String text) {
-    // inputs text
-  }
-
-// 4
-  void _backspace() {
-    // clear
-  }
-
-  void updateHighlightedRow(int rowIndex) {
-    setState(() {
-      highlightedRowIndex = (rowIndex + 1) % _controllers[rowIndex].length;
-    });
-  }
 }
 
-class TextFieldLineOfTable extends StatelessWidget {
-  TextFieldLineOfTable({
+class LotteryNumberKey extends StatelessWidget {
+  const LotteryNumberKey({
     super.key,
-    required int currentGroup,
-    //required int currentIndex,
-    required List<List<TextEditingController>> controllers,
-    required List<List<FocusNode>> focusNodes,
-  })  : _controllers = controllers,
-        _focusNodes = focusNodes,
-        _currentGroup = currentGroup;
-  //_currentIndex=currentIndex;
+    required this.label,
+    required this.size,
+    required this.selected,
+    required this.enabled,
+    required this.onPressed,
+  });
 
-  int _currentGroup = 0;
-  //final _currentIndex;
-  final List<List<TextEditingController>> _controllers;
-  final List<List<FocusNode>> _focusNodes;
+  final String label;
+  final double size;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    var screenSize = MediaQuery.of(context).size;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.start,
-      children: List.generate(
-        4,
-        (index) {
-          return Container(
-            width: screenSize.width / 10.64,
-            height: 300,
-            margin: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: Colors.pink,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: TextField(
-              cursorHeight: 0,
-              cursorWidth: 0,
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                counterText: "",
-              ),
-              controller: _controllers[_currentGroup][index + 1],
-              textAlign: TextAlign.center,
-              style: index == 6
-                  ? const TextStyle(fontSize: 33, height: 20, color: Colors.red)
-                  : const TextStyle(
-                      fontSize: 25, height: 20, color: Colors.white),
-              keyboardType: TextInputType.text,
-              textInputAction: TextInputAction.done,
-              maxLength: 2,
-              onChanged: (value) {
-                if (value.isNotEmpty) {
-                  int? number = int.tryParse(value);
-                  if (number != null && number >= 1 && number <= 37) {
-                    //setState(
-                    // () {
-                    //  _enteredNumbers[index] =
-                    //        number; // Store the entered number in the list
-                    //  },
-                    // );
-                    if (index < 6) {
-                      FocusScope.of(context)
-                          .requestFocus(_focusNodes[_currentGroup][index + 1]);
-                    }
-                  } else {
-                    _controllers[_currentGroup][index].clear();
-                  }
-                } else {
-                  // setState(
-                  //   () {
-                  //      _enteredNumbers[index] =
-                  // 0; // Reset the value in the list if the square is cleared
-                  //  },
-                  //  );
-                }
-              },
-            ),
-          );
-        },
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color background = selected
+        ? Colors.yellow
+        : enabled
+            ? (isDark ? const Color(0xFF1F2027) : Colors.white)
+            : (isDark ? const Color(0xFF2E2F37) : const Color(0xFFE7E7EC));
+
+    final Color foreground = selected
+        ? Colors.black
+        : enabled
+            ? (isDark ? Colors.white : Colors.black)
+            : Colors.black38;
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: ElevatedButton(
+        onPressed: enabled ? onPressed : null,
+        style: ElevatedButton.styleFrom(
+          elevation: selected ? 0 : 1,
+          padding: EdgeInsets.zero,
+          backgroundColor: background,
+          foregroundColor: foreground,
+          side: BorderSide(
+            color: isDark ? const Color(0xFFFF5A8D) : Colors.pink,
+            width: 1.2,
+          ),
+          shape: const CircleBorder(),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: size * 0.34,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
       ),
     );
   }
+}
+
+class _RowLabel extends StatelessWidget {
+  const _RowLabel({
+    required this.text,
+    required this.width,
+  });
+
+  final String text;
+  final double width;
 
   @override
-  void dispose() {
-    for (var row in _controllers) {
-      for (var controller in row) {
-        controller.dispose();
-      }
-    }
-    for (var row in _focusNodes) {
-      for (var focusNode in row) {
-        focusNode.dispose();
-      }
-    }
-    //super.dispose();
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w900,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+class _LotteryCell extends StatelessWidget {
+  const _LotteryCell({
+    required this.value,
+    required this.isStrong,
+  });
+
+  final int? value;
+  final bool isStrong;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: isStrong
+            ? (isDark ? const Color(0xFFD8C857) : Colors.yellow)
+            : Colors.pink,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        value?.toString() ?? '',
+        style: TextStyle(
+          fontSize: 19,
+          fontWeight: FontWeight.w900,
+          color: isStrong ? Colors.black87 : Colors.white,
+        ),
+      ),
+    );
   }
 }
