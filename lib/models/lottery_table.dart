@@ -25,10 +25,12 @@ class LotteryTable extends Equatable {
 
     return LotteryTable(
       tableIndex: (map['tableIndex'] as num?)?.toInt() ?? 1,
-      regularNumbers: rawRegulars
-          .map((value) => (value as num).toInt())
-          .where((value) => value >= 1 && value <= 37)
-          .toList(),
+      regularNumbers: _normalizeRegularNumbers(
+        rawRegulars
+            .map((value) => (value as num).toInt())
+            .where((value) => value >= 1 && value <= 37)
+            .toList(),
+      ),
       strongNumber: (map['strongNumber'] as num?)?.toInt(),
     );
   }
@@ -50,10 +52,21 @@ class LotteryTable extends Equatable {
   }) {
     return LotteryTable(
       tableIndex: tableIndex ?? this.tableIndex,
-      regularNumbers: regularNumbers ?? this.regularNumbers,
+      regularNumbers: regularNumbers == null
+          ? this.regularNumbers
+          : _normalizeRegularNumbers(regularNumbers),
       strongNumber:
           clearStrongNumber ? null : (strongNumber ?? this.strongNumber),
     );
+  }
+
+  static List<int> normalizeRegularNumbers(List<int> regularNumbers) {
+    return _normalizeRegularNumbers(regularNumbers);
+  }
+
+  static List<int> _normalizeRegularNumbers(List<int> regularNumbers) {
+    final List<int> normalized = List<int>.from(regularNumbers)..sort();
+    return List<int>.unmodifiable(normalized);
   }
 
   bool get isComplete {

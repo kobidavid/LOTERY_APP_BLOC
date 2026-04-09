@@ -5,6 +5,10 @@ import '../models/app_user.dart';
 import '../services/firebase_auth_service.dart';
 
 class AuthRepository {
+  static const Set<String> _operatorAllowlistEmails = <String>{
+    'kobidev80@gmail.com',
+  };
+
   AuthRepository({
     required FirebaseAuthService authService,
     FirebaseFirestore? firestore,
@@ -23,10 +27,17 @@ class AuthRepository {
       final DocumentSnapshot<Map<String, dynamic>> snapshot =
           await _firestore.collection('users').doc(user.uid).get();
       if (!snapshot.exists) {
-        return AppUser.fromFirebaseUser(user);
+        return AppUser.fromFirebaseUser(
+          user,
+          operatorAccessOverride: _isAllowlistedOperator(user.email),
+        );
       }
 
-      return AppUser.fromMap(snapshot.data()!, fallbackUser: user);
+      return AppUser.fromMap(
+        snapshot.data()!,
+        fallbackUser: user,
+        operatorAccessOverride: _isAllowlistedOperator(user.email),
+      );
     });
   }
 
@@ -63,6 +74,8 @@ class AuthRepository {
           'displayName': firebaseUser.displayName,
           'photoUrl': firebaseUser.photoURL,
           'provider': provider,
+          'operatorAccess': (existing['operatorAccess'] as bool? ?? false) ||
+              _isAllowlistedOperator(firebaseUser.email),
           'balance': existing['balance'] ?? 0,
           'createdAt': existing['createdAt'] ?? FieldValue.serverTimestamp(),
           'lastLoginAt': FieldValue.serverTimestamp(),
@@ -73,6 +86,17 @@ class AuthRepository {
 
     final DocumentSnapshot<Map<String, dynamic>> updatedSnapshot =
         await userRef.get();
-    return AppUser.fromMap(updatedSnapshot.data()!, fallbackUser: firebaseUser);
+    return AppUser.fromMap(
+      updatedSnapshot.data()!,
+      fallbackUser: firebaseUser,
+      operatorAccessOverride: _isAllowlistedOperator(firebaseUser.email),
+    );
+  }
+
+  static bool _isAllowlistedOperator(String? email) {
+    if (email == null) {
+      return false;
+    }
+    return _operatorAllowlistEmails.contains(email.trim().toLowerCase());
   }
 }

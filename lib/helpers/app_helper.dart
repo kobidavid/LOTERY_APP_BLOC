@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:image_cropper/image_cropper.dart';
@@ -77,7 +78,11 @@ class AppHelper {
   }
 
   static Future<File?> pickImageFromGallery() async {
-    if (Platform.isAndroid) {
+    if (kIsWeb) {
+      return null;
+    }
+
+    if (defaultTargetPlatform == TargetPlatform.android) {
       DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
       AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
       try {
@@ -106,7 +111,7 @@ class AppHelper {
       } catch (e) {
         throw Exception([e]);
       }
-    } else if (Platform.isIOS) {
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
       try {
         final image = await ImagePicker().pickImage(
             source: ImageSource.gallery, imageQuality: 100, maxWidth: 1920);
@@ -123,7 +128,11 @@ class AppHelper {
   }
 
   static Future<File?> pickImageFromCamera() async {
-    if (Platform.isAndroid) {
+    if (kIsWeb) {
+      return null;
+    }
+
+    if (defaultTargetPlatform == TargetPlatform.android) {
       try {
         await Permission.camera.request();
         var permissionStatus = await Permission.camera.status;
@@ -144,7 +153,7 @@ class AppHelper {
       } catch (e) {
         throw Exception([e]);
       }
-    } else if (Platform.isIOS) {
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
       try {
         final image = await ImagePicker().pickImage(
             source: ImageSource.camera, imageQuality: 100, maxWidth: 1920);
@@ -174,7 +183,6 @@ class AppHelper {
         )
       ],
       sourcePath: image.path,
-      cropStyle: CropStyle.rectangle,
       aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
     );
     if (croppedImage == null) {

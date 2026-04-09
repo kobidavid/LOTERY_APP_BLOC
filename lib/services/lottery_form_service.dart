@@ -24,7 +24,9 @@ class LotteryFormService {
 
     if (regulars.contains(number)) {
       regulars.remove(number);
-      return table.copyWith(regularNumbers: regulars);
+      return table.copyWith(
+        regularNumbers: LotteryTable.normalizeRegularNumbers(regulars),
+      );
     }
 
     if (regulars.length >= regularCount) {
@@ -32,7 +34,9 @@ class LotteryFormService {
     }
 
     regulars.add(number);
-    return table.copyWith(regularNumbers: regulars);
+    return table.copyWith(
+      regularNumbers: LotteryTable.normalizeRegularNumbers(regulars),
+    );
   }
 
   LotteryTable toggleStrongNumber(LotteryTable table, int number) {

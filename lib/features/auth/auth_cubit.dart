@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../repositories/auth_repository.dart';
@@ -24,7 +24,10 @@ class AuthCubit extends Cubit<AuthState> {
   final AuthRepository _authRepository;
   late final StreamSubscription<dynamic> _subscription;
 
-  bool get supportsAppleSignIn => Platform.isIOS || Platform.isMacOS;
+  bool get supportsAppleSignIn =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   Future<void> signInWithGoogle() async {
     emit(state.copyWith(isBusy: true, clearErrorMessage: true));

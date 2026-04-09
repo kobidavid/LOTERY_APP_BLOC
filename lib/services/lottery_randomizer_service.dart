@@ -35,7 +35,8 @@ class LotteryRandomizerService {
       ..shuffle(_random);
     return LotteryTable(
       tableIndex: tableIndex,
-      regularNumbers: candidates.take(6).toList(),
+      regularNumbers:
+          LotteryTable.normalizeRegularNumbers(candidates.take(6).toList()),
       strongNumber: _random.nextInt(7) + 1,
     );
   }
@@ -56,7 +57,7 @@ class LotteryRandomizerService {
 
     return LotteryTable(
       tableIndex: table.tableIndex,
-      regularNumbers: validExisting,
+      regularNumbers: LotteryTable.normalizeRegularNumbers(validExisting),
       strongNumber: table.strongNumber ?? (_random.nextInt(7) + 1),
     );
   }

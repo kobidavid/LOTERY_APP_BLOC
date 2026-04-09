@@ -33,31 +33,36 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   http: ^1.4.0
-  flutter_bloc: ^8.1.6
+  flutter_bloc: ^9.1.1
   equatable: ^2.0.7
-  flutter_dotenv: ^5.2.1
+  flutter_dotenv: ^6.0.0
   shared_preferences: ^2.3.3
   easy_localization: ^3.0.7+1
-  permission_handler: ^11.3.1
-  device_info_plus: ^10.0.1
+  permission_handler: ^12.0.1
+  device_info_plus: ^12.4.0
   uuid: ^4.5.1
   firebase_core: ^4.6.0
   firebase_storage: ^13.2.0
   cloud_functions: ^6.1.0
   cached_network_image: ^3.4.0
-  photo_view: ^0.14.0
+  photo_view: ^0.15.0
   image_picker: ^1.1.2
-  image_cropper: ^5.0.1
+  image_cropper: ^12.1.1
   path_provider: ^2.1.5
   gal: ^2.3.1
-  pull_down_button: ^0.9.4
+  pull_down_button: ^0.10.2
   firebase_database: ^12.2.0
   cloud_firestore: ^6.2.0
   firebase_auth: ^6.3.0
   flutter_expandable_fab: ^2.5.0
+  crypto: ^3.0.6
   pdf: ^3.11.3
   printing: ^5.14.2
-
+  share_plus: ^12.0.2
+  app_links: ^7.0.0
+  url_launcher: ^6.3.2
+  file_picker: ^10.3.2
+  http_parser: ^4.0.2
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -67,7 +72,7 @@ dev_dependencies:
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^4.0.0
+  flutter_lints: ^6.0.0
 
 
 # For information on the generic Dart part of this file, see the

@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -5,23 +8,29 @@ import '../models/app_user.dart';
 import '../models/lottery_form.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/lottery_form_repository.dart';
+import '../repositories/lottery_group_repository.dart';
+import '../services/group_invite_link_service.dart';
 import '../services/lottery_form_service.dart';
 import '../services/lottery_randomizer_service.dart';
 import 'auth/auth_cubit.dart';
 import 'history/history_cubit.dart';
 import 'history/history_tab.dart';
+import 'lottery_form/group_join_page.dart';
 import 'lottery_form/lottery_form_cubit.dart';
 import 'lottery_form/lottery_form_page.dart';
+import 'operator/operator_console_page.dart';
 
 class MainShellPage extends StatefulWidget {
   const MainShellPage({
     super.key,
     required this.user,
     required this.authRepository,
+    required this.inviteLinkService,
   });
 
   final AppUser user;
   final AuthRepository authRepository;
+  final GroupInviteLinkService inviteLinkService;
 
   @override
   State<MainShellPage> createState() => _MainShellPageState();
@@ -33,8 +42,11 @@ class _MainShellPageState extends State<MainShellPage> {
   late final LotteryRandomizerService _randomizerService;
   late final LotteryFormCubit _formCubit;
   late final HistoryCubit _historyCubit;
+  late final LotteryGroupRepository _groupRepository;
+  StreamSubscription<GroupInviteLink>? _inviteSubscription;
 
   int _selectedTabIndex = 0;
+  bool _handlingInvite = false;
 
   @override
   void initState() {
@@ -42,6 +54,7 @@ class _MainShellPageState extends State<MainShellPage> {
     _formRepository = LotteryFormRepository();
     _formService = const LotteryFormService();
     _randomizerService = LotteryRandomizerService();
+    _groupRepository = LotteryGroupRepository();
     _formCubit = LotteryFormCubit(
       formRepository: _formRepository,
       formService: _formService,
@@ -49,10 +62,14 @@ class _MainShellPageState extends State<MainShellPage> {
       userId: widget.user.uid,
     );
     _historyCubit = HistoryCubit();
+    _inviteSubscription = widget.inviteLinkService.inviteStream
+        .listen((_) => _handlePendingInvite());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handlePendingInvite());
   }
 
   @override
   void dispose() {
+    _inviteSubscription?.cancel();
     _formCubit.close();
     _historyCubit.close();
     super.dispose();
@@ -93,10 +110,25 @@ class _MainShellPageState extends State<MainShellPage> {
                       onSelected: (value) {
                         if (value == 'logout') {
                           context.read<AuthCubit>().signOut();
+                          return;
+                        }
+                        if (value == 'operator_console') {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => OperatorConsolePage(
+                                user: widget.user,
+                              ),
+                            ),
+                          );
                         }
                       },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
+                      itemBuilder: (context) => [
+                        if (kIsWeb && widget.user.operatorAccess)
+                          const PopupMenuItem(
+                            value: 'operator_console',
+                            child: Text('Operator Console'),
+                          ),
+                        const PopupMenuItem(
                           value: 'logout',
                           child: Text('התנתקות'),
                         ),
@@ -124,10 +156,14 @@ class _MainShellPageState extends State<MainShellPage> {
                 child: IndexedStack(
                   index: _selectedTabIndex,
                   children: [
-                    const LotteryFormPage(),
+                    LotteryFormPage(
+                      inviteLinkService: widget.inviteLinkService,
+                    ),
                     HistoryTab(
                       userId: widget.user.uid,
                       repository: _formRepository,
+                      groupRepository: _groupRepository,
+                      inviteLinkService: widget.inviteLinkService,
                       onFormSelected: _handleHistoryFormSelected,
                       onDeleteSavedForm: _handleDeleteSavedForm,
                     ),
@@ -172,6 +208,37 @@ class _MainShellPageState extends State<MainShellPage> {
 
     await _formCubit.deleteSavedForm(form);
     return true;
+  }
+
+  Future<void> _handlePendingInvite() async {
+    if (!mounted || _handlingInvite) {
+      return;
+    }
+
+    final GroupInviteLink? invite =
+        widget.inviteLinkService.takePendingInvite();
+    if (invite == null) {
+      return;
+    }
+
+    _handlingInvite = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => GroupJoinPage(
+            userId: widget.user.uid,
+            invite: invite,
+            repository: _groupRepository,
+          ),
+        ),
+      );
+    } finally {
+      _handlingInvite = false;
+      if (mounted && widget.inviteLinkService.peekPendingInvite() != null) {
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _handlePendingInvite());
+      }
+    }
   }
 }
 

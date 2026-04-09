@@ -1,6 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     function isSignedIn() {
       return request.auth != null;
     }
@@ -9,11 +10,122 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAllowlistedOperatorEmail() {
+      return isSignedIn() && (
+        request.auth.uid == 'E3tFZePIr2MwWVAxmwFRSO82v432' ||
+        (
+          request.auth.token.email != null &&
+          request.auth.token.email == 'kobidev80@gmail.com'
+        ) ||
+        (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email != null &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email == 'kobidev80@gmail.com'
+        )
+      );
+    }
+
+    function isOperator() {
+      return isAllowlistedOperatorEmail() || (
+        isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatorAccess == true
+      );
+    }
+
+    function isSubmittedGroupParticipant() {
+      return isSignedIn() &&
+        resource.data.submissionType == 'group' &&
+        (
+          (
+            resource.data.submittedParticipantUserIds != null &&
+            request.auth.uid in resource.data.submittedParticipantUserIds
+          ) ||
+          (
+            resource.data.groupId != null &&
+            exists(
+              /databases/$(database)/documents/users/$(request.auth.uid)/submitted_groups/$(resource.data.groupId)
+            )
+          )
+        );
+    }
+
+    function groupDoc(groupId) {
+      return get(/databases/$(database)/documents/lottery_groups/$(groupId));
+    }
+
+    function isGroupCreator(groupId) {
+      return isSignedIn() &&
+        groupDoc(groupId).data.creatorUserId == request.auth.uid;
+    }
+
+    function isGroupMember(groupId) {
+      return isSignedIn() &&
+        exists(
+          /databases/$(database)/documents/lottery_groups/$(groupId)/memberships/$(request.auth.uid)
+        );
+    }
+
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isOwner(userId) || isOperator();
+      allow write: if isOwner(userId);
 
       match /forms/{formId} {
+        allow read: if isOwner(userId) || isSubmittedGroupParticipant() || isOperator();
+        allow write: if isOwner(userId) || isOperator();
+      }
+
+      match /active_groups/{groupId} {
         allow read, write: if isOwner(userId);
+      }
+
+      match /submitted_groups/{groupId} {
+        allow read: if isOwner(userId) || isOperator();
+        allow write: if isOwner(userId) || isOperator() ||
+          (isSignedIn() &&
+            request.resource.data.groupId == groupId &&
+            request.resource.data.creatorUserId == request.auth.uid);
+      }
+    }
+
+    match /{path=**}/forms/{formId} {
+      allow read: if isOperator() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid) ||
+        isSubmittedGroupParticipant();
+    }
+
+    match /receipt_intake/{receiptId} {
+      allow read, write: if isOperator();
+    }
+
+    match /lottery_groups/{groupId} {
+      // כל משתמש מחובר יכול ליצור קבוצה רק עבור עצמו
+      allow create: if isSignedIn() &&
+        request.resource.data.creatorUserId == request.auth.uid;
+
+      // ב-v1, כל משתמש מחובר יכול לקרוא group
+      allow read: if isSignedIn();
+
+      // ב-v1 היוצר או חבר קבוצה יכולים לעדכן group
+      // כדי לאפשר finalize / mock payment לעדכן סטטוס קבוצתי
+      allow update: if isGroupCreator(groupId) || isGroupMember(groupId) || isOperator();
+      allow delete: if isGroupCreator(groupId) || isOperator();
+
+      match /memberships/{userId} {
+        // יצירה: המשתמש יוצר membership של עצמו, או היוצר יוצר עבור עצמו/אחרים אם צריך
+        allow create: if isSignedIn() &&
+          (request.auth.uid == userId || isGroupCreator(groupId));
+
+        // קריאה: כל משתמש מחובר יכול לקרוא memberships של קבוצה
+        // כדי שכל המשתתפים יראו סטטוסים
+        allow read: if isSignedIn() || isOperator();
+
+        // עדכון:
+        // המשתמש יכול לעדכן רק את עצמו
+        // או היוצר יכול לעדכן memberships אם צריך בשלבי finalize בהמשך
+        allow update: if isSignedIn() &&
+          (request.auth.uid == userId || isGroupCreator(groupId) || isOperator());
+
+        // מחיקה: ב-v1 רק היוצר
+        allow delete: if isGroupCreator(groupId) || isOperator();
       }
     }
   }

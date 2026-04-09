@@ -9,6 +9,7 @@ class AppUser extends Equatable {
     required this.displayName,
     required this.photoUrl,
     required this.provider,
+    required this.operatorAccess,
     this.createdAt,
     this.lastLoginAt,
   });
@@ -18,12 +19,14 @@ class AppUser extends Equatable {
   final String? displayName;
   final String? photoUrl;
   final String provider;
+  final bool operatorAccess;
   final DateTime? createdAt;
   final DateTime? lastLoginAt;
 
   factory AppUser.fromFirebaseUser(
     User user, {
     String? providerOverride,
+    bool? operatorAccessOverride,
     DateTime? createdAt,
     DateTime? lastLoginAt,
   }) {
@@ -33,12 +36,17 @@ class AppUser extends Equatable {
       displayName: user.displayName,
       photoUrl: user.photoURL,
       provider: providerOverride ?? _providerFromUser(user),
+      operatorAccess: operatorAccessOverride ?? false,
       createdAt: createdAt,
       lastLoginAt: lastLoginAt,
     );
   }
 
-  factory AppUser.fromMap(Map<String, dynamic> map, {User? fallbackUser}) {
+  factory AppUser.fromMap(
+    Map<String, dynamic> map, {
+    User? fallbackUser,
+    bool? operatorAccessOverride,
+  }) {
     return AppUser(
       uid: map['uid'] as String? ?? fallbackUser?.uid ?? '',
       email: map['email'] as String? ?? fallbackUser?.email,
@@ -46,6 +54,8 @@ class AppUser extends Equatable {
       photoUrl: map['photoUrl'] as String? ?? fallbackUser?.photoURL,
       provider: map['provider'] as String? ??
           (fallbackUser != null ? _providerFromUser(fallbackUser) : 'unknown'),
+      operatorAccess:
+          operatorAccessOverride ?? (map['operatorAccess'] as bool? ?? false),
       createdAt: _asDateTime(map['createdAt']),
       lastLoginAt: _asDateTime(map['lastLoginAt']),
     );
@@ -75,6 +85,7 @@ class AppUser extends Equatable {
         displayName,
         photoUrl,
         provider,
+        operatorAccess,
         createdAt,
         lastLoginAt,
       ];

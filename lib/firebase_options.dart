@@ -46,7 +46,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '462078938105',
     projectId: 'lotogroup-1ea8a',
     authDomain: 'lotogroup-1ea8a.firebaseapp.com',
-    storageBucket: 'lotogroup-1ea8a.appspot.com',
+    storageBucket: 'lotogroup-1ea8a.firebasestorage.app',
     measurementId: 'G-ZR7FLRHFTE',
   );
 
@@ -55,7 +55,7 @@ class DefaultFirebaseOptions {
     appId: '1:462078938105:android:1a84a81fb9e2dd094f0b28',
     messagingSenderId: '462078938105',
     projectId: 'lotogroup-1ea8a',
-    storageBucket: 'lotogroup-1ea8a.appspot.com',
+    storageBucket: 'lotogroup-1ea8a.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
@@ -71,7 +71,7 @@ class DefaultFirebaseOptions {
     appId: '1:462078938105:ios:b8f619d84b968e9d4f0b28',
     messagingSenderId: '462078938105',
     projectId: 'lotogroup-1ea8a',
-    storageBucket: 'lotogroup-1ea8a.appspot.com',
+    storageBucket: 'lotogroup-1ea8a.firebasestorage.app',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
@@ -80,7 +80,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '462078938105',
     projectId: 'lotogroup-1ea8a',
     authDomain: 'lotogroup-1ea8a.firebaseapp.com',
-    storageBucket: 'lotogroup-1ea8a.appspot.com',
+    storageBucket: 'lotogroup-1ea8a.firebasestorage.app',
     measurementId: 'G-JF2NQ28YYD',
   );
 }

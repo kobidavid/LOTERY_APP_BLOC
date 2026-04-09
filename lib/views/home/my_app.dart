@@ -93,16 +93,14 @@ class _NumberInputScreenState extends State<NumberInputScreen> {
   }
 
   void _compactRegularNumbers(int rowIndex) {
-    final List<int?> compacted = _rows[rowIndex]
-        .take(_regularCount)
-        .whereType<int>()
-        .cast<int?>()
-        .toList();
-    while (compacted.length < _regularCount) {
-      compacted.add(null);
+    final List<int?> compacted =
+        _rows[rowIndex].take(_regularCount).whereType<int>().toList()..sort();
+    final List<int?> normalized = compacted.cast<int?>().toList();
+    while (normalized.length < _regularCount) {
+      normalized.add(null);
     }
     for (int index = 0; index < _regularCount; index++) {
-      _rows[rowIndex][index] = compacted[index];
+      _rows[rowIndex][index] = normalized[index];
     }
   }
 
@@ -159,6 +157,7 @@ class _NumberInputScreenState extends State<NumberInputScreen> {
       }
 
       _rows[_activeRowIndex][emptyIndex] = number;
+      _compactRegularNumbers(_activeRowIndex);
     });
   }
 

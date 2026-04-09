@@ -1,6 +1,7 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const cheerio = require("cheerio");
+const crypto = require("crypto");
 const fetch = require("node-fetch");
 
 admin.initializeApp();
@@ -112,6 +113,16 @@ exports.submitLotteryForm = functions.https.onCall(async (data, context) => {
     }
 
     const nextLottery = await fetchNextLotteryMetadata();
+    const ticketFingerprintSource = buildTicketFingerprintSource({
+      lotteryId: nextLottery.lotteryId,
+      tables,
+    });
+    const ticketFingerprint = crypto
+        .createHash("sha256")
+        .update(ticketFingerprintSource, "utf8")
+        .digest("hex");
+    console.log("Fingerprint source:", ticketFingerprintSource);
+    console.log("Fingerprint hash:", ticketFingerprint);
     console.log(
         "submitLotteryForm assigned lotteryId",
         nextLottery.lotteryId,
@@ -145,6 +156,9 @@ exports.submitLotteryForm = functions.https.onCall(async (data, context) => {
       winAmount: 0,
       checkedAt: null,
       balanceApplied: false,
+      ticketFingerprintSource,
+      ticketFingerprint,
+      fingerprintVersion: 1,
     });
 
     return {formId: formRef.id};
@@ -1135,7 +1149,11 @@ function normalizeTables(rawTables) {
     }
 
     const regularNumbers = Array.isArray(table.regularNumbers) ?
-      table.regularNumbers.map((value) => Number(value)).filter(isRegularNumber) : [];
+      normalizeRegularNumbers(
+          table.regularNumbers
+              .map((value) => Number(value))
+              .filter(isRegularNumber),
+      ) : [];
     const strongNumber = table.strongNumber == null ? null : Number(table.strongNumber);
 
     return {
@@ -1148,6 +1166,24 @@ function normalizeTables(rawTables) {
       }),
     };
   });
+}
+
+function normalizeRegularNumbers(regularNumbers) {
+  return Array.from(regularNumbers).sort((a, b) => a - b);
+}
+
+function buildTicketFingerprintSource({lotteryId, tables}) {
+  const normalizedLotteryId = Number(lotteryId);
+  const tableCount = String(tables.length).padStart(2, "0");
+  const tableParts = tables.map((table) => {
+    const regulars = normalizeRegularNumbers(table.regularNumbers)
+        .map((value) => String(value).padStart(2, "0"))
+        .join("");
+    const strong = String(table.strongNumber);
+    return `${regulars}-${strong}`;
+  });
+
+  return `${normalizedLotteryId}-${tableCount}-${tableParts.join("-")}`;
 }
 
 function isSubmittedFormValid(tables) {

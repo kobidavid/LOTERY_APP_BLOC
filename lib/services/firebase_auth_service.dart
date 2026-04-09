@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class FirebaseAuthService {
@@ -15,6 +16,9 @@ class FirebaseAuthService {
     final GoogleAuthProvider provider = GoogleAuthProvider()
       ..addScope('email')
       ..addScope('profile');
+    if (kIsWeb) {
+      return _firebaseAuth.signInWithPopup(provider);
+    }
     return _firebaseAuth.signInWithProvider(provider);
   }
 
@@ -22,6 +26,9 @@ class FirebaseAuthService {
     final AppleAuthProvider provider = AppleAuthProvider()
       ..addScope('email')
       ..addScope('name');
+    if (kIsWeb) {
+      return _firebaseAuth.signInWithPopup(provider);
+    }
     return _firebaseAuth.signInWithProvider(provider);
   }
 

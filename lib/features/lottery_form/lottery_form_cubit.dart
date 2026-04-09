@@ -2,6 +2,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../../models/lottery_form.dart';
+import '../../models/lottery_group.dart';
 import '../../models/lottery_table.dart';
 import '../../repositories/lottery_form_repository.dart';
 import '../../services/lottery_form_service.dart';
@@ -295,6 +296,57 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
 
     if (state.form.formId == form.formId) {
       resetForUser(state.form.userId);
+    }
+  }
+
+  Future<LotteryGroup?> createGroup(String groupName) async {
+    final String trimmedName = groupName.trim();
+    if (trimmedName.isEmpty) {
+      emit(
+        state.copyWith(
+          errorMessage: 'יש להזין שם לקבוצה',
+          clearSuccess: true,
+        ),
+      );
+      return null;
+    }
+
+    if (!_formService.canSubmit(state.form)) {
+      emit(
+        state.copyWith(
+          errorMessage: 'ניתן ליצור קבוצה רק מטופס מלא',
+          clearSuccess: true,
+        ),
+      );
+      return null;
+    }
+
+    emit(state.copyWith(isBusy: true, clearError: true, clearSuccess: true));
+
+    try {
+      final LotteryGroup group = await _formRepository.createGroupFromForm(
+        form: state.form.copyWith(
+          isComplete: true,
+        ),
+        groupName: trimmedName,
+      );
+
+      emit(
+        LotteryFormState.initial(state.form.userId).copyWith(
+          isBusy: false,
+          successMessage: 'הקבוצה נוצרה והטופס ננעל לעריכה',
+        ),
+      );
+
+      return group;
+    } catch (error) {
+      emit(
+        state.copyWith(
+          isBusy: false,
+          errorMessage: 'יצירת הקבוצה נכשלה: $error',
+        ),
+      );
+      return null;
     }
   }
 

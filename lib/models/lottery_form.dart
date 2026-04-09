@@ -6,7 +6,13 @@ import 'lottery_table.dart';
 enum LotteryFormStatus {
   draft,
   saved,
+  lockedForGroup,
   submitted,
+}
+
+enum LotteryFormMode {
+  personal,
+  group,
 }
 
 enum LotteryResultStatus {
@@ -23,8 +29,21 @@ extension LotteryFormStatusX on LotteryFormStatus {
         return 'draft';
       case LotteryFormStatus.saved:
         return 'saved';
+      case LotteryFormStatus.lockedForGroup:
+        return 'locked_for_group';
       case LotteryFormStatus.submitted:
         return 'submitted';
+    }
+  }
+}
+
+extension LotteryFormModeX on LotteryFormMode {
+  String get value {
+    switch (this) {
+      case LotteryFormMode.personal:
+        return 'personal';
+      case LotteryFormMode.group:
+        return 'group';
     }
   }
 }
@@ -64,6 +83,18 @@ class LotteryForm extends Equatable {
     required this.winAmount,
     required this.checkedAt,
     required this.balanceApplied,
+    required this.mode,
+    required this.groupId,
+    required this.isEditable,
+    required this.dispatchStatus,
+    required this.printReadyUrl,
+    required this.printReadyGeneratedAt,
+    required this.printReadyStoragePath,
+    required this.printedAt,
+    required this.submittedToStationAt,
+    required this.ticketFingerprintSource,
+    required this.ticketFingerprint,
+    required this.fingerprintVersion,
   });
 
   final String? formId;
@@ -84,6 +115,18 @@ class LotteryForm extends Equatable {
   final num winAmount;
   final DateTime? checkedAt;
   final bool balanceApplied;
+  final LotteryFormMode mode;
+  final String? groupId;
+  final bool isEditable;
+  final String? dispatchStatus;
+  final String? printReadyUrl;
+  final DateTime? printReadyGeneratedAt;
+  final String? printReadyStoragePath;
+  final DateTime? printedAt;
+  final DateTime? submittedToStationAt;
+  final String? ticketFingerprintSource;
+  final String? ticketFingerprint;
+  final int? fingerprintVersion;
 
   factory LotteryForm.empty(String userId) {
     return LotteryForm(
@@ -108,6 +151,18 @@ class LotteryForm extends Equatable {
       winAmount: 0,
       checkedAt: null,
       balanceApplied: false,
+      mode: LotteryFormMode.personal,
+      groupId: null,
+      isEditable: true,
+      dispatchStatus: null,
+      printReadyUrl: null,
+      printReadyGeneratedAt: null,
+      printReadyStoragePath: null,
+      printedAt: null,
+      submittedToStationAt: null,
+      ticketFingerprintSource: null,
+      ticketFingerprint: null,
+      fingerprintVersion: null,
     );
   }
 
@@ -138,6 +193,18 @@ class LotteryForm extends Equatable {
       winAmount: (map['winAmount'] as num?) ?? 0,
       checkedAt: _asDateTime(map['checkedAt']),
       balanceApplied: map['balanceApplied'] as bool? ?? false,
+      mode: _modeFromString(map['mode'] as String?),
+      groupId: map['groupId'] as String?,
+      isEditable: map['isEditable'] as bool? ?? true,
+      dispatchStatus: map['dispatchStatus'] as String?,
+      printReadyUrl: map['printReadyUrl'] as String?,
+      printReadyGeneratedAt: _asDateTime(map['printReadyGeneratedAt']),
+      printReadyStoragePath: map['printReadyStoragePath'] as String?,
+      printedAt: _asDateTime(map['printedAt']),
+      submittedToStationAt: _asDateTime(map['submittedToStationAt']),
+      ticketFingerprintSource: map['ticketFingerprintSource'] as String?,
+      ticketFingerprint: map['ticketFingerprint'] as String?,
+      fingerprintVersion: (map['fingerprintVersion'] as num?)?.toInt(),
     );
   }
 
@@ -147,8 +214,19 @@ class LotteryForm extends Equatable {
         return LotteryFormStatus.saved;
       case 'submitted':
         return LotteryFormStatus.submitted;
+      case 'locked_for_group':
+        return LotteryFormStatus.lockedForGroup;
       default:
         return LotteryFormStatus.draft;
+    }
+  }
+
+  static LotteryFormMode _modeFromString(String? value) {
+    switch (value) {
+      case 'group':
+        return LotteryFormMode.group;
+      default:
+        return LotteryFormMode.personal;
     }
   }
 
@@ -196,6 +274,18 @@ class LotteryForm extends Equatable {
     num? winAmount,
     DateTime? checkedAt,
     bool? balanceApplied,
+    LotteryFormMode? mode,
+    String? groupId,
+    bool? isEditable,
+    String? dispatchStatus,
+    String? printReadyUrl,
+    DateTime? printReadyGeneratedAt,
+    String? printReadyStoragePath,
+    DateTime? printedAt,
+    DateTime? submittedToStationAt,
+    String? ticketFingerprintSource,
+    String? ticketFingerprint,
+    int? fingerprintVersion,
     bool clearId = false,
     bool clearSubmittedAt = false,
     bool clearSavedAt = false,
@@ -204,6 +294,7 @@ class LotteryForm extends Equatable {
     bool clearResultStatus = false,
     bool clearResultPublishedAt = false,
     bool clearCheckedAt = false,
+    bool clearGroupId = false,
   }) {
     return LotteryForm(
       formId: clearId ? null : (formId ?? this.formId),
@@ -228,6 +319,21 @@ class LotteryForm extends Equatable {
       winAmount: winAmount ?? this.winAmount,
       checkedAt: clearCheckedAt ? null : (checkedAt ?? this.checkedAt),
       balanceApplied: balanceApplied ?? this.balanceApplied,
+      mode: mode ?? this.mode,
+      groupId: clearGroupId ? null : (groupId ?? this.groupId),
+      isEditable: isEditable ?? this.isEditable,
+      dispatchStatus: dispatchStatus ?? this.dispatchStatus,
+      printReadyUrl: printReadyUrl ?? this.printReadyUrl,
+      printReadyGeneratedAt:
+          printReadyGeneratedAt ?? this.printReadyGeneratedAt,
+      printReadyStoragePath:
+          printReadyStoragePath ?? this.printReadyStoragePath,
+      printedAt: printedAt ?? this.printedAt,
+      submittedToStationAt: submittedToStationAt ?? this.submittedToStationAt,
+      ticketFingerprintSource:
+          ticketFingerprintSource ?? this.ticketFingerprintSource,
+      ticketFingerprint: ticketFingerprint ?? this.ticketFingerprint,
+      fingerprintVersion: fingerprintVersion ?? this.fingerprintVersion,
     );
   }
 
@@ -251,5 +357,17 @@ class LotteryForm extends Equatable {
         winAmount,
         checkedAt,
         balanceApplied,
+        mode,
+        groupId,
+        isEditable,
+        dispatchStatus,
+        printReadyUrl,
+        printReadyGeneratedAt,
+        printReadyStoragePath,
+        printedAt,
+        submittedToStationAt,
+        ticketFingerprintSource,
+        ticketFingerprint,
+        fingerprintVersion,
       ];
 }

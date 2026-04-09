@@ -3,6 +3,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../models/lottery_form.dart';
 import '../../repositories/lottery_form_repository.dart';
+import '../../repositories/lottery_group_repository.dart';
+import '../../services/group_invite_link_service.dart';
+import '../lottery_form/group_details_page.dart';
 import 'history_cubit.dart';
 
 class HistoryTab extends StatelessWidget {
@@ -10,12 +13,16 @@ class HistoryTab extends StatelessWidget {
     super.key,
     required this.userId,
     required this.repository,
+    required this.groupRepository,
+    required this.inviteLinkService,
     required this.onFormSelected,
     required this.onDeleteSavedForm,
   });
 
   final String userId;
   final LotteryFormRepository repository;
+  final LotteryGroupRepository groupRepository;
+  final GroupInviteLinkService inviteLinkService;
   final ValueChanged<LotteryForm> onFormSelected;
   final Future<bool> Function(LotteryForm) onDeleteSavedForm;
 
@@ -26,6 +33,35 @@ class HistoryTab extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
+            _HistorySectionCard(
+              title: 'רשימת טפסים קבוצתיים שנשלחו',
+              isExpanded: expandedSection == HistorySection.groupSubmitted,
+              onTap: () => context
+                  .read<HistoryCubit>()
+                  .toggle(HistorySection.groupSubmitted),
+              child: StreamBuilder<List<SubmittedGroupHistoryItem>>(
+                stream: groupRepository.watchSubmittedGroupsForUser(userId),
+                builder: (context, snapshot) {
+                  return _SubmittedGroupsList(
+                    items: snapshot.data ?? const <SubmittedGroupHistoryItem>[],
+                    emptyText: 'אין טפסים קבוצתיים שנשלחו עדיין',
+                    onOpen: (item) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => GroupDetailsPage(
+                            groupId: item.groupId,
+                            currentUserId: userId,
+                            inviteLinkService: inviteLinkService,
+                            repository: groupRepository,
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
             _HistorySectionCard(
               title: 'רשימת טפסים שהלקוח שלח',
               isExpanded: expandedSection == HistorySection.submitted,
@@ -65,6 +101,89 @@ class HistoryTab extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+class _SubmittedGroupsList extends StatelessWidget {
+  const _SubmittedGroupsList({
+    required this.items,
+    required this.emptyText,
+    required this.onOpen,
+  });
+
+  final List<SubmittedGroupHistoryItem> items;
+  final String emptyText;
+  final ValueChanged<SubmittedGroupHistoryItem> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          emptyText,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    }
+
+    return Column(
+      children: items
+          .map(
+            (item) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Material(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(14),
+                child: ListTile(
+                  onTap: () => onOpen(item),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  title: Text(
+                    item.groupName,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    'נוצר על ידי: ${item.creatorName}\n'
+                    'סטטוס עסקי: ${item.groupStatus}\n'
+                    'מצב שליחה: ${_dispatchStatusLabel(item.dispatchStatus)}\n'
+                    'נשלח: ${_formatDate(item.submittedAt)}\n'
+                    'החלק שלי: ${item.myEffectiveShare} ש״ח',
+                    textAlign: TextAlign.right,
+                  ),
+                  trailing: const Icon(Icons.chevron_left),
+                ),
+              ),
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  String _formatDate(DateTime? date) {
+    if (date == null) {
+      return 'ללא תאריך';
+    }
+
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+
+    return '${twoDigits(date.day)}/${twoDigits(date.month)}/${date.year} '
+        '${twoDigits(date.hour)}:${twoDigits(date.minute)}';
+  }
+
+  String _dispatchStatusLabel(String dispatchStatus) {
+    switch (dispatchStatus) {
+      case LotteryGroupRepository.dispatchStatusPrinted:
+        return 'הודפס';
+      case LotteryGroupRepository.dispatchStatusSubmittedToStation:
+        return 'נמסר לתחנה';
+      case LotteryGroupRepository.dispatchStatusQueuedForPrint:
+      default:
+        return 'ממתין להדפסה';
+    }
   }
 }
 

@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../models/lottery_group.dart';
+import '../../repositories/lottery_group_repository.dart';
+import '../../services/group_invite_link_service.dart';
 import '../../models/lottery_table.dart';
 import '../../views/home/printing/lottery_print_preview_page.dart';
+import 'group_details_page.dart';
+import 'my_active_groups_page.dart';
 import 'lottery_form_cubit.dart';
 import 'lottery_form_state.dart';
 
@@ -16,16 +21,67 @@ enum _PersistAction {
   save,
 }
 
+enum _GroupAction {
+  create,
+}
+
 class LotteryFormPage extends StatefulWidget {
-  const LotteryFormPage({super.key});
+  const LotteryFormPage({
+    super.key,
+    required this.inviteLinkService,
+  });
 
   static const double rowLabelWidth = 112;
+  final GroupInviteLinkService inviteLinkService;
 
   @override
   State<LotteryFormPage> createState() => _LotteryFormPageState();
 }
 
 class _LotteryFormPageState extends State<LotteryFormPage> {
+  late final LotteryGroupRepository _groupRepository;
+
+  @override
+  void initState() {
+    super.initState();
+    _groupRepository = LotteryGroupRepository();
+  }
+
+  Future<void> _promptCreateGroup() async {
+    final LotteryFormState currentState =
+        context.read<LotteryFormCubit>().state;
+    if (!currentState.form.isComplete || currentState.isBusy) {
+      return;
+    }
+
+    final String? groupName = await showDialog<String>(
+      context: context,
+      useRootNavigator: true,
+      builder: (context) => const _CreateGroupDialog(),
+    );
+
+    if (!mounted || groupName == null || groupName.trim().isEmpty) {
+      return;
+    }
+
+    final LotteryGroup? group =
+        await context.read<LotteryFormCubit>().createGroup(groupName);
+    if (!mounted || group == null) {
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => GroupDetailsPage(
+          groupId: group.groupId,
+          currentUserId: group.creatorUserId,
+          inviteLinkService: widget.inviteLinkService,
+          repository: _groupRepository,
+        ),
+      ),
+    );
+  }
+
   Future<void> _confirmClearForm() async {
     final bool confirmed = await showDialog<bool>(
           context: context,
@@ -72,6 +128,33 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
   }
 
+  void _openMyActiveGroups() {
+    final String currentUserId =
+        context.read<LotteryFormCubit>().state.form.userId;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MyActiveGroupsPage(
+          userId: currentUserId,
+          repository: _groupRepository,
+          inviteLinkService: widget.inviteLinkService,
+        ),
+      ),
+    );
+  }
+
+  void _handleGroupAction(_GroupAction action) {
+    if (action != _GroupAction.create) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _promptCreateGroup();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<LotteryFormCubit, LotteryFormState>(
@@ -100,6 +183,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         context.read<LotteryFormCubit>().clearMessages();
       },
       builder: (context, state) {
+        final bool canCreateGroup = state.form.isComplete && !state.isBusy;
         return LayoutBuilder(
           builder: (context, constraints) {
             final double keyboardHeight =
@@ -113,7 +197,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                     children: [
                       _ActionBar(
                         isBusy: state.isBusy,
+                        canCreateGroup: canCreateGroup,
                         onClearPressed: _confirmClearForm,
+                        onGroupAction: _handleGroupAction,
                         onLottomatAction: (action) {
                           if (action == _LottomatAction.completeRemaining) {
                             context
@@ -136,11 +222,23 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                       const SizedBox(height: 8),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: OutlinedButton(
-                          onPressed: state.isBusy
-                              ? null
-                              : () => _openPrintDebugPreview(state),
-                          child: const Text('Open Print Debug Preview'),
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.end,
+                          children: [
+                            OutlinedButton(
+                              onPressed:
+                                  state.isBusy ? null : _openMyActiveGroups,
+                              child: const Text('My Active Groups'),
+                            ),
+                            OutlinedButton(
+                              onPressed: state.isBusy
+                                  ? null
+                                  : () => _openPrintDebugPreview(state),
+                              child: const Text('Open Print Debug Preview'),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -183,16 +281,68 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   }
 }
 
+class _CreateGroupDialog extends StatefulWidget {
+  const _CreateGroupDialog();
+
+  @override
+  State<_CreateGroupDialog> createState() => _CreateGroupDialogState();
+}
+
+class _CreateGroupDialogState extends State<_CreateGroupDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('יצירת קבוצת לוטו'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: 'שם קבוצה',
+          hintText: 'למשל: קבוצת שישי',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('ביטול'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+          child: const Text('יצירה'),
+        ),
+      ],
+    );
+  }
+}
+
 class _ActionBar extends StatelessWidget {
   const _ActionBar({
     required this.isBusy,
+    required this.canCreateGroup,
     required this.onClearPressed,
+    required this.onGroupAction,
     required this.onLottomatAction,
     required this.onPersistAction,
   });
 
   final bool isBusy;
+  final bool canCreateGroup;
   final VoidCallback onClearPressed;
+  final ValueChanged<_GroupAction> onGroupAction;
   final ValueChanged<_LottomatAction> onLottomatAction;
   final ValueChanged<_PersistAction> onPersistAction;
 
@@ -225,6 +375,23 @@ class _ActionBar extends StatelessWidget {
             child: const _ActionChip(
               label: 'לוטומט',
               icon: Icons.auto_awesome,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: PopupMenuButton<_GroupAction>(
+            enabled: canCreateGroup,
+            onSelected: onGroupAction,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _GroupAction.create,
+                child: Text('יצירת קבוצה מטופס זה'),
+              ),
+            ],
+            child: const _ActionChip(
+              label: 'קבוצה',
+              icon: Icons.group_outlined,
             ),
           ),
         ),

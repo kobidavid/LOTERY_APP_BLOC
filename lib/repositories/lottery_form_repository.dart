@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:async';
 
 import '../models/lottery_form.dart';
+import '../models/lottery_group.dart';
 
 class LotteryFormRepository {
   LotteryFormRepository({
@@ -19,16 +20,24 @@ class LotteryFormRepository {
   final FirebaseFunctions _functions;
   final FirebaseAuth _auth;
   static const String _submitFunctionName = 'submitLotteryForm';
+  static const int _regularLottoPairPriceNis = 6;
+  static const String _groupSnapshotSource = 'group_snapshot';
 
   CollectionReference<Map<String, dynamic>> _formsRef(String userId) {
     return _firestore.collection('users').doc(userId).collection('forms');
+  }
+
+  CollectionReference<Map<String, dynamic>> _groupsRef() {
+    return _firestore.collection('lottery_groups');
   }
 
   Stream<List<LotteryForm>> watchSubmittedForms(String userId) {
     return _formsRef(userId).snapshots().map(
           (snapshot) => _mapForms(snapshot)
             ..retainWhere(
-              (form) => form.status == LotteryFormStatus.submitted,
+              (form) =>
+                  form.status == LotteryFormStatus.submitted &&
+                  form.source != _groupSnapshotSource,
             )
             ..sort((a, b) => (b.submittedAt ?? DateTime(0)).compareTo(
                   a.submittedAt ?? DateTime(0),
@@ -47,6 +56,19 @@ class LotteryFormRepository {
                       a.savedAt ?? a.updatedAt ?? DateTime(0),
                     )),
         );
+  }
+
+  Stream<LotteryForm> watchForm({
+    required String userId,
+    required String formId,
+  }) {
+    return _formsRef(userId).doc(formId).snapshots().map((snapshot) {
+      final Map<String, dynamic>? data = snapshot.data();
+      if (!snapshot.exists || data == null) {
+        throw StateError('הטופס שנשלח לא נמצא.');
+      }
+      return LotteryForm.fromFirestore(snapshot.id, data);
+    });
   }
 
   List<LotteryForm> _mapForms(QuerySnapshot<Map<String, dynamic>> snapshot) {
@@ -111,6 +133,18 @@ class LotteryFormRepository {
         'winAmount': persistable.winAmount,
         'checkedAt': persistable.checkedAt,
         'balanceApplied': persistable.balanceApplied,
+        'mode': persistable.mode.value,
+        'groupId': persistable.groupId,
+        'isEditable': persistable.isEditable,
+        'dispatchStatus': persistable.dispatchStatus,
+        'printReadyUrl': persistable.printReadyUrl,
+        'printReadyGeneratedAt': persistable.printReadyGeneratedAt,
+        'printReadyStoragePath': persistable.printReadyStoragePath,
+        'printedAt': persistable.printedAt,
+        'submittedToStationAt': persistable.submittedToStationAt,
+        'ticketFingerprintSource': persistable.ticketFingerprintSource,
+        'ticketFingerprint': persistable.ticketFingerprint,
+        'fingerprintVersion': persistable.fingerprintVersion,
       },
       SetOptions(merge: true),
     );
@@ -183,6 +217,119 @@ class LotteryFormRepository {
     return _formsRef(userId).doc(formId).delete();
   }
 
+  Future<LotteryGroup> createGroupFromForm({
+    required LotteryForm form,
+    required String groupName,
+  }) async {
+    final DateTime now = DateTime.now();
+    final DocumentReference<Map<String, dynamic>> sourceFormRef =
+        form.formId == null
+            ? _formsRef(form.userId).doc()
+            : _formsRef(form.userId).doc(form.formId);
+    final DocumentReference<Map<String, dynamic>> groupRef = _groupsRef().doc();
+    final DocumentReference<Map<String, dynamic>> membershipRef =
+        groupRef.collection('memberships').doc(form.userId);
+
+    final LotteryForm lockedForm = form.copyWith(
+      formId: sourceFormRef.id,
+      createdAt: form.createdAt ?? now,
+      updatedAt: now,
+      status: LotteryFormStatus.lockedForGroup,
+      mode: LotteryFormMode.group,
+      groupId: groupRef.id,
+      isEditable: false,
+    );
+
+    final String inviteToken = groupRef.id;
+    final int populatedTableCount =
+        lockedForm.tables.where((table) => !table.isEmpty).length;
+    final num baseTicketCost =
+        _calculateRegularLottoBaseTicketCost(populatedTableCount);
+    final String creatorDisplayName = _auth.currentUser?.uid == form.userId &&
+            (_auth.currentUser?.displayName?.trim().isNotEmpty ?? false)
+        ? _auth.currentUser!.displayName!.trim()
+        : form.userId;
+    final Map<String, dynamic> snapshot = <String, dynamic>{
+      'tables': lockedForm.tables.map((table) => table.toMap()).toList(),
+      'isComplete': lockedForm.isComplete,
+    };
+
+    final WriteBatch batch = _firestore.batch();
+    batch.set(
+      sourceFormRef,
+      <String, dynamic>{
+        'formId': sourceFormRef.id,
+        'userId': lockedForm.userId,
+        'status': lockedForm.status.value,
+        'mode': lockedForm.mode.value,
+        'groupId': lockedForm.groupId,
+        'isEditable': lockedForm.isEditable,
+        'tables': lockedForm.tables.map((table) => table.toMap()).toList(),
+        'isComplete': lockedForm.isComplete,
+        'createdAt': lockedForm.createdAt,
+        'updatedAt': lockedForm.updatedAt,
+        'submittedAt': lockedForm.submittedAt,
+        'savedAt': lockedForm.savedAt,
+        'source': lockedForm.source,
+        'version': lockedForm.version,
+        'lotteryId': lockedForm.lotteryId,
+        'salesCloseAt': lockedForm.salesCloseAt,
+        'resultStatus': lockedForm.resultStatus?.value,
+        'resultPublishedAt': lockedForm.resultPublishedAt,
+        'winAmount': lockedForm.winAmount,
+        'checkedAt': lockedForm.checkedAt,
+        'balanceApplied': lockedForm.balanceApplied,
+      },
+      SetOptions(merge: true),
+    );
+
+    batch.set(groupRef, <String, dynamic>{
+      'groupId': groupRef.id,
+      'groupName': groupName,
+      'creatorUserId': form.userId,
+      'sourceFormId': sourceFormRef.id,
+      'status': LotteryGroupStatus.collectingResponses.value,
+      'inviteToken': inviteToken,
+      'formSnapshot': snapshot,
+      'baseTicketCost': baseTicketCost,
+      'currentPerParticipantCost': 0,
+      'finalizedParticipantCount': 0,
+      'dispatchStatus': null,
+      'createdAt': now,
+      'updatedAt': now,
+    });
+
+    batch.set(membershipRef, <String, dynamic>{
+      'userId': form.userId,
+      'displayName': creatorDisplayName,
+      'groupId': groupRef.id,
+      'responseStatus': 'interested',
+      'minimumParticipantsRequired': 1,
+      'lockedIn': false,
+      'paymentStatus': 'not_applicable',
+      'joinedAt': now,
+      'respondedAt': now,
+    });
+
+    await batch.commit();
+
+    return LotteryGroup.fromFirestore(groupRef.id, <String, dynamic>{
+      'groupId': groupRef.id,
+      'groupName': groupName,
+      'creatorUserId': form.userId,
+      'sourceFormId': sourceFormRef.id,
+      'status': LotteryGroupStatus.collectingResponses.value,
+      'inviteToken': inviteToken,
+      'formSnapshot': snapshot,
+      'baseTicketCost': baseTicketCost,
+      'currentPerParticipantCost': 0,
+      'finalizedParticipantCount': 0,
+      'dispatchStatus': null,
+      'createdAt': now,
+      'updatedAt': now,
+    });
+  }
+
   bool _tablesEqual(List<dynamic> left, List<dynamic> right) {
     if (left.length != right.length) {
       return false;
@@ -195,5 +342,14 @@ class LotteryFormRepository {
     }
 
     return true;
+  }
+
+  num _calculateRegularLottoBaseTicketCost(int populatedTableCount) {
+    if (populatedTableCount <= 0) {
+      return 0;
+    }
+
+    final int tablePairs = (populatedTableCount / 2).ceil();
+    return tablePairs * _regularLottoPairPriceNis;
   }
 }
