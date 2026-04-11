@@ -1,8 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../form_presentation_utils.dart';
 import '../../models/lottery_group.dart';
 import '../../models/lottery_group_membership.dart';
 import '../../repositories/lottery_group_repository.dart';
@@ -233,6 +235,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         ? 'צפה בקובץ להדפסה'
                         : 'צפה בטופס',
                     onOpenFullScreen: () => _openPrimaryTicketView(group),
+                  ),
+                  const SizedBox(height: 12),
+                  _GroupOutcomeCard(
+                    group: group,
+                    currentUserId: widget.currentUserId,
+                    creatorDisplayName: creatorDisplayName,
                   ),
                   const SizedBox(height: 12),
                   _CompactSummaryCard(
@@ -886,6 +894,93 @@ class _CompactStat extends StatelessWidget {
   }
 }
 
+class _GroupOutcomeCard extends StatelessWidget {
+  const _GroupOutcomeCard({
+    required this.group,
+    required this.currentUserId,
+    required this.creatorDisplayName,
+  });
+
+  final LotteryGroup group;
+  final String currentUserId;
+  final String creatorDisplayName;
+
+  @override
+  Widget build(BuildContext context) {
+    final String? submittedFormId = group.submittedFormId;
+    if (submittedFormId == null || submittedFormId.isEmpty) {
+      return _InfoCard(
+        title: 'פרטי הקבוצה',
+        rows: [
+          _InfoRow(label: 'שם קבוצה', value: group.groupName),
+          _InfoRow(label: 'יוצר הקבוצה', value: creatorDisplayName),
+          _InfoRow(
+            label: 'עלות למשתתף',
+            value: group.currentPerParticipantCost > 0
+                ? '${group.currentPerParticipantCost} ש״ח'
+                : 'ייקבע לאחר סגירת הקבוצה',
+          ),
+          _InfoRow(
+            label: 'מועד יצירה',
+            value: formatPresentationDateTime(group.createdAt),
+          ),
+          _InfoRow(
+            label: 'מועד שליחה',
+            value: formatPresentationDateTime(group.submittedAt),
+          ),
+        ],
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(group.creatorUserId)
+          .collection('forms')
+          .doc(submittedFormId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final Map<String, dynamic> formData =
+            snapshot.data?.data() ?? const <String, dynamic>{};
+        final num totalWinnings = (formData['winAmount'] as num?) ?? 0;
+        final num? myWinnings = extractMyWinningShare(
+          winAllocations: formData['winAllocations'],
+          userId: currentUserId,
+        );
+
+        return _InfoCard(
+          title: 'פרטי הקבוצה',
+          rows: [
+            _InfoRow(label: 'שם קבוצה', value: group.groupName),
+            _InfoRow(label: 'יוצר הקבוצה', value: creatorDisplayName),
+            _InfoRow(
+              label: 'עלות למשתתף',
+              value: group.currentPerParticipantCost > 0
+                  ? '${group.currentPerParticipantCost} ש״ח'
+                  : 'לא זמין',
+            ),
+            _InfoRow(
+              label: 'מועד שליחה',
+              value: formatPresentationDateTime(
+                group.submittedAt ??
+                    presentationAsDateTime(formData['submittedAt']),
+              ),
+            ),
+            _InfoRow(
+              label: 'זכייה כוללת',
+              value: totalWinnings > 0 ? '$totalWinnings ש״ח' : 'טרם פורסם',
+            ),
+            _InfoRow(
+              label: 'הזכייה שלי',
+              value: myWinnings != null ? '$myWinnings ש״ח' : 'טרם פורסם',
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _StatusBanner extends StatelessWidget {
   const _StatusBanner({
     required this.message,
@@ -954,7 +1049,6 @@ class _ActionBarCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    
     return Wrap(
       spacing: 10,
       runSpacing: 10,

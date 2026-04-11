@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -149,7 +150,7 @@ class _MainShellPageState extends State<MainShellPage> {
                 onFormSelected: _handleHistoryFormSelected,
                 onDeleteSavedForm: _handleDeleteSavedForm,
               ),
-              const _PersonalAreaPlaceholder(),
+              _PersonalAreaTab(user: widget.user),
             ],
           ),
         ),
@@ -264,45 +265,161 @@ class _MainShellPageState extends State<MainShellPage> {
   }
 }
 
-class _PersonalAreaPlaceholder extends StatelessWidget {
-  const _PersonalAreaPlaceholder();
+class _PersonalAreaTab extends StatelessWidget {
+  const _PersonalAreaTab({
+    required this.user,
+  });
+
+  final AppUser user;
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 420),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.person_outline_rounded,
-                size: 42,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'איזור אישי',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final Map<String, dynamic> data =
+            snapshot.data?.data() ?? const <String, dynamic>{};
+        final String? displayName = _normalizedText(
+          data['displayName'] as String?,
+          fallback: user.displayName,
+        );
+        final String? email = _normalizedText(
+          data['email'] as String?,
+          fallback: user.email,
+        );
+        final num balance = (data['balance'] as num?) ?? 0;
+        final String avatarLabel =
+            (displayName ?? email ?? 'U').trim().substring(0, 1).toUpperCase();
+
+        return ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  children: [
+                    _PersonalAreaCard(
+                      child: Column(
+                        children: [
+                          CircleAvatar(
+                            radius: 38,
+                            backgroundColor:
+                                Theme.of(context).colorScheme.primary,
+                            backgroundImage:
+                                _normalizedText(user.photoUrl) != null
+                                    ? NetworkImage(user.photoUrl!)
+                                    : null,
+                            child: _normalizedText(user.photoUrl) == null
+                                ? Text(
+                                    avatarLabel,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 24,
+                                    ),
+                                  )
+                                : null,
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            displayName ?? 'משתמש',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall
+                                ?.copyWith(fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            email ?? 'ללא אימייל',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodyLarge,
+                          ),
+                        ],
+                      ),
                     ),
+                    const SizedBox(height: 16),
+                    _PersonalAreaCard(
+                      child: Column(
+                        children: [
+                          Text(
+                            'יתרה נוכחית',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            '$balance ש״ח',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context)
+                                .textTheme
+                                .displaySmall
+                                ?.copyWith(fontWeight: FontWeight.w900),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _PersonalAreaCard(
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () => context.read<AuthCubit>().signOut(),
+                          icon: const Icon(Icons.logout_rounded),
+                          label: const Text('התנתקות'),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'המסך הזה ישמש בהמשך לאזור אישי, פרופיל והעדפות משתמש.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String? _normalizedText(String? value, {String? fallback}) {
+    final String? primary = value?.trim();
+    if (primary != null && primary.isNotEmpty) {
+      return primary;
+    }
+    final String? fallbackValue = fallback?.trim();
+    if (fallbackValue != null && fallbackValue.isNotEmpty) {
+      return fallbackValue;
+    }
+    return null;
+  }
+}
+
+class _PersonalAreaCard extends StatelessWidget {
+  const _PersonalAreaCard({
+    required this.child,
+  });
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(24),
       ),
+      child: child,
     );
   }
 }

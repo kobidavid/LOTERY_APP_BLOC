@@ -1,9 +1,11 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/lottery_form.dart';
 import '../../repositories/lottery_form_repository.dart';
 import '../../repositories/lottery_group_repository.dart';
 import '../../services/group_invite_link_service.dart';
+import '../form_presentation_utils.dart';
 import 'personal_form_details_page.dart';
 import '../lottery_form/group_details_page.dart';
 
@@ -92,6 +94,7 @@ class _HistoryTabState extends State<HistoryTab> {
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                       children: [
                         _FormsSection(
+                          viewerUserId: widget.userId,
                           title: 'טפסים שנשלחו / שולמו',
                           subtitle: 'טפסים אישיים וקבוצתיים שכבר הוגשו',
                           items: submittedItems,
@@ -109,6 +112,7 @@ class _HistoryTabState extends State<HistoryTab> {
                         ),
                         const SizedBox(height: 16),
                         _FormsSection(
+                          viewerUserId: widget.userId,
                           title: 'טיוטות',
                           subtitle: 'טפסים שמורים או קבוצות שעדיין בתהליך',
                           items: draftItems,
@@ -242,6 +246,7 @@ class _FormsListItem {
 
 class _FormsSection extends StatelessWidget {
   const _FormsSection({
+    required this.viewerUserId,
     required this.title,
     required this.subtitle,
     required this.items,
@@ -252,6 +257,7 @@ class _FormsSection extends StatelessWidget {
     required this.onToggle,
   });
 
+  final String viewerUserId;
   final String title;
   final String subtitle;
   final List<_FormsListItem> items;
@@ -323,6 +329,7 @@ class _FormsSection extends StatelessWidget {
                             (item) => Padding(
                               padding: const EdgeInsets.only(bottom: 10),
                               child: _FormsSummaryTile(
+                                viewerUserId: viewerUserId,
                                 item: item,
                                 onTap: () => onItemTap(item),
                                 onDelete: onDeleteDraft == null
@@ -348,11 +355,13 @@ class _FormsSection extends StatelessWidget {
 
 class _FormsSummaryTile extends StatelessWidget {
   const _FormsSummaryTile({
+    required this.viewerUserId,
     required this.item,
     required this.onTap,
     required this.onDelete,
   });
 
+  final String viewerUserId;
   final _FormsListItem item;
   final VoidCallback onTap;
   final Future<bool> Function()? onDelete;
@@ -376,10 +385,7 @@ class _FormsSummaryTile extends StatelessWidget {
         ),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 8),
-          child: Text(
-            _subtitleText(),
-            textAlign: TextAlign.right,
-          ),
+          child: _buildSubtitle(),
         ),
         trailing: const Icon(Icons.chevron_left),
       ),
@@ -411,6 +417,21 @@ class _FormsSummaryTile extends StatelessWidget {
     );
   }
 
+  Widget _buildSubtitle() {
+    if (item.kind == _FormsItemKind.groupSubmitted ||
+        item.kind == _FormsItemKind.groupDraft) {
+      return _GroupSummaryDetails(
+        item: item,
+        viewerUserId: viewerUserId,
+      );
+    }
+
+    return Text(
+      _subtitleText(),
+      textAlign: TextAlign.right,
+    );
+  }
+
   String _titleText() {
     switch (item.kind) {
       case _FormsItemKind.personalSubmitted:
@@ -431,6 +452,7 @@ class _FormsSummaryTile extends StatelessWidget {
           'סטטוס: ${_personalStatusLabel(form)}',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
           'תאריך הגרלה: ${_formatDate(form.salesCloseAt ?? form.submittedAt)}',
+          'נשלח: ${_formatDate(form.submittedAt ?? form.updatedAt)}',
         ];
         if (form.resultStatus != null || form.winAmount > 0) {
           lines.add('זכייה: ${form.winAmount} ש״ח');
@@ -441,7 +463,7 @@ class _FormsSummaryTile extends StatelessWidget {
         return [
           'סטטוס: טיוטה',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
-          'עודכן: ${_formatDate(form.savedAt ?? form.updatedAt)}',
+          'נוצר: ${_formatDate(form.createdAt ?? form.savedAt ?? form.updatedAt)}',
         ].join('\n');
       case _FormsItemKind.groupSubmitted:
         final SubmittedGroupHistoryItem group = item.submittedGroup!;
@@ -527,13 +549,175 @@ class _FormsSummaryTile extends StatelessWidget {
   }
 
   String _formatDate(DateTime? date) {
-    if (date == null) {
-      return 'ללא תאריך';
+    return formatPresentationDateTime(date);
+  }
+}
+
+class _GroupSummaryDetails extends StatelessWidget {
+  const _GroupSummaryDetails({
+    required this.item,
+    required this.viewerUserId,
+  });
+
+  final _FormsListItem item;
+  final String viewerUserId;
+
+  @override
+  Widget build(BuildContext context) {
+    final String? groupId = item.groupId;
+    if (groupId == null) {
+      return Text(
+        _fallbackText(),
+        textAlign: TextAlign.right,
+      );
     }
 
-    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('lottery_groups')
+          .doc(groupId)
+          .snapshots(),
+      builder: (context, groupSnapshot) {
+        final Map<String, dynamic> groupData =
+            groupSnapshot.data?.data() ?? const <String, dynamic>{};
+        final DateTime? createdAt =
+            presentationAsDateTime(groupData['createdAt']);
+        final DateTime? submittedAt =
+            presentationAsDateTime(groupData['submittedAt']);
+        final String? creatorUserId = groupData['creatorUserId'] as String?;
+        final String? submittedFormId = groupData['submittedFormId'] as String?;
 
-    return '${twoDigits(date.day)}/${twoDigits(date.month)}/${date.year} '
-        '${twoDigits(date.hour)}:${twoDigits(date.minute)}';
+        if (item.kind == _FormsItemKind.groupSubmitted &&
+            creatorUserId != null &&
+            creatorUserId.isNotEmpty &&
+            submittedFormId != null &&
+            submittedFormId.isNotEmpty) {
+          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('users')
+                .doc(creatorUserId)
+                .collection('forms')
+                .doc(submittedFormId)
+                .snapshots(),
+            builder: (context, formSnapshot) {
+              final Map<String, dynamic> formData =
+                  formSnapshot.data?.data() ?? const <String, dynamic>{};
+              return Text(
+                _submittedText(
+                  submittedAt: submittedAt,
+                  formData: formData,
+                ),
+                textAlign: TextAlign.right,
+              );
+            },
+          );
+        }
+
+        return Text(
+          _draftText(createdAt: createdAt),
+          textAlign: TextAlign.right,
+        );
+      },
+    );
+  }
+
+  String _submittedText({
+    required DateTime? submittedAt,
+    required Map<String, dynamic> formData,
+  }) {
+    final SubmittedGroupHistoryItem group = item.submittedGroup!;
+    final num? myWin = extractMyWinningShare(
+      winAllocations: formData['winAllocations'],
+      userId: viewerUserId,
+    );
+
+    final List<String> lines = <String>[
+      'נוצר על ידי: ${group.creatorName}',
+      'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+      'העלות שלי: ${group.myEffectiveShare} ש״ח',
+      'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
+      'הזכייה שלי: ${myWin != null ? '$myWin ש״ח' : 'טרם פורסם'}',
+    ];
+    return lines.join('\n');
+  }
+
+  String _draftText({
+    required DateTime? createdAt,
+  }) {
+    if (item.kind == _FormsItemKind.groupDraft) {
+      final UserGroupListItem group = item.activeGroup!;
+      return [
+        'נוצר על ידי: ${group.creatorUserId}',
+        'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+        'עלות שלי: ${_draftGroupCostLabel(group)}',
+        'נוצר: ${formatPresentationDateTime(createdAt ?? group.updatedAt)}',
+        'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
+      ].join('\n');
+    }
+
+    return _fallbackText();
+  }
+
+  String _fallbackText() {
+    if (item.kind == _FormsItemKind.groupSubmitted) {
+      final SubmittedGroupHistoryItem group = item.submittedGroup!;
+      return [
+        'נוצר על ידי: ${group.creatorName}',
+        'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+        'העלות שלי: ${group.myEffectiveShare} ש״ח',
+        'נשלח: ${formatPresentationDateTime(group.submittedAt)}',
+        'הזכייה שלי: טרם פורסם',
+      ].join('\n');
+    }
+
+    final UserGroupListItem group = item.activeGroup!;
+    return [
+      'נוצר על ידי: ${group.creatorUserId}',
+      'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+      'עלות שלי: ${_draftGroupCostLabel(group)}',
+      'נוצר: ${formatPresentationDateTime(group.updatedAt)}',
+      'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
+    ].join('\n');
+  }
+
+  String _groupStatusLabel(String rawStatus) {
+    switch (rawStatus) {
+      case 'submitted':
+        return 'נשלח';
+      case 'ready_for_submission':
+        return 'מוכן לשליחה';
+      case 'awaiting_payments':
+        return 'ממתין לתשלומים';
+      case 'collecting_responses':
+        return 'איסוף משתתפים';
+      case 'cancelled':
+        return 'בוטל';
+      default:
+        return rawStatus.isEmpty ? 'בטיפול' : rawStatus;
+    }
+  }
+
+  String _responseStatusLabel(String rawStatus) {
+    switch (rawStatus) {
+      case 'interested':
+        return 'מעוניין';
+      case 'undecided':
+        return 'טרם הוחלט';
+      case 'declined':
+      case 'not_interested':
+        return 'לא מצטרף';
+      default:
+        return rawStatus.isEmpty ? 'לא עודכן' : rawStatus;
+    }
+  }
+
+  String _draftGroupCostLabel(UserGroupListItem group) {
+    if (group.lockedIn && group.paymentStatus == 'paid') {
+      return 'שולם';
+    }
+    if (group.lockedIn && group.paymentStatus == 'unpaid') {
+      return 'ממתין לתשלום';
+    }
+    return 'ייקבע בהמשך';
   }
 }
