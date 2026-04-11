@@ -83,64 +83,45 @@ class _MainShellPageState extends State<MainShellPage> {
         BlocProvider<HistoryCubit>.value(value: _historyCubit),
       ],
       child: Scaffold(
-        body: SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _TopTabButton(
-                        label: 'היסטוריה',
-                        selected: _selectedTabIndex == 1,
-                        onTap: () => setState(() => _selectedTabIndex = 1),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _TopTabButton(
-                        label: 'שליחה',
-                        selected: _selectedTabIndex == 0,
-                        onTap: () => setState(() => _selectedTabIndex = 0),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    PopupMenuButton<String>(
-                      onSelected: (value) {
-                        if (value == 'logout') {
-                          context.read<AuthCubit>().signOut();
-                          return;
-                        }
-                        if (value == 'operator_console') {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => OperatorConsolePage(
-                                user: widget.user,
-                              ),
+        appBar: _selectedTabIndex == 0
+            ? null
+            : AppBar(
+                title: Text(_titleForIndex(_selectedTabIndex)),
+                actions: [
+                  PopupMenuButton<String>(
+                    onSelected: (value) {
+                      if (value == 'logout') {
+                        context.read<AuthCubit>().signOut();
+                        return;
+                      }
+                      if (value == 'operator_console') {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => OperatorConsolePage(
+                              user: widget.user,
                             ),
-                          );
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        if (kIsWeb && widget.user.operatorAccess)
-                          const PopupMenuItem(
-                            value: 'operator_console',
-                            child: Text('Operator Console'),
                           ),
+                        );
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      if (kIsWeb && widget.user.operatorAccess)
                         const PopupMenuItem(
-                          value: 'logout',
-                          child: Text('התנתקות'),
+                          value: 'operator_console',
+                          child: Text('Operator Console'),
                         ),
-                      ],
+                      const PopupMenuItem(
+                        value: 'logout',
+                        child: Text('התנתקות'),
+                      ),
+                    ],
+                    child: Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 16),
                       child: CircleAvatar(
-                        radius: 22,
+                        radius: 18,
                         backgroundColor: Theme.of(context).colorScheme.primary,
                         child: Text(
-                          (widget.user.displayName ?? widget.user.email ?? 'U')
-                              .trim()
-                              .substring(0, 1)
-                              .toUpperCase(),
+                          _avatarLabel,
                           style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.w900,
@@ -148,33 +129,73 @@ class _MainShellPageState extends State<MainShellPage> {
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: IndexedStack(
-                  index: _selectedTabIndex,
-                  children: [
-                    LotteryFormPage(
-                      inviteLinkService: widget.inviteLinkService,
-                    ),
-                    HistoryTab(
-                      userId: widget.user.uid,
-                      repository: _formRepository,
-                      groupRepository: _groupRepository,
-                      inviteLinkService: widget.inviteLinkService,
-                      onFormSelected: _handleHistoryFormSelected,
-                      onDeleteSavedForm: _handleDeleteSavedForm,
-                    ),
-                  ],
-                ),
+        body: SafeArea(
+          top: _selectedTabIndex == 0,
+          child: IndexedStack(
+            index: _selectedTabIndex,
+            children: [
+              LotteryFormPage(
+                inviteLinkService: widget.inviteLinkService,
               ),
+              HistoryTab(
+                userId: widget.user.uid,
+                repository: _formRepository,
+                groupRepository: _groupRepository,
+                inviteLinkService: widget.inviteLinkService,
+                onFormSelected: _handleHistoryFormSelected,
+                onDeleteSavedForm: _handleDeleteSavedForm,
+              ),
+              const _PersonalAreaPlaceholder(),
             ],
           ),
         ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _selectedTabIndex,
+          onDestinationSelected: (index) {
+            setState(() => _selectedTabIndex = index);
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
+              label: 'מסך הבית',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.description_outlined),
+              selectedIcon: Icon(Icons.description_rounded),
+              label: 'הטפסים שלי',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline_rounded),
+              selectedIcon: Icon(Icons.person_rounded),
+              label: 'איזור אישי',
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  String get _avatarLabel {
+    return (widget.user.displayName ?? widget.user.email ?? 'U')
+        .trim()
+        .substring(0, 1)
+        .toUpperCase();
+  }
+
+  String _titleForIndex(int index) {
+    switch (index) {
+      case 1:
+        return 'הטפסים שלי';
+      case 2:
+        return 'איזור אישי';
+      case 0:
+      default:
+        return 'מסך הבית';
+    }
   }
 
   void _handleHistoryFormSelected(LotteryForm form) {
@@ -242,40 +263,42 @@ class _MainShellPageState extends State<MainShellPage> {
   }
 }
 
-class _TopTabButton extends StatelessWidget {
-  const _TopTabButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
+class _PersonalAreaPlaceholder extends StatelessWidget {
+  const _PersonalAreaPlaceholder();
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        height: 44,
-        decoration: BoxDecoration(
-          color: selected
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected
-                ? Theme.of(context).colorScheme.onPrimary
-                : Theme.of(context).colorScheme.onSurface,
-            fontWeight: FontWeight.w900,
-            fontSize: 18,
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 420),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.person_outline_rounded,
+                size: 42,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'איזור אישי',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'המסך הזה ישמש בהמשך לאזור אישי, פרופיל והעדפות משתמש.',
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
         ),
       ),
