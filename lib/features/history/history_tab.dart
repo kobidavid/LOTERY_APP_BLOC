@@ -7,7 +7,7 @@ import '../../services/group_invite_link_service.dart';
 import 'personal_form_details_page.dart';
 import '../lottery_form/group_details_page.dart';
 
-class HistoryTab extends StatelessWidget {
+class HistoryTab extends StatefulWidget {
   const HistoryTab({
     super.key,
     required this.userId,
@@ -26,18 +26,27 @@ class HistoryTab extends StatelessWidget {
   final Future<bool> Function(LotteryForm) onDeleteSavedForm;
 
   @override
+  State<HistoryTab> createState() => _HistoryTabState();
+}
+
+class _HistoryTabState extends State<HistoryTab> {
+  int? _expandedSectionIndex = 0;
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<LotteryForm>>(
-      stream: repository.watchSubmittedForms(userId),
+      stream: widget.repository.watchSubmittedForms(widget.userId),
       builder: (context, submittedFormsSnapshot) {
         return StreamBuilder<List<SubmittedGroupHistoryItem>>(
-          stream: groupRepository.watchSubmittedGroupsForUser(userId),
+          stream:
+              widget.groupRepository.watchSubmittedGroupsForUser(widget.userId),
           builder: (context, submittedGroupsSnapshot) {
             return StreamBuilder<List<LotteryForm>>(
-              stream: repository.watchSavedForms(userId),
+              stream: widget.repository.watchSavedForms(widget.userId),
               builder: (context, savedFormsSnapshot) {
                 return StreamBuilder<List<UserGroupListItem>>(
-                  stream: groupRepository.watchGroupsForUser(userId),
+                  stream:
+                      widget.groupRepository.watchGroupsForUser(widget.userId),
                   builder: (context, activeGroupsSnapshot) {
                     final List<SubmittedGroupHistoryItem> submittedGroups =
                         submittedGroupsSnapshot.data ??
@@ -90,6 +99,13 @@ class HistoryTab extends StatelessWidget {
                           onItemTap: (item) =>
                               _handleItemTap(context: context, item: item),
                           onDeleteDraft: null,
+                          isExpanded: _expandedSectionIndex == 0,
+                          onToggle: () {
+                            setState(() {
+                              _expandedSectionIndex =
+                                  _expandedSectionIndex == 0 ? null : 0;
+                            });
+                          },
                         ),
                         const SizedBox(height: 16),
                         _FormsSection(
@@ -104,7 +120,14 @@ class HistoryTab extends StatelessWidget {
                                 item.kind != _FormsItemKind.personalDraft) {
                               return Future<bool>.value(false);
                             }
-                            return onDeleteSavedForm(item.personalForm!);
+                            return widget.onDeleteSavedForm(item.personalForm!);
+                          },
+                          isExpanded: _expandedSectionIndex == 1,
+                          onToggle: () {
+                            setState(() {
+                              _expandedSectionIndex =
+                                  _expandedSectionIndex == 1 ? null : 1;
+                            });
                           },
                         ),
                       ],
@@ -130,9 +153,9 @@ class HistoryTab extends StatelessWidget {
           Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => PersonalFormDetailsPage(
-                ownerUserId: userId,
+                ownerUserId: widget.userId,
                 formId: item.personalForm!.formId!,
-                repository: repository,
+                repository: widget.repository,
                 title: item.kind == _FormsItemKind.personalDraft
                     ? 'טיוטת טופס אישי'
                     : 'טופס אישי',
@@ -150,9 +173,9 @@ class HistoryTab extends StatelessWidget {
           MaterialPageRoute<void>(
             builder: (_) => GroupDetailsPage(
               groupId: item.groupId!,
-              currentUserId: userId,
-              inviteLinkService: inviteLinkService,
-              repository: groupRepository,
+              currentUserId: widget.userId,
+              inviteLinkService: widget.inviteLinkService,
+              repository: widget.groupRepository,
             ),
           ),
         );
@@ -225,6 +248,8 @@ class _FormsSection extends StatelessWidget {
     required this.emptyText,
     required this.onItemTap,
     required this.onDeleteDraft,
+    required this.isExpanded,
+    required this.onToggle,
   });
 
   final String title;
@@ -233,6 +258,8 @@ class _FormsSection extends StatelessWidget {
   final String emptyText;
   final ValueChanged<_FormsListItem> onItemTap;
   final Future<bool> Function(_FormsListItem item)? onDeleteDraft;
+  final bool isExpanded;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -252,34 +279,67 @@ class _FormsSection extends StatelessWidget {
                   fontWeight: FontWeight.w900,
                 ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            textAlign: TextAlign.right,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 14),
-          if (items.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Text(
-                emptyText,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            )
-          else
-            ...items.map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _FormsSummaryTile(
-                  item: item,
-                  onTap: () => onItemTap(item),
-                  onDelete:
-                      onDeleteDraft == null ? null : () => onDeleteDraft!(item),
-                ),
+          const SizedBox(height: 6),
+          InkWell(
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  AnimatedRotation(
+                    turns: isExpanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 220),
+                    child: const Icon(Icons.expand_more_rounded),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      subtitle,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: items.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        emptyText,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    )
+                  : Column(
+                      children: items
+                          .map(
+                            (item) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _FormsSummaryTile(
+                                item: item,
+                                onTap: () => onItemTap(item),
+                                onDelete: onDeleteDraft == null
+                                    ? null
+                                    : () => onDeleteDraft!(item),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+            ),
+            crossFadeState: isExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 220),
+            sizeCurve: Curves.easeInOut,
+          ),
         ],
       ),
     );

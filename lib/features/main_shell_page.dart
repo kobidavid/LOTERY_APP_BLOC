@@ -139,6 +139,7 @@ class _MainShellPageState extends State<MainShellPage> {
             children: [
               LotteryFormPage(
                 inviteLinkService: widget.inviteLinkService,
+                onOpenMyForms: () => setState(() => _selectedTabIndex = 1),
               ),
               HistoryTab(
                 userId: widget.user.uid,

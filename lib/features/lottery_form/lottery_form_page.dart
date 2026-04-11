@@ -29,10 +29,12 @@ class LotteryFormPage extends StatefulWidget {
   const LotteryFormPage({
     super.key,
     required this.inviteLinkService,
+    required this.onOpenMyForms,
   });
 
   static const double rowLabelWidth = 112;
   final GroupInviteLinkService inviteLinkService;
+  final VoidCallback onOpenMyForms;
 
   @override
   State<LotteryFormPage> createState() => _LotteryFormPageState();
@@ -107,6 +109,28 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     }
 
     context.read<LotteryFormCubit>().clearForm();
+  }
+
+  Future<void> _startPersonalSubmitFlow() async {
+    final bool? paymentConfirmed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => const _TemporaryPaymentPage(),
+      ),
+    );
+
+    if (!mounted || paymentConfirmed != true) {
+      return;
+    }
+
+    await context.read<LotteryFormCubit>().submitForm();
+    if (!mounted) {
+      return;
+    }
+
+    final LotteryFormState latestState = context.read<LotteryFormCubit>().state;
+    if (latestState.errorMessage == null) {
+      widget.onOpenMyForms();
+    }
   }
 
   void _openPrintDebugPreview(LotteryFormState state) {
@@ -215,7 +239,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                           if (action == _PersistAction.save) {
                             context.read<LotteryFormCubit>().saveForm();
                           } else {
-                            context.read<LotteryFormCubit>().submitForm();
+                            _startPersonalSubmitFlow();
                           }
                         },
                       ),
@@ -325,6 +349,52 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
           child: const Text('יצירה'),
         ),
       ],
+    );
+  }
+}
+
+class _TemporaryPaymentPage extends StatelessWidget {
+  const _TemporaryPaymentPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('תשלום'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'מסך תשלום זמני',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'הטופס האישי יישלח רק לאחר אישור התשלום.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('בצע תשלום'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
