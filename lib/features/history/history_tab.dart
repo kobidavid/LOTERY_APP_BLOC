@@ -4,6 +4,7 @@ import '../../models/lottery_form.dart';
 import '../../repositories/lottery_form_repository.dart';
 import '../../repositories/lottery_group_repository.dart';
 import '../../services/group_invite_link_service.dart';
+import 'personal_form_details_page.dart';
 import '../lottery_form/group_details_page.dart';
 
 class HistoryTab extends StatelessWidget {
@@ -38,14 +39,15 @@ class HistoryTab extends StatelessWidget {
                 return StreamBuilder<List<UserGroupListItem>>(
                   stream: groupRepository.watchGroupsForUser(userId),
                   builder: (context, activeGroupsSnapshot) {
+                    final List<SubmittedGroupHistoryItem> submittedGroups =
+                        submittedGroupsSnapshot.data ??
+                            const <SubmittedGroupHistoryItem>[];
                     final List<_FormsListItem> submittedItems = [
                       ...(submittedFormsSnapshot.data ?? const <LotteryForm>[])
                           .map(
                         (form) => _FormsListItem.personalSubmitted(form),
                       ),
-                      ...(submittedGroupsSnapshot.data ??
-                              const <SubmittedGroupHistoryItem>[])
-                          .map(
+                      ...submittedGroups.map(
                         (item) => _FormsListItem.groupSubmitted(item),
                       ),
                     ]..sort(
@@ -53,14 +55,26 @@ class HistoryTab extends StatelessWidget {
                       );
 
                     final List<_FormsListItem> draftItems = [
-                      ...(savedFormsSnapshot.data ?? const <LotteryForm>[]).map(
-                        (form) => _FormsListItem.personalDraft(form),
-                      ),
+                      ...(savedFormsSnapshot.data ?? const <LotteryForm>[])
+                          .where(
+                            (form) => form.status == LotteryFormStatus.saved,
+                          )
+                          .map(
+                            (form) => _FormsListItem.personalDraft(form),
+                          ),
                       ...(activeGroupsSnapshot.data ??
                               const <UserGroupListItem>[])
+                          .where(
+                            (item) =>
+                                item.groupStatus != 'submitted' &&
+                                !submittedGroups.any(
+                                  (submitted) =>
+                                      submitted.groupId == item.groupId,
+                                ),
+                          )
                           .map(
-                        (item) => _FormsListItem.groupDraft(item),
-                      ),
+                            (item) => _FormsListItem.groupDraft(item),
+                          ),
                     ]..sort(
                         (a, b) => b.sortDate.compareTo(a.sortDate),
                       );
@@ -112,8 +126,19 @@ class HistoryTab extends StatelessWidget {
     switch (item.kind) {
       case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
-        if (item.personalForm != null) {
-          onFormSelected(item.personalForm!);
+        if (item.personalForm?.formId != null) {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PersonalFormDetailsPage(
+                ownerUserId: userId,
+                formId: item.personalForm!.formId!,
+                repository: repository,
+                title: item.kind == _FormsItemKind.personalDraft
+                    ? 'טיוטת טופס אישי'
+                    : 'טופס אישי',
+              ),
+            ),
+          );
         }
         return;
       case _FormsItemKind.groupSubmitted:
