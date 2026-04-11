@@ -379,6 +379,37 @@ async function processWaitingLotteryResults() {
   }
 }
 
+// Splits winAmount across paidParticipants by costShare (proportional).
+// When all costShare values are equal, divides exactly to avoid float drift.
+// The last participant absorbs any rounding remainder so the total is exact.
+function computeWinAllocations(winAmount, paidParticipants) {
+  const n = paidParticipants.length;
+  const costShares = paidParticipants.map((p) => Number(p.costShare) || 0);
+  const totalCost = costShares.reduce((s, c) => s + c, 0);
+  const allEqual = costShares.every((s) => s === costShares[0]);
+
+  const allocations = [];
+  let distributed = 0;
+
+  for (let i = 0; i < n; i++) {
+    let amount;
+    if (i === n - 1) {
+      // Last participant absorbs any rounding remainder.
+      amount = Math.round((winAmount - distributed) * 100) / 100;
+    } else if (allEqual || totalCost === 0) {
+      // Equal split — floor to agora to never exceed winAmount.
+      amount = Math.floor((winAmount / n) * 100) / 100;
+    } else {
+      // Proportional split — floor to agora.
+      amount = Math.floor((winAmount * (costShares[i] / totalCost)) * 100) / 100;
+    }
+    distributed += amount;
+    allocations.push({userId: paidParticipants[i].userId, amount});
+  }
+
+  return allocations;
+}
+
 async function applyLotteryResultToForm(formRef, formData, result) {
   try {
     const tables = normalizeTables(formData.tables);
@@ -409,12 +440,45 @@ async function applyLotteryResultToForm(formRef, formData, result) {
       };
 
       if (winAmount > 0 && !alreadyApplied) {
-        const userRef = formRef.parent.parent;
-        transaction.set(userRef, {
-          balance: admin.firestore.FieldValue.increment(winAmount),
-        }, {merge: true});
+        const isGroupForm = freshData.submissionType === "group";
+        const paidParticipants = Array.isArray(freshData.paidParticipants)
+            ? freshData.paidParticipants
+            : [];
+
+        if (isGroupForm && paidParticipants.length >= 2) {
+          // Group form: split winnings across all paid participants by costShare.
+          const allocations = computeWinAllocations(winAmount, paidParticipants);
+          updates.winAllocations = allocations;
+          for (const allocation of allocations) {
+            const participantUserRef = firestore
+                .collection("users")
+                .doc(allocation.userId);
+            transaction.set(participantUserRef, {
+              balance: admin.firestore.FieldValue.increment(allocation.amount),
+            }, {merge: true});
+            console.log(
+                "applyLotteryResultToForm group allocation",
+                formRef.id,
+                "userId=", allocation.userId,
+                "amount=", allocation.amount,
+            );
+          }
+          console.log(
+              "applyLotteryResultToForm group balance applied",
+              formRef.id,
+              "winAmount=", winAmount,
+              "participants=", paidParticipants.length,
+          );
+        } else {
+          // Personal form (or group with a single participant): credit form owner.
+          const userRef = formRef.parent.parent;
+          transaction.set(userRef, {
+            balance: admin.firestore.FieldValue.increment(winAmount),
+          }, {merge: true});
+          console.log("applyLotteryResultToForm balance applied", formRef.id, winAmount);
+        }
+
         updates.balanceApplied = true;
-        console.log("applyLotteryResultToForm balance applied", formRef.id, winAmount);
       } else {
         updates.balanceApplied = alreadyApplied;
         console.log(

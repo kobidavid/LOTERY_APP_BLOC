@@ -1,12 +1,16 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:template_app_bloc/views/home/printing/lottery_physical_print_renderer.dart';
+import 'package:template_app_bloc/views/home/printing/lottery_print_layout.dart';
+import 'package:template_app_bloc/views/home/printing/lotto_physical_layout.dart';
 import 'package:url_launcher/url_launcher.dart';
-
 import '../../models/app_user.dart';
 import '../../models/receipt_intake_record.dart';
 import '../../repositories/operator_console_repository.dart';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+//import 'dart:html' as html;
 // ---------------------------------------------------------------------------
 // Page-level state enums
 // ---------------------------------------------------------------------------
@@ -255,7 +259,28 @@ class _OperatorConsolePageState extends State<OperatorConsolePage>
             label: Text(_uploading ? 'Uploading…' : 'Upload receipt'),
           ),
           const SizedBox(width: 10),
+        
+      ElevatedButton(
+        onPressed: () async {
+          await seedTestReceipt();
+        },
+        child: const Text('SEED RECEIPT'),
+      ),
+/*           ElevatedButton(
+            onPressed: () async {
+              final result = await LotteryPhysicalPrintRenderer.renderPdf(
+                rows: LotteryPrintLayout.buildDebugSampleRows(),
+                layout: const LottoPhysicalLayout(),
+                debugMode: true,
+              );
 
+              final blob = html.Blob([result.pdfBytes], 'application/pdf');
+              final url = html.Url.createObjectUrlFromBlob(blob);
+
+              html.window.open(url, '_blank');
+            },
+            child: const Text('TEST PRINT'),
+          ), */
           // Status filter
           Flexible(
             child: _CompactDropdown<_StatusFilter>(
@@ -494,26 +519,127 @@ class _OperatorConsolePageState extends State<OperatorConsolePage>
       if (mounted) setState(() => _uploading = false);
     }
   }
+  Future<void> seedTestReceipt() async {
+    final String uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No authenticated user.')),
+      );
+      return;
+    }
 
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('forms')
+          .doc('test-receipt-3890')
+          .set({
+        'formId': 'test-receipt-3890',
+        'userId': uid,
+        'status': 'submitted',
+        'submissionType': 'personal',
+        'dispatchStatus': 'submitted_to_station',
+        'lotteryId': 3890,
+        'ticketFingerprint': 'MANUAL_TEST_3890',
+        'ticketFingerprintSource': '3890-2-030809111925-5-021112152326-1',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'submittedAt': FieldValue.serverTimestamp(),
+        'printedAt': FieldValue.serverTimestamp(),
+        'submittedToStationAt': FieldValue.serverTimestamp(),
+        'isComplete': true,
+        'isEditable': false,
+        'source': 'manual_seed',
+        'resultStatus': 'waiting_for_results',
+        'checkedAt': null,
+        'winAmount': 0,
+        'balanceApplied': false,
+        'tables': [
+          {
+            'tableIndex': 1,
+            'isComplete': true,
+            'regularNumbers': [3, 8, 9, 11, 19, 25],
+            'strongNumber': 5,
+          },
+          {
+            'tableIndex': 2,
+            'isComplete': true,
+            'regularNumbers': [1, 19, 32, 34, 35, 37],
+            'strongNumber': 4,
+          },
+        ],
+      }, SetOptions(merge: true));
+
+      debugPrint('[SeedTestReceipt] seeded test-receipt-3890 for uid=$uid');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Test receipt form seeded successfully.')),
+      );
+    } catch (e, st) {
+      debugPrint('[SeedTestReceipt] ERROR: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Seed failed: $e')),
+      );
+    }
+  }
   Future<void> _advanceDispatchStatus(
     BuildContext context,
     DispatchOverviewItem item,
   ) async {
     final String? nextStatus = _nextDispatchStatus(item.dispatchStatus);
     if (nextStatus == null) return;
+
     try {
+      debugPrint(
+        '[Dispatch] advance clicked formId=${item.formId} '
+        'ownerUserId=${item.formOwnerUserId} '
+        'currentStatus=${item.dispatchStatus} '
+        'nextStatus=$nextStatus',
+      );
+
       await widget.repository.updateDispatchStatus(
-          item: item, dispatchStatus: nextStatus);
+        item: item,
+        dispatchStatus: nextStatus,
+      );
+
+      debugPrint('[Dispatch] updateDispatchStatus completed successfully');
+
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(
-                'Dispatch state updated to ${_dispatchStatusLabel(nextStatus)}.')),
+          content: Text(
+            'Dispatch state updated to ${_dispatchStatusLabel(nextStatus)}.',
+          ),
+        ),
       );
-    } catch (error) {
+    } on FirebaseException catch (e, st) {
+      debugPrint(
+        '[Dispatch] FIREBASE ERROR '
+        'code=${e.code} message=${e.message}',
+      );
+      debugPrint('$st');
+
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Firebase error: ${e.code} ${e.message ?? ''}',
+          ),
+        ),
+      );
+    } catch (error, st) {
+      debugPrint('[Dispatch] GENERIC ERROR: $error');
+      debugPrint('$st');
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
     }
   }
 

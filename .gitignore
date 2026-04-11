@@ -58,3 +58,5 @@ android/.gradle/
 functions/output/
 output/
 package-lock.json
+receipt_parser_service-2/.env
+receipt_parser_service-2/.env

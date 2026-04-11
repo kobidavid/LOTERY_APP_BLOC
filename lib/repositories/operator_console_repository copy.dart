@@ -474,7 +474,7 @@ class OperatorConsoleRepository {
           'payload=$dispatchUpdate',
         );
         transaction.set(formRef, dispatchUpdate, SetOptions(merge: true));
-        return;
+
         final String? groupId = item.groupId;
         if (groupId == null || groupId.isEmpty) {
           debugPrint('[RepoDispatch] no groupId, transaction done after form update');

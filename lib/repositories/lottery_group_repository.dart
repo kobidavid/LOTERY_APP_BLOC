@@ -68,6 +68,11 @@ class LotteryGroupRepository {
   static const String dispatchStatusPrinted = 'printed';
   static const String dispatchStatusSubmittedToStation = 'submitted_to_station';
 
+  /// When false (default) the submission updates the existing [sourceFormId]
+  /// form in-place instead of creating a second snapshot document.
+  /// Set to true to revert to the legacy create-new-snapshot behaviour.
+  static const bool _useCreateNewSnapshot = false;
+
   LotteryGroupRepository({
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
@@ -574,171 +579,367 @@ class LotteryGroupRepository {
       initialGroupSnapshot.id,
       initialGroupData,
     );
-    final String submittedFormId = await _submitSnapshotViaCallable(
+
+    // Always call the Cloud Function — it generates the fingerprint.
+    // In the new path the returned doc is a temporary fingerprint carrier that
+    // we read and then delete; in the legacy path it becomes the submitted form.
+    final String tempFormId = await _submitSnapshotViaCallable(
       creatorUserId: creatorUserId,
       tables: initialGroup.tables.map((table) => table.toMap()).toList(),
     );
-    final DocumentReference<Map<String, dynamic>> submittedFormRef = _firestore
+    final DocumentReference<Map<String, dynamic>> tempFormRef = _firestore
         .collection('users')
         .doc(creatorUserId)
         .collection('forms')
-        .doc(submittedFormId);
-    List<String> submittedParticipantUserIds = <String>[];
-    String creatorDisplayName = creatorUserId;
+        .doc(tempFormId);
 
-    try {
-      await _firestore.runTransaction((transaction) async {
-        final DocumentReference<Map<String, dynamic>> groupRef =
-            _groupRef(groupId);
-        final DocumentSnapshot<Map<String, dynamic>> groupSnapshot =
-            await transaction.get(groupRef);
-        final DocumentSnapshot<Map<String, dynamic>> submittedFormSnapshot =
-            await transaction.get(submittedFormRef);
+    if (!_useCreateNewSnapshot) {
+      // ── NEW PATH: update the existing sourceFormId form in-place ──────────
+      final String sourceFormId = initialGroup.sourceFormId ?? '';
+      if (sourceFormId.isEmpty) {
+        await tempFormRef.delete();
+        throw StateError('sourceFormId is missing on group $groupId.');
+      }
 
-        final Map<String, dynamic>? groupData = groupSnapshot.data();
-        if (!groupSnapshot.exists || groupData == null) {
-          throw StateError('הקבוצה לא נמצאה.');
-        }
-        if (!submittedFormSnapshot.exists) {
-          throw StateError('הטופס שנוצר עבור ההגשה לא נמצא.');
-        }
+      print(
+        '[SubmitGroup] new path: '
+        'tempFormId=$tempFormId sourceFormId=$sourceFormId groupId=$groupId',
+      );
 
-        final LotteryGroup group =
-            LotteryGroup.fromFirestore(groupSnapshot.id, groupData);
-        if (group.creatorUserId != creatorUserId) {
-          throw StateError('רק יוצר הקבוצה יכול להגיש את הטופס.');
-        }
-        if (group.status == LotteryGroupStatus.submitted) {
-          throw StateError('הקבוצה כבר הוגשה.');
-        }
-
-        final List<DocumentSnapshot<Map<String, dynamic>>> membershipDocs =
-            await Future.wait(
-          prefetchedMemberships.docs.map(
-            (doc) => transaction.get(doc.reference),
-          ),
+      // Read ALL fields written by the callable to the temp doc.
+      // These are the server-computed values we must copy to the original form.
+      final DocumentSnapshot<Map<String, dynamic>> tempFormSnapshot =
+          await tempFormRef.get();
+      final Map<String, dynamic>? tempFormData = tempFormSnapshot.data();
+      if (!tempFormSnapshot.exists || tempFormData == null) {
+        throw StateError(
+          'Temp form doc $tempFormId not found after callable.',
         );
+      }
+      final String? ticketFingerprint =
+          tempFormData['ticketFingerprint'] as String?;
+      final String? ticketFingerprintSource =
+          tempFormData['ticketFingerprintSource'] as String?;
+      final int? lotteryId =
+          (tempFormData['lotteryId'] as num?)?.toInt();
+      final dynamic salesCloseAt = tempFormData['salesCloseAt'];
+      final int? fingerprintVersion =
+          (tempFormData['fingerprintVersion'] as num?)?.toInt();
+      final String? resultStatus =
+          tempFormData['resultStatus'] as String?;
 
-        final List<LotteryGroupMembership> lockedInPaidMemberships =
-            membershipDocs
+      print(
+        '[SubmitGroup] fields from temp doc: '
+        'lotteryId=$lotteryId '
+        'salesCloseAt=$salesCloseAt '
+        'fingerprintVersion=$fingerprintVersion '
+        'resultStatus=$resultStatus '
+        'hasFingerprint=${ticketFingerprint != null} '
+        'hasFingerprintSource=${ticketFingerprintSource != null}',
+      );
+
+      final DocumentReference<Map<String, dynamic>> sourceFormRef = _firestore
+          .collection('users')
+          .doc(creatorUserId)
+          .collection('forms')
+          .doc(sourceFormId);
+
+      List<String> submittedParticipantUserIds = <String>[];
+      String creatorDisplayName = creatorUserId;
+
+      try {
+        await _firestore.runTransaction((transaction) async {
+          final DocumentReference<Map<String, dynamic>> groupRef =
+              _groupRef(groupId);
+          final DocumentSnapshot<Map<String, dynamic>> groupSnapshot =
+              await transaction.get(groupRef);
+          final DocumentSnapshot<Map<String, dynamic>> sourceFormSnapshot =
+              await transaction.get(sourceFormRef);
+
+          final Map<String, dynamic>? groupData = groupSnapshot.data();
+          if (!groupSnapshot.exists || groupData == null) {
+            throw StateError('הקבוצה לא נמצאה.');
+          }
+          if (!sourceFormSnapshot.exists) {
+            throw StateError(
+              'הטופס המקורי sourceFormId=$sourceFormId לא נמצא.',
+            );
+          }
+
+          final LotteryGroup group =
+              LotteryGroup.fromFirestore(groupSnapshot.id, groupData);
+          if (group.creatorUserId != creatorUserId) {
+            throw StateError('רק יוצר הקבוצה יכול להגיש את הטופס.');
+          }
+          if (group.status == LotteryGroupStatus.submitted) {
+            throw StateError('הקבוצה כבר הוגשה.');
+          }
+
+          final List<DocumentSnapshot<Map<String, dynamic>>> membershipDocs =
+              await Future.wait(
+            prefetchedMemberships.docs.map(
+              (doc) => transaction.get(doc.reference),
+            ),
+          );
+
+          final List<LotteryGroupMembership> lockedInPaidMemberships =
+              membershipDocs
+                  .map(
+                    (doc) => LotteryGroupMembership.fromFirestore(
+                      doc.data() ?? <String, dynamic>{},
+                    ),
+                  )
+                  .where(
+                    (membership) =>
+                        membership.lockedIn &&
+                        membership.paymentStatus ==
+                            LotteryGroupPaymentStatus.paid,
+                  )
+                  .toList();
+
+          final List<LotteryGroupMembership> validPaidMemberships =
+              _computeStableValidMemberships(lockedInPaidMemberships);
+
+          if (validPaidMemberships.isEmpty) {
+            throw StateError('אין קבוצת משלמים תקפה להגשה כרגע.');
+          }
+
+          final DateTime now = DateTime.now();
+          final int effectiveParticipantCount = validPaidMemberships.length;
+          final num effectiveCostPerPaidParticipant =
+              group.baseTicketCost / effectiveParticipantCount;
+          submittedParticipantUserIds = validPaidMemberships
+              .map((membership) => membership.userId)
+              .toList();
+          creatorDisplayName = _creatorDisplayNameFromMemberships(
+            memberships: membershipDocs
                 .map(
                   (doc) => LotteryGroupMembership.fromFirestore(
                     doc.data() ?? <String, dynamic>{},
                   ),
                 )
-                .where(
-                  (membership) =>
-                      membership.lockedIn &&
-                      membership.paymentStatus ==
-                          LotteryGroupPaymentStatus.paid,
-                )
-                .toList();
-
-        final List<LotteryGroupMembership> validPaidMemberships =
-            _computeStableValidMemberships(lockedInPaidMemberships);
-
-        if (validPaidMemberships.isEmpty) {
-          throw StateError('אין קבוצת משלמים תקפה להגשה כרגע.');
-        }
-
-        final DateTime now = DateTime.now();
-        final int effectiveParticipantCount = validPaidMemberships.length;
-        final num effectiveCostPerPaidParticipant =
-            group.baseTicketCost / effectiveParticipantCount;
-        submittedParticipantUserIds = validPaidMemberships
-            .map((membership) => membership.userId)
-            .toList();
-        creatorDisplayName = _creatorDisplayNameFromMemberships(
-          memberships: membershipDocs
-              .map(
-                (doc) => LotteryGroupMembership.fromFirestore(
-                  doc.data() ?? <String, dynamic>{},
-                ),
-              )
-              .toList(),
-          creatorUserId: group.creatorUserId,
-        );
-        final List<Map<String, dynamic>> paidParticipants = validPaidMemberships
-            .map(
-              (membership) => <String, dynamic>{
-                'userId': membership.userId,
-                'displayName': membership.displayName,
-                'minimumParticipantsRequired':
-                    membership.minimumParticipantsRequired,
-                'paymentStatus': membership.paymentStatus.value,
-                'costShare': effectiveCostPerPaidParticipant,
-                'paidAt': membership.paidAt,
-              },
-            )
-            .toList();
-
-        transaction.set(
-          submittedFormRef,
-          <String, dynamic>{
-            'formId': submittedFormId,
-            'groupId': group.groupId,
-            'submissionType': 'group',
-            'creatorUserId': creatorUserId,
-            'creatorDisplayName': creatorDisplayName,
-            'userId': creatorUserId,
-            'groupName': group.groupName,
-            'isEditable': false,
-            'updatedAt': now,
-            'dispatchStatus': dispatchStatusQueuedForPrint,
-            'baseTicketCost': group.baseTicketCost,
-            'effectiveParticipantCount': effectiveParticipantCount,
-            'effectiveCostPerPaidParticipant': effectiveCostPerPaidParticipant,
-            'submittedParticipantUserIds': submittedParticipantUserIds,
-            'paidParticipants': paidParticipants,
-          },
-          SetOptions(merge: true),
-        );
-
-        transaction.set(
-          groupRef,
-          <String, dynamic>{
-            'status': LotteryGroupStatus.submitted.value,
-            'submittedAt': now,
-            'submittedFormId': submittedFormRef.id,
-            'dispatchStatus': dispatchStatusQueuedForPrint,
-            'updatedAt': now,
-            'currentPerParticipantCost': effectiveCostPerPaidParticipant,
-          },
-          SetOptions(merge: true),
-        );
-
-        for (final LotteryGroupMembership membership in validPaidMemberships) {
-          transaction.set(
-            _submittedGroupRef(membership.userId, group.groupId),
-            <String, dynamic>{
-              'groupId': group.groupId,
-              'groupName': group.groupName,
-              'creatorUserId': group.creatorUserId,
-              'creatorName': creatorDisplayName,
-              'groupStatus': LotteryGroupStatus.submitted.value,
-              'dispatchStatus': dispatchStatusQueuedForPrint,
-              'submittedAt': now,
-              'submittedFormId': submittedFormRef.id,
-              'myEffectiveShare': effectiveCostPerPaidParticipant,
-              'updatedAt': now,
-            },
+                .toList(),
+            creatorUserId: group.creatorUserId,
           );
-        }
-      });
-    } catch (error) {
-      await submittedFormRef.delete();
-      rethrow;
+          final List<Map<String, dynamic>> paidParticipants =
+              validPaidMemberships
+                  .map(
+                    (membership) => <String, dynamic>{
+                      'userId': membership.userId,
+                      'displayName': membership.displayName,
+                      'minimumParticipantsRequired':
+                          membership.minimumParticipantsRequired,
+                      'paymentStatus': membership.paymentStatus.value,
+                      'costShare': effectiveCostPerPaidParticipant,
+                      'paidAt': membership.paidAt,
+                    },
+                  )
+                  .toList();
+
+          // Update the original locked form in-place.
+          // 'source: group_snapshot' keeps it out of watchSubmittedForms
+          // (personal submissions list), while still appearing in the operator
+          // console collectionGroup('forms') query (no source filter there).
+          // All server-computed fields are copied from the temp doc so nothing
+          // is lost (lotteryId, salesCloseAt, fingerprint, resultStatus, etc.).
+          transaction.set(
+            sourceFormRef,
+            <String, dynamic>{
+              'formId': sourceFormId,
+              'status': 'submitted',
+              'source': 'group_snapshot',
+              'submittedAt': now,
+              'groupId': group.groupId,
+              'submissionType': 'group',
+              'creatorUserId': creatorUserId,
+              'creatorDisplayName': creatorDisplayName,
+              'userId': creatorUserId,
+              'groupName': group.groupName,
+              'isEditable': false,
+              'updatedAt': now,
+              'dispatchStatus': dispatchStatusQueuedForPrint,
+              'baseTicketCost': group.baseTicketCost,
+              'effectiveParticipantCount': effectiveParticipantCount,
+              'effectiveCostPerPaidParticipant': effectiveCostPerPaidParticipant,
+              'submittedParticipantUserIds': submittedParticipantUserIds,
+              'paidParticipants': paidParticipants,
+              // ── Fields copied from the Cloud Function's temp doc ──────────
+              if (ticketFingerprint != null)
+                'ticketFingerprint': ticketFingerprint,
+              if (ticketFingerprintSource != null)
+                'ticketFingerprintSource': ticketFingerprintSource,
+              if (lotteryId != null) 'lotteryId': lotteryId,
+              if (salesCloseAt != null) 'salesCloseAt': salesCloseAt,
+              if (fingerprintVersion != null)
+                'fingerprintVersion': fingerprintVersion,
+              if (resultStatus != null) 'resultStatus': resultStatus,
+            },
+            SetOptions(merge: true),
+          );
+
+          transaction.set(
+            groupRef,
+            <String, dynamic>{
+              'status': LotteryGroupStatus.submitted.value,
+              'submittedAt': now,
+              'submittedFormId': sourceFormId,
+              'dispatchStatus': dispatchStatusQueuedForPrint,
+              'updatedAt': now,
+              'currentPerParticipantCost': effectiveCostPerPaidParticipant,
+            },
+            SetOptions(merge: true),
+          );
+
+          for (final LotteryGroupMembership membership
+              in validPaidMemberships) {
+            transaction.set(
+              _submittedGroupRef(membership.userId, group.groupId),
+              <String, dynamic>{
+                'groupId': group.groupId,
+                'groupName': group.groupName,
+                'creatorUserId': group.creatorUserId,
+                'creatorName': creatorDisplayName,
+                'groupStatus': LotteryGroupStatus.submitted.value,
+                'dispatchStatus': dispatchStatusQueuedForPrint,
+                'submittedAt': now,
+                'submittedFormId': sourceFormId,
+                'myEffectiveShare': effectiveCostPerPaidParticipant,
+                'updatedAt': now,
+              },
+            );
+          }
+        });
+      } catch (error) {
+        // Transaction failed — clean up the temp fingerprint doc.
+        await tempFormRef.delete();
+        rethrow;
+      }
+
+      // Transaction succeeded — remove the temp doc (all fields already merged).
+      await tempFormRef.delete();
+      print(
+        '[SubmitGroup] updated existing formId=$sourceFormId '
+        'groupId=$groupId '
+        'lotteryId=$lotteryId '
+        'salesCloseAt=$salesCloseAt '
+        'hasFingerprint=${ticketFingerprint != null} '
+        'fingerprintVersion=$fingerprintVersion',
+      );
+
+      await _generatePrintReadyArtifactAndSync(
+        creatorUserId: creatorUserId,
+        formId: sourceFormId,
+        groupId: groupId,
+        participantUserIds: submittedParticipantUserIds,
+        creatorDisplayName: creatorDisplayName,
+      );
+
+      return sourceFormId;
     }
 
-    await _generatePrintReadyArtifactAndSync(
-      creatorUserId: creatorUserId,
-      formId: submittedFormId,
-      groupId: groupId,
-      participantUserIds: submittedParticipantUserIds,
-      creatorDisplayName: creatorDisplayName,
-    );
+    // ── LEGACY PATH (_useCreateNewSnapshot = true) ─────────────────────────
+    // Kept for reference. DO NOT enable without careful data migration.
+    // The callable already created tempFormRef as the "submitted" form doc.
+    //
+    // final DocumentReference<Map<String, dynamic>> submittedFormRef = tempFormRef;
+    // final String submittedFormId = tempFormId;
+    // List<String> submittedParticipantUserIds = <String>[];
+    // String creatorDisplayName = creatorUserId;
+    //
+    // try {
+    //   await _firestore.runTransaction((transaction) async {
+    //     final DocumentReference<Map<String, dynamic>> groupRef =
+    //         _groupRef(groupId);
+    //     final DocumentSnapshot<Map<String, dynamic>> groupSnapshot =
+    //         await transaction.get(groupRef);
+    //     final DocumentSnapshot<Map<String, dynamic>> submittedFormSnapshot =
+    //         await transaction.get(submittedFormRef);
+    //
+    //     final Map<String, dynamic>? groupData = groupSnapshot.data();
+    //     if (!groupSnapshot.exists || groupData == null) {
+    //       throw StateError('הקבוצה לא נמצאה.');
+    //     }
+    //     if (!submittedFormSnapshot.exists) {
+    //       throw StateError('הטופס שנוצר עבור ההגשה לא נמצא.');
+    //     }
+    //
+    //     final LotteryGroup group =
+    //         LotteryGroup.fromFirestore(groupSnapshot.id, groupData);
+    //     if (group.creatorUserId != creatorUserId) {
+    //       throw StateError('רק יוצר הקבוצה יכול להגיש את הטופס.');
+    //     }
+    //     if (group.status == LotteryGroupStatus.submitted) {
+    //       throw StateError('הקבוצה כבר הוגשה.');
+    //     }
+    //
+    //     ... [membership, cost, participant computation — identical to new path]
+    //
+    //     transaction.set(
+    //       submittedFormRef,
+    //       <String, dynamic>{
+    //         'formId': submittedFormId,
+    //         'groupId': group.groupId,
+    //         'submissionType': 'group',
+    //         'creatorUserId': creatorUserId,
+    //         'creatorDisplayName': creatorDisplayName,
+    //         'userId': creatorUserId,
+    //         'groupName': group.groupName,
+    //         'isEditable': false,
+    //         'updatedAt': now,
+    //         'dispatchStatus': dispatchStatusQueuedForPrint,
+    //         'baseTicketCost': group.baseTicketCost,
+    //         'effectiveParticipantCount': effectiveParticipantCount,
+    //         'effectiveCostPerPaidParticipant': effectiveCostPerPaidParticipant,
+    //         'submittedParticipantUserIds': submittedParticipantUserIds,
+    //         'paidParticipants': paidParticipants,
+    //         // Note: no ticketFingerprint/ticketFingerprintSource here —
+    //         // those were already written by the callable on the same doc.
+    //       },
+    //       SetOptions(merge: true),
+    //     );
+    //
+    //     transaction.set(
+    //       groupRef,
+    //       <String, dynamic>{
+    //         'status': LotteryGroupStatus.submitted.value,
+    //         'submittedAt': now,
+    //         'submittedFormId': submittedFormRef.id, // ← new doc, not sourceFormId
+    //         'dispatchStatus': dispatchStatusQueuedForPrint,
+    //         'updatedAt': now,
+    //         'currentPerParticipantCost': effectiveCostPerPaidParticipant,
+    //       },
+    //       SetOptions(merge: true),
+    //     );
+    //
+    //     for (final LotteryGroupMembership membership in validPaidMemberships) {
+    //       transaction.set(
+    //         _submittedGroupRef(membership.userId, group.groupId),
+    //         <String, dynamic>{
+    //           ...
+    //           'submittedFormId': submittedFormRef.id,
+    //           ...
+    //         },
+    //       );
+    //     }
+    //   });
+    // } catch (error) {
+    //   await submittedFormRef.delete();
+    //   rethrow;
+    // }
+    //
+    // await _generatePrintReadyArtifactAndSync(
+    //   creatorUserId: creatorUserId,
+    //   formId: submittedFormId,
+    //   groupId: groupId,
+    //   participantUserIds: submittedParticipantUserIds,
+    //   creatorDisplayName: creatorDisplayName,
+    // );
+    //
+    // return submittedFormId;
 
-    return submittedFormId;
+    throw UnimplementedError(
+      'Legacy path (_useCreateNewSnapshot = true) is disabled.',
+    );
   }
 
   Future<void> updateSubmittedGroupDispatchStatus({
