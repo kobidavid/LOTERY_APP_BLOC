@@ -42,6 +42,9 @@ class LotteryFormPage extends StatefulWidget {
 
 class _LotteryFormPageState extends State<LotteryFormPage> {
   late final LotteryGroupRepository _groupRepository;
+  bool _isGroupMode = false;
+  bool _isDoubleMode = false;
+  int _selectedTableCount = 14;
 
   @override
   void initState() {
@@ -179,6 +182,22 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     });
   }
 
+  void _handleTableCountChanged(int? count) {
+    if (count == null) {
+      return;
+    }
+    setState(() => _selectedTableCount = count);
+    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    final int currentIndex = cubit.state.activeRowIndex;
+    if (currentIndex >= count) {
+      cubit.selectRow(count - 1);
+    }
+  }
+
+  String _nextDrawText() {
+    return 'הגרלה הקרובה: יום שלישי';
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<LotteryFormCubit, LotteryFormState>(
@@ -208,6 +227,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       },
       builder: (context, state) {
         final bool canCreateGroup = state.form.isComplete && !state.isBusy;
+        final List<LotteryTable> visibleTables =
+            state.form.tables.take(_selectedTableCount).toList();
         return LayoutBuilder(
           builder: (context, constraints) {
             final double keyboardHeight =
@@ -219,11 +240,40 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                   padding: EdgeInsets.fromLTRB(12, 12, 12, keyboardHeight + 14),
                   child: Column(
                     children: [
-                      _ActionBar(
+                      _CompactTopInfoRow(
+                        nextDrawText: _nextDrawText(),
+                        lottoPrizeText:
+                            _isDoubleMode ? '13 מיליון' : '13 מיליון',
+                        doublePrizeText:
+                            _isDoubleMode ? '26 מיליון' : '26 מיליון',
+                      ),
+                      const SizedBox(height: 8),
+                      _CompactControlRow(
+                        isGroupMode: _isGroupMode,
+                        isDoubleMode: _isDoubleMode,
+                        selectedTableCount: _selectedTableCount,
                         isBusy: state.isBusy,
-                        canCreateGroup: canCreateGroup,
+                        onModeChanged: (value) =>
+                            setState(() => _isGroupMode = value),
+                        onPlayTypeChanged: (value) =>
+                            setState(() => _isDoubleMode = value),
+                        onTableCountChanged: _handleTableCountChanged,
+                      ),
+                      const SizedBox(height: 8),
+                      _PrimarySubmitButton(
+                        isBusy: state.isBusy,
+                        onSelected: (action) {
+                          if (action == _PersistAction.save) {
+                            context.read<LotteryFormCubit>().saveForm();
+                          } else {
+                            _startPersonalSubmitFlow();
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _SecondaryActionRow(
+                        isBusy: state.isBusy,
                         onClearPressed: _confirmClearForm,
-                        onGroupAction: _handleGroupAction,
                         onLottomatAction: (action) {
                           if (action == _LottomatAction.completeRemaining) {
                             context
@@ -235,46 +285,28 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                 .generateFullRandomForm();
                           }
                         },
-                        onPersistAction: (action) {
-                          if (action == _PersistAction.save) {
-                            context.read<LotteryFormCubit>().saveForm();
-                          } else {
-                            _startPersonalSubmitFlow();
-                          }
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          alignment: WrapAlignment.end,
-                          children: [
-                            OutlinedButton(
-                              onPressed:
-                                  state.isBusy ? null : _openMyActiveGroups,
-                              child: const Text('My Active Groups'),
-                            ),
-                            OutlinedButton(
-                              onPressed: state.isBusy
-                                  ? null
-                                  : () => _openPrintDebugPreview(state),
-                              child: const Text('Open Print Debug Preview'),
-                            ),
-                          ],
-                        ),
                       ),
                       const SizedBox(height: 10),
+                      _TablesHeader(
+                        selectedTableCount: _selectedTableCount,
+                        canCreateGroup: canCreateGroup,
+                        onGroupAction: _handleGroupAction,
+                        onDebugPreview: state.isBusy
+                            ? null
+                            : () => _openPrintDebugPreview(state),
+                        onOpenMyActiveGroups:
+                            state.isBusy ? null : _openMyActiveGroups,
+                      ),
+                      const SizedBox(height: 8),
                       Expanded(
                         child: ListView.separated(
                           padding: EdgeInsets.zero,
-                          itemCount: state.form.tables.length,
+                          itemCount: visibleTables.length,
                           separatorBuilder: (_, __) =>
                               const SizedBox(height: 8),
                           itemBuilder: (context, index) {
                             return _LotteryRowCard(
-                              table: state.form.tables[index],
+                              table: visibleTables[index],
                               isActive: index == state.activeRowIndex,
                               isEnabled: index <= state.maxUnlockedRowIndex,
                               onTap: () => context
@@ -294,6 +326,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                   child: _LotteryKeyboardSheet(
                     height: keyboardHeight,
                     state: state,
+                    visibleTableCount: _selectedTableCount,
                   ),
                 ),
               ],
@@ -399,22 +432,279 @@ class _TemporaryPaymentPage extends StatelessWidget {
   }
 }
 
-class _ActionBar extends StatelessWidget {
-  const _ActionBar({
+class _CompactTopInfoRow extends StatelessWidget {
+  const _CompactTopInfoRow({
+    required this.nextDrawText,
+    required this.lottoPrizeText,
+    required this.doublePrizeText,
+  });
+
+  final String nextDrawText;
+  final String lottoPrizeText;
+  final String doublePrizeText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            height: 50,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            alignment: Alignment.centerRight,
+            child: Text(
+              nextDrawText,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        _PrizePill(label: 'לוטו', value: lottoPrizeText),
+        const SizedBox(width: 8),
+        _PrizePill(label: 'דאבל', value: doublePrizeText),
+        const SizedBox(width: 8),
+        Container(
+          width: 42,
+          height: 50,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: IconButton(
+            onPressed: () {},
+            icon: const Icon(Icons.notifications_none_rounded),
+            tooltip: 'התראות',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PrizePill extends StatelessWidget {
+  const _PrizePill({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 88,
+      height: 50,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactControlRow extends StatelessWidget {
+  const _CompactControlRow({
+    required this.isGroupMode,
+    required this.isDoubleMode,
+    required this.selectedTableCount,
     required this.isBusy,
-    required this.canCreateGroup,
-    required this.onClearPressed,
-    required this.onGroupAction,
-    required this.onLottomatAction,
-    required this.onPersistAction,
+    required this.onModeChanged,
+    required this.onPlayTypeChanged,
+    required this.onTableCountChanged,
+  });
+
+  final bool isGroupMode;
+  final bool isDoubleMode;
+  final int selectedTableCount;
+  final bool isBusy;
+  final ValueChanged<bool> onModeChanged;
+  final ValueChanged<bool> onPlayTypeChanged;
+  final ValueChanged<int?> onTableCountChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _CompactFieldShell(
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              selected: <bool>{isGroupMode},
+              onSelectionChanged:
+                  isBusy ? null : (selection) => onModeChanged(selection.first),
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                padding: WidgetStateProperty.all(
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                ),
+              ),
+              segments: const [
+                ButtonSegment<bool>(value: false, label: Text('אישי')),
+                ButtonSegment<bool>(value: true, label: Text('קבוצתי')),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _CompactFieldShell(
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              selected: <bool>{isDoubleMode},
+              onSelectionChanged: isBusy
+                  ? null
+                  : (selection) => onPlayTypeChanged(selection.first),
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                padding: WidgetStateProperty.all(
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                ),
+              ),
+              segments: const [
+                ButtonSegment<bool>(value: false, label: Text('רגיל')),
+                ButtonSegment<bool>(value: true, label: Text('דאבל')),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _CompactFieldShell(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                isExpanded: true,
+                value: selectedTableCount,
+                borderRadius: BorderRadius.circular(16),
+                alignment: AlignmentDirectional.centerEnd,
+                items: const [2, 4, 6, 8, 10, 12, 14]
+                    .map(
+                      (count) => DropdownMenuItem<int>(
+                        value: count,
+                        alignment: Alignment.centerRight,
+                        child: Text('$count טבלאות'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: isBusy ? null : onTableCountChanged,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CompactFieldShell extends StatelessWidget {
+  const _CompactFieldShell({
+    required this.child,
+  });
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+}
+
+class _PrimarySubmitButton extends StatelessWidget {
+  const _PrimarySubmitButton({
+    required this.isBusy,
+    required this.onSelected,
   });
 
   final bool isBusy;
-  final bool canCreateGroup;
+  final ValueChanged<_PersistAction> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_PersistAction>(
+      enabled: !isBusy,
+      onSelected: onSelected,
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: _PersistAction.submit,
+          child: Text('שליחת הטופס'),
+        ),
+        PopupMenuItem(
+          value: _PersistAction.save,
+          child: Text('שמירת הטופס'),
+        ),
+      ],
+      child: Container(
+        height: 52,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: isBusy
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.55)
+              : Theme.of(context).colorScheme.primary,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          'שליחה',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                color: Theme.of(context).colorScheme.onPrimary,
+                fontWeight: FontWeight.w900,
+              ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SecondaryActionRow extends StatelessWidget {
+  const _SecondaryActionRow({
+    required this.isBusy,
+    required this.onClearPressed,
+    required this.onLottomatAction,
+  });
+
+  final bool isBusy;
   final VoidCallback onClearPressed;
-  final ValueChanged<_GroupAction> onGroupAction;
   final ValueChanged<_LottomatAction> onLottomatAction;
-  final ValueChanged<_PersistAction> onPersistAction;
 
   @override
   Widget build(BuildContext context) {
@@ -422,7 +712,7 @@ class _ActionBar extends StatelessWidget {
       children: [
         Expanded(
           child: _ActionChip(
-            label: 'ניקוי טבלה',
+            label: 'נקה טופס',
             icon: Icons.delete_outline,
             onTap: isBusy ? null : onClearPressed,
           ),
@@ -448,43 +738,59 @@ class _ActionBar extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: PopupMenuButton<_GroupAction>(
-            enabled: canCreateGroup,
-            onSelected: onGroupAction,
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _GroupAction.create,
-                child: Text('יצירת קבוצה מטופס זה'),
-              ),
-            ],
-            child: const _ActionChip(
-              label: 'קבוצה',
-              icon: Icons.group_outlined,
+      ],
+    );
+  }
+}
+
+class _TablesHeader extends StatelessWidget {
+  const _TablesHeader({
+    required this.selectedTableCount,
+    required this.canCreateGroup,
+    required this.onGroupAction,
+    required this.onDebugPreview,
+    required this.onOpenMyActiveGroups,
+  });
+
+  final int selectedTableCount;
+  final bool canCreateGroup;
+  final ValueChanged<_GroupAction> onGroupAction;
+  final VoidCallback? onDebugPreview;
+  final VoidCallback? onOpenMyActiveGroups;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        PopupMenuButton<_GroupAction>(
+          enabled: canCreateGroup,
+          onSelected: onGroupAction,
+          itemBuilder: (context) => const [
+            PopupMenuItem(
+              value: _GroupAction.create,
+              child: Text('יצירת קבוצה מטופס זה'),
             ),
-          ),
+          ],
+          icon: const Icon(Icons.group_outlined),
+          tooltip: 'קבוצה',
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: PopupMenuButton<_PersistAction>(
-            enabled: !isBusy,
-            onSelected: onPersistAction,
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _PersistAction.submit,
-                child: Text('שליחת הטופס'),
+        IconButton(
+          onPressed: onOpenMyActiveGroups,
+          icon: const Icon(Icons.groups_2_outlined),
+          tooltip: 'My Active Groups',
+        ),
+        IconButton(
+          onPressed: onDebugPreview,
+          icon: const Icon(Icons.print_outlined),
+          tooltip: 'Open Print Debug Preview',
+        ),
+        const Spacer(),
+        Text(
+          'טבלאות נבחרות: $selectedTableCount',
+          textAlign: TextAlign.right,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w900,
               ),
-              PopupMenuItem(
-                value: _PersistAction.save,
-                child: Text('שמירת הטופס'),
-              ),
-            ],
-            child: const _ActionChip(
-              label: 'שליחה/שמירה',
-              icon: Icons.send_rounded,
-            ),
-          ),
         ),
       ],
     );
@@ -610,10 +916,12 @@ class _LotteryKeyboardSheet extends StatefulWidget {
   const _LotteryKeyboardSheet({
     required this.height,
     required this.state,
+    required this.visibleTableCount,
   });
 
   final double height;
   final LotteryFormState state;
+  final int visibleTableCount;
 
   @override
   State<_LotteryKeyboardSheet> createState() => _LotteryKeyboardSheetState();
@@ -667,7 +975,7 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
           child: PageView.builder(
             controller: _pageController,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: widget.state.form.tables.length,
+            itemCount: widget.visibleTableCount,
             onPageChanged: (index) {
               if (_ignoreNextPageChange) {
                 _ignoreNextPageChange = false;
