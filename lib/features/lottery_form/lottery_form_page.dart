@@ -5,24 +5,13 @@ import '../../models/lottery_group.dart';
 import '../../repositories/lottery_group_repository.dart';
 import '../../services/group_invite_link_service.dart';
 import '../../models/lottery_table.dart';
-import '../../views/home/printing/lottery_print_preview_page.dart';
 import 'group_details_page.dart';
-import 'my_active_groups_page.dart';
 import 'lottery_form_cubit.dart';
 import 'lottery_form_state.dart';
 
 enum _LottomatAction {
   completeRemaining,
   fullRandom,
-}
-
-enum _PersistAction {
-  submit,
-  save,
-}
-
-enum _GroupAction {
-  create,
 }
 
 class LotteryFormPage extends StatefulWidget {
@@ -32,7 +21,7 @@ class LotteryFormPage extends StatefulWidget {
     required this.onOpenMyForms,
   });
 
-  static const double rowLabelWidth = 112;
+  static const double rowLabelWidth = 98;
   final GroupInviteLinkService inviteLinkService;
   final VoidCallback onOpenMyForms;
 
@@ -136,52 +125,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     }
   }
 
-  void _openPrintDebugPreview(LotteryFormState state) {
-    final List<List<int?>> rows = state.form.tables.map((table) {
-      final List<int?> row = List<int?>.filled(7, null);
-      for (int index = 0;
-          index < table.regularNumbers.length && index < 6;
-          index++) {
-        row[index] = table.regularNumbers[index];
-      }
-      row[6] = table.strongNumber;
-      return row;
-    }).toList();
-
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => LotteryPrintPreviewPage(rows: rows),
-      ),
-    );
-  }
-
-  void _openMyActiveGroups() {
-    final String currentUserId =
-        context.read<LotteryFormCubit>().state.form.userId;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MyActiveGroupsPage(
-          userId: currentUserId,
-          repository: _groupRepository,
-          inviteLinkService: widget.inviteLinkService,
-        ),
-      ),
-    );
-  }
-
-  void _handleGroupAction(_GroupAction action) {
-    if (action != _GroupAction.create) {
-      return;
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      _promptCreateGroup();
-    });
-  }
-
   void _handleTableCountChanged(int? count) {
     if (count == null) {
       return;
@@ -196,6 +139,38 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   String _nextDrawText() {
     return 'הגרלה הקרובה: יום שלישי';
+  }
+
+  bool _areSelectedTablesComplete(List<LotteryTable> visibleTables) {
+    if (visibleTables.length != _selectedTableCount || visibleTables.isEmpty) {
+      return false;
+    }
+    return visibleTables.every((table) => table.isComplete);
+  }
+
+  Future<void> _handlePrimarySubmit() async {
+    final List<LotteryTable> visibleTables = context
+        .read<LotteryFormCubit>()
+        .state
+        .form
+        .tables
+        .take(_selectedTableCount)
+        .toList();
+    if (!_areSelectedTablesComplete(visibleTables)) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('יש למלא את כל הטבלאות לפני שליחה'),
+          ),
+        );
+      return;
+    }
+    if (_isGroupMode) {
+      await _promptCreateGroup();
+      return;
+    }
+    await _startPersonalSubmitFlow();
   }
 
   @override
@@ -226,9 +201,10 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         context.read<LotteryFormCubit>().clearMessages();
       },
       builder: (context, state) {
-        final bool canCreateGroup = state.form.isComplete && !state.isBusy;
         final List<LotteryTable> visibleTables =
             state.form.tables.take(_selectedTableCount).toList();
+        final bool canPrimarySubmit =
+            !state.isBusy && _areSelectedTablesComplete(visibleTables);
         return LayoutBuilder(
           builder: (context, constraints) {
             final double keyboardHeight =
@@ -237,15 +213,13 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             return Stack(
               children: [
                 Padding(
-                  padding: EdgeInsets.fromLTRB(12, 12, 12, keyboardHeight + 14),
+                  padding: EdgeInsets.fromLTRB(10, 10, 10, keyboardHeight + 12),
                   child: Column(
                     children: [
                       _CompactTopInfoRow(
                         nextDrawText: _nextDrawText(),
-                        lottoPrizeText:
-                            _isDoubleMode ? '13 מיליון' : '13 מיליון',
-                        doublePrizeText:
-                            _isDoubleMode ? '26 מיליון' : '26 מיליון',
+                        lottoPrizeText: '13 מיליון',
+                        doublePrizeText: '26 מיליון',
                       ),
                       const SizedBox(height: 8),
                       _CompactControlRow(
@@ -261,14 +235,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                       ),
                       const SizedBox(height: 8),
                       _PrimarySubmitButton(
-                        isBusy: state.isBusy,
-                        onSelected: (action) {
-                          if (action == _PersistAction.save) {
-                            context.read<LotteryFormCubit>().saveForm();
-                          } else {
-                            _startPersonalSubmitFlow();
-                          }
-                        },
+                        isEnabled: canPrimarySubmit,
+                        onPressed: _handlePrimarySubmit,
                       ),
                       const SizedBox(height: 8),
                       _SecondaryActionRow(
@@ -287,17 +255,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                         },
                       ),
                       const SizedBox(height: 10),
-                      _TablesHeader(
-                        selectedTableCount: _selectedTableCount,
-                        canCreateGroup: canCreateGroup,
-                        onGroupAction: _handleGroupAction,
-                        onDebugPreview: state.isBusy
-                            ? null
-                            : () => _openPrintDebugPreview(state),
-                        onOpenMyActiveGroups:
-                            state.isBusy ? null : _openMyActiveGroups,
-                      ),
-                      const SizedBox(height: 8),
                       Expanded(
                         child: ListView.separated(
                           padding: EdgeInsets.zero,
@@ -447,89 +404,25 @@ class _CompactTopInfoRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
+        IconButton(
+          onPressed: () {},
+          icon: const Icon(Icons.notifications_none_rounded),
+          tooltip: 'התראות',
+          visualDensity: VisualDensity.compact,
+        ),
+        const SizedBox(width: 6),
         Expanded(
-          child: Container(
-            height: 50,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            alignment: Alignment.centerRight,
-            child: Text(
-              nextDrawText,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        _PrizePill(label: 'לוטו', value: lottoPrizeText),
-        const SizedBox(width: 8),
-        _PrizePill(label: 'דאבל', value: doublePrizeText),
-        const SizedBox(width: 8),
-        Container(
-          width: 42,
-          height: 50,
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: IconButton(
-            onPressed: () {},
-            icon: const Icon(Icons.notifications_none_rounded),
-            tooltip: 'התראות',
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _PrizePill extends StatelessWidget {
-  const _PrizePill({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 88,
-      height: 50,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
+          child: Text(
+            '$nextDrawText | 21:00 | לוטו $lottoPrizeText | דאבל $doublePrizeText',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            textAlign: TextAlign.right,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -555,72 +448,141 @@ class _CompactControlRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Row(
+        children: [
+          Expanded(
+            child: _CompactFieldShell(
+              child: _TwoOptionToggle(
+                isBusy: isBusy,
+                leftLabel: 'אישי',
+                rightLabel: 'קבוצתי',
+                selectedRight: isGroupMode,
+                onChanged: onModeChanged,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _CompactFieldShell(
+              child: _TwoOptionToggle(
+                isBusy: isBusy,
+                leftLabel: 'רגיל',
+                rightLabel: 'דאבל',
+                selectedRight: isDoubleMode,
+                onChanged: onPlayTypeChanged,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _CompactFieldShell(
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<int>(
+                  isExpanded: true,
+                  value: selectedTableCount,
+                  borderRadius: BorderRadius.circular(16),
+                  alignment: AlignmentDirectional.centerEnd,
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                  items: const [2, 4, 6, 8, 10, 12, 14]
+                      .map(
+                        (count) => DropdownMenuItem<int>(
+                          value: count,
+                          alignment: Alignment.centerRight,
+                          child: Text('$count טבלאות'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: isBusy ? null : onTableCountChanged,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TwoOptionToggle extends StatelessWidget {
+  const _TwoOptionToggle({
+    required this.isBusy,
+    required this.leftLabel,
+    required this.rightLabel,
+    required this.selectedRight,
+    required this.onChanged,
+  });
+
+  final bool isBusy;
+  final String leftLabel;
+  final String rightLabel;
+  final bool selectedRight;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color selectedColor = Theme.of(context).colorScheme.primary;
+    final Color selectedText = Theme.of(context).colorScheme.onPrimary;
+    final Color unselectedColor = Colors.transparent;
+    final Color unselectedText = Theme.of(context).colorScheme.onSurface;
+
+    Widget option({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      return Expanded(
+        child: GestureDetector(
+          onTap: isBusy ? null : onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? selectedColor : unselectedColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected
+                    ? selectedColor
+                    : Theme.of(context).dividerColor.withValues(alpha: 0.5),
+              ),
+              boxShadow: selected
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x26000000),
+                        blurRadius: 8,
+                        offset: Offset(0, 3),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: selected ? selectedText : unselectedText,
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Row(
       children: [
-        Expanded(
-          child: _CompactFieldShell(
-            child: SegmentedButton<bool>(
-              showSelectedIcon: false,
-              selected: <bool>{isGroupMode},
-              onSelectionChanged:
-                  isBusy ? null : (selection) => onModeChanged(selection.first),
-              style: ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                padding: WidgetStateProperty.all(
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                ),
-              ),
-              segments: const [
-                ButtonSegment<bool>(value: false, label: Text('אישי')),
-                ButtonSegment<bool>(value: true, label: Text('קבוצתי')),
-              ],
-            ),
-          ),
+        option(
+          label: leftLabel,
+          selected: !selectedRight,
+          onTap: () => onChanged(false),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _CompactFieldShell(
-            child: SegmentedButton<bool>(
-              showSelectedIcon: false,
-              selected: <bool>{isDoubleMode},
-              onSelectionChanged: isBusy
-                  ? null
-                  : (selection) => onPlayTypeChanged(selection.first),
-              style: ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                padding: WidgetStateProperty.all(
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                ),
-              ),
-              segments: const [
-                ButtonSegment<bool>(value: false, label: Text('רגיל')),
-                ButtonSegment<bool>(value: true, label: Text('דאבל')),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _CompactFieldShell(
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                isExpanded: true,
-                value: selectedTableCount,
-                borderRadius: BorderRadius.circular(16),
-                alignment: AlignmentDirectional.centerEnd,
-                items: const [2, 4, 6, 8, 10, 12, 14]
-                    .map(
-                      (count) => DropdownMenuItem<int>(
-                        value: count,
-                        alignment: Alignment.centerRight,
-                        child: Text('$count טבלאות'),
-                      ),
-                    )
-                    .toList(),
-                onChanged: isBusy ? null : onTableCountChanged,
-              ),
-            ),
-          ),
+        const SizedBox(width: 6),
+        option(
+          label: rightLabel,
+          selected: selectedRight,
+          onTap: () => onChanged(true),
         ),
       ],
     );
@@ -651,44 +613,43 @@ class _CompactFieldShell extends StatelessWidget {
 
 class _PrimarySubmitButton extends StatelessWidget {
   const _PrimarySubmitButton({
-    required this.isBusy,
-    required this.onSelected,
+    required this.isEnabled,
+    required this.onPressed,
   });
 
-  final bool isBusy;
-  final ValueChanged<_PersistAction> onSelected;
+  final bool isEnabled;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<_PersistAction>(
-      enabled: !isBusy,
-      onSelected: onSelected,
-      itemBuilder: (context) => const [
-        PopupMenuItem(
-          value: _PersistAction.submit,
-          child: Text('שליחת הטופס'),
-        ),
-        PopupMenuItem(
-          value: _PersistAction.save,
-          child: Text('שמירת הטופס'),
-        ),
-      ],
-      child: Container(
-        height: 52,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: isBusy
-              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.55)
-              : Theme.of(context).colorScheme.primary,
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
           borderRadius: BorderRadius.circular(18),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          'שליחה',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onPrimary,
-                fontWeight: FontWeight.w900,
+          child: Ink(
+            height: 52,
+            decoration: BoxDecoration(
+              color: isEnabled
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Center(
+              child: Text(
+                'שליחה',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.onPrimary,
+                      fontWeight: FontWeight.w900,
+                    ),
               ),
+            ),
+          ),
         ),
       ),
     );
@@ -737,60 +698,6 @@ class _SecondaryActionRow extends StatelessWidget {
               icon: Icons.auto_awesome,
             ),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _TablesHeader extends StatelessWidget {
-  const _TablesHeader({
-    required this.selectedTableCount,
-    required this.canCreateGroup,
-    required this.onGroupAction,
-    required this.onDebugPreview,
-    required this.onOpenMyActiveGroups,
-  });
-
-  final int selectedTableCount;
-  final bool canCreateGroup;
-  final ValueChanged<_GroupAction> onGroupAction;
-  final VoidCallback? onDebugPreview;
-  final VoidCallback? onOpenMyActiveGroups;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        PopupMenuButton<_GroupAction>(
-          enabled: canCreateGroup,
-          onSelected: onGroupAction,
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: _GroupAction.create,
-              child: Text('יצירת קבוצה מטופס זה'),
-            ),
-          ],
-          icon: const Icon(Icons.group_outlined),
-          tooltip: 'קבוצה',
-        ),
-        IconButton(
-          onPressed: onOpenMyActiveGroups,
-          icon: const Icon(Icons.groups_2_outlined),
-          tooltip: 'My Active Groups',
-        ),
-        IconButton(
-          onPressed: onDebugPreview,
-          icon: const Icon(Icons.print_outlined),
-          tooltip: 'Open Print Debug Preview',
-        ),
-        const Spacer(),
-        Text(
-          'טבלאות נבחרות: $selectedTableCount',
-          textAlign: TextAlign.right,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w900,
-              ),
         ),
       ],
     );
@@ -957,7 +864,7 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
       color: Theme.of(context).colorScheme.surface,
       child: Container(
         height: widget.height,
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -1012,145 +919,162 @@ class _LotteryKeyboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const double gap = 4;
+        const double gap = 8;
         const double dividerHeight = 1;
+        const double horizontalInset = 6;
         final double rowHeight =
             (constraints.maxHeight - (gap * 5) - dividerHeight) / 5;
+        final double innerWidth = constraints.maxWidth - (horizontalInset * 2);
+        final double keyboardLabelWidth =
+            (innerWidth * 0.26).clamp(124.0, 158.0);
+        final double fullRowKeySize = (innerWidth - (gap * 9)) / 10;
         final double topKeySize = rowHeight.clamp(
-          30.0,
-          (constraints.maxWidth - rowLabelWidth - (gap * 7)) / 7,
+          32.0,
+          (innerWidth - keyboardLabelWidth - (gap * 7)) / 7,
         );
-        final double regularKeySize = rowHeight.clamp(
-          30.0,
-          (constraints.maxWidth - (gap * 9)) / 10,
-        );
-        final double strongLabelWidth = (regularKeySize * 3) + (gap * 2);
+        final double regularKeySize = rowHeight.clamp(32.0, fullRowKeySize);
+        final double strongKeySize = rowHeight.clamp(32.0, regularKeySize);
+        final double strongTrackWidth = (strongKeySize * 7) + (gap * 6);
+        final double strongLabelWidth = innerWidth - strongTrackWidth;
 
-        return Column(
-          children: [
-            SizedBox(
-              height: rowHeight,
-              child: Row(
-                children: [
-                  _RowLabel(text: 'טבלה ${table.tableIndex}'),
-                  const SizedBox(width: gap),
-                  ...List.generate(
-                    7,
-                    (index) => Padding(
-                      padding: EdgeInsets.only(right: index == 6 ? 0 : gap),
-                      child: _NumberKey(
-                        label: '${index + 1}',
-                        size: topKeySize,
-                        selected: table.regularNumbers.contains(index + 1),
-                        enabled:
-                            isActive && _canUseRegularNumber(table, index + 1),
-                        onPressed: () => context
-                            .read<LotteryFormCubit>()
-                            .toggleRegularNumber(index + 1),
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: horizontalInset),
+          child: Column(
+            children: [
+              SizedBox(
+                height: rowHeight,
+                child: Row(
+                  children: [
+                    _RowLabel(
+                      text: 'טבלה ${table.tableIndex}',
+                      width: keyboardLabelWidth,
+                    ),
+                    const SizedBox(width: gap),
+                    ...List.generate(
+                      7,
+                      (index) => Padding(
+                        padding: EdgeInsets.only(right: index == 6 ? 0 : gap),
+                        child: _NumberKey(
+                          label: '${index + 1}',
+                          size: topKeySize,
+                          selected: table.regularNumbers.contains(index + 1),
+                          enabled: isActive &&
+                              (table.regularNumbers.length < 6 ||
+                                  table.regularNumbers.contains(index + 1)),
+                          onPressed: () => context
+                              .read<LotteryFormCubit>()
+                              .toggleRegularNumber(index + 1),
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: gap),
-            _RegularKeyboardRow(
-              numbers: List<int>.generate(10, (index) => index + 8),
-              rowHeight: rowHeight,
-              keySize: regularKeySize,
-              gap: gap,
-              table: table,
-              isActive: isActive,
-            ),
-            const SizedBox(height: gap),
-            _RegularKeyboardRow(
-              numbers: List<int>.generate(10, (index) => index + 18),
-              rowHeight: rowHeight,
-              keySize: regularKeySize,
-              gap: gap,
-              table: table,
-              isActive: isActive,
-            ),
-            const SizedBox(height: gap),
-            _RegularKeyboardRow(
-              numbers: List<int>.generate(10, (index) => index + 28),
-              rowHeight: rowHeight,
-              keySize: regularKeySize,
-              gap: gap,
-              table: table,
-              isActive: isActive,
-            ),
-            const SizedBox(height: gap),
-            Divider(
-                color: Theme.of(context).dividerColor, height: dividerHeight),
-            const SizedBox(height: gap),
-            SizedBox(
-              height: rowHeight,
-              child: Row(
-                children: [
-                  ...List.generate(
-                    7,
-                    (index) => Padding(
-                      padding: const EdgeInsets.only(right: gap),
-                      child: _NumberKey(
-                        label: '${index + 1}',
-                        size: rowHeight.clamp(30.0, regularKeySize),
-                        selected: table.strongNumber == index + 1,
-                        enabled: isActive && table.regularNumbers.length == 6,
-                        onPressed: () => context
-                            .read<LotteryFormCubit>()
-                            .toggleStrongNumber(index + 1),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Container(
-                        width: strongLabelWidth,
-                        height: rowHeight,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFE94C),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.primary,
+              const SizedBox(height: gap),
+              _ResponsiveKeyboardRow(
+                numbers: List<int>.generate(10, (index) => index + 8),
+                rowHeight: rowHeight,
+                keySize: regularKeySize,
+                gap: gap,
+                table: table,
+                isActive: isActive,
+              ),
+              const SizedBox(height: gap),
+              _ResponsiveKeyboardRow(
+                numbers: List<int>.generate(10, (index) => index + 18),
+                rowHeight: rowHeight,
+                keySize: regularKeySize,
+                gap: gap,
+                table: table,
+                isActive: isActive,
+              ),
+              const SizedBox(height: gap),
+              _ResponsiveKeyboardRow(
+                numbers: List<int>.generate(10, (index) => index + 28),
+                rowHeight: rowHeight,
+                keySize: regularKeySize,
+                gap: gap,
+                table: table,
+                isActive: isActive,
+              ),
+              const SizedBox(height: gap),
+              Divider(
+                color: Theme.of(context).dividerColor,
+                height: dividerHeight,
+              ),
+              const SizedBox(height: gap),
+              SizedBox(
+                height: rowHeight,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: strongTrackWidth,
+                      child: Row(
+                        children: List.generate(
+                          7,
+                          (index) => Padding(
+                            padding: EdgeInsets.only(
+                              right: index == 6 ? 0 : gap,
+                            ),
+                            child: _NumberKey(
+                              label: '${index + 1}',
+                              size: strongKeySize,
+                              selected: table.strongNumber == index + 1,
+                              enabled:
+                                  isActive && table.regularNumbers.length == 6,
+                              onPressed: () => context
+                                  .read<LotteryFormCubit>()
+                                  .toggleStrongNumber(index + 1),
+                            ),
                           ),
                         ),
-                        child: const FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 10),
-                            child: Text(
-                              'המספר החזק',
-                              style: TextStyle(
-                                color: Colors.black,
-                                fontWeight: FontWeight.w900,
-                                fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(width: gap),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Container(
+                          width: strongLabelWidth - gap,
+                          height: rowHeight,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF235),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 10),
+                              child: Text(
+                                'המספר החזק',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16,
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     );
   }
-
-  bool _canUseRegularNumber(LotteryTable table, int number) {
-    return table.regularNumbers.length < 6 ||
-        table.regularNumbers.contains(number);
-  }
 }
 
-class _RegularKeyboardRow extends StatelessWidget {
-  const _RegularKeyboardRow({
+class _ResponsiveKeyboardRow extends StatelessWidget {
+  const _ResponsiveKeyboardRow({
     required this.numbers,
     required this.rowHeight,
     required this.keySize,
@@ -1253,14 +1177,18 @@ class _NumberKey extends StatelessWidget {
 }
 
 class _RowLabel extends StatelessWidget {
-  const _RowLabel({required this.text});
+  const _RowLabel({
+    required this.text,
+    this.width,
+  });
 
   final String text;
+  final double? width;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: LotteryFormPage.rowLabelWidth,
+      width: width ?? LotteryFormPage.rowLabelWidth,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: Colors.black,
