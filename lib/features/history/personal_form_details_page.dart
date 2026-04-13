@@ -98,6 +98,13 @@ class PersonalFormDetailsPage extends StatelessWidget {
                         ),
                       );
                     },
+                    onSecondaryAction: hasReceipt
+                        ? () => _openReceipt(
+                              context: context,
+                              receiptUrl: receiptUrl,
+                            )
+                        : null,
+                    secondaryActionLabel: hasReceipt ? 'צפה בקבלה' : null,
                   ),
                   const SizedBox(height: 12),
                   _InfoCard(
@@ -144,19 +151,7 @@ class PersonalFormDetailsPage extends StatelessWidget {
                         canCopy: form.formId != null,
                       ),
                     ],
-                    footer: hasReceipt
-                        ? Align(
-                            alignment: Alignment.centerRight,
-                            child: OutlinedButton.icon(
-                              onPressed: () => _openReceipt(
-                                context: context,
-                                receiptUrl: receiptUrl,
-                              ),
-                              icon: const Icon(Icons.receipt_long_outlined),
-                              label: const Text('פתח קבלה'),
-                            ),
-                          )
-                        : null,
+                    footer: null,
                   ),
                 ],
               );

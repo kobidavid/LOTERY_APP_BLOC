@@ -11,6 +11,9 @@ class LotteryTicketPreviewCard extends StatelessWidget {
     required this.isFullTicket,
     this.onOpenFullScreen,
     this.actionLabel = 'צפה בטופס',
+    this.onSecondaryAction,
+    this.secondaryActionLabel,
+    this.secondaryActionIcon = Icons.receipt_long_outlined,
   });
 
   final int filledTablesCount;
@@ -18,6 +21,9 @@ class LotteryTicketPreviewCard extends StatelessWidget {
   final bool isFullTicket;
   final VoidCallback? onOpenFullScreen;
   final String actionLabel;
+  final VoidCallback? onSecondaryAction;
+  final String? secondaryActionLabel;
+  final IconData secondaryActionIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +46,15 @@ class LotteryTicketPreviewCard extends StatelessWidget {
                       ),
                 ),
               ),
+              if (onSecondaryAction != null &&
+                  secondaryActionLabel != null) ...[
+                TextButton.icon(
+                  onPressed: onSecondaryAction,
+                  icon: Icon(secondaryActionIcon),
+                  label: Text(secondaryActionLabel!),
+                ),
+                const SizedBox(width: 4),
+              ],
               if (onOpenFullScreen != null)
                 TextButton.icon(
                   onPressed: onOpenFullScreen,

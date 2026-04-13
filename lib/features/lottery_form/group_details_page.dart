@@ -243,16 +243,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     statusLabel: groupStatusLabel,
                   ),
                   const SizedBox(height: 12),
-                  LotteryTicketPreviewCard(
-                    filledTablesCount: group.populatedTableCount,
-                    baseTicketCost: group.baseTicketCost,
-                    isFullTicket: group.isComplete,
-                    actionLabel: group.status == LotteryGroupStatus.submitted &&
-                            (group.printReadyUrl?.isNotEmpty ?? false)
-                        ? 'צפה בקובץ להדפסה'
-                        : 'צפה בטופס',
-                    onOpenFullScreen: () => _openPrimaryTicketView(group),
-                  ),
+                  _buildTicketPreviewCard(group),
                   const SizedBox(height: 12),
                   _GroupOutcomeCard(
                     group: group,
@@ -668,6 +659,69 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       return;
     }
     _openGroupSnapshotPreview(group);
+  }
+
+  Widget _buildTicketPreviewCard(LotteryGroup group) {
+    final String actionLabel =
+        group.status == LotteryGroupStatus.submitted &&
+                (group.printReadyUrl?.isNotEmpty ?? false)
+            ? 'צפה בקובץ להדפסה'
+            : 'צפה בטופס';
+
+    final String? submittedFormId = group.submittedFormId;
+    if (submittedFormId == null || submittedFormId.isEmpty) {
+      return LotteryTicketPreviewCard(
+        filledTablesCount: group.populatedTableCount,
+        baseTicketCost: group.baseTicketCost,
+        isFullTicket: group.isComplete,
+        actionLabel: actionLabel,
+        onOpenFullScreen: () => _openPrimaryTicketView(group),
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(group.creatorUserId)
+          .collection('forms')
+          .doc(submittedFormId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final Map<String, dynamic> rawData =
+            snapshot.data?.data() ?? const <String, dynamic>{};
+        final String? receiptUrl = extractReceiptUrl(rawData);
+        final bool hasReceipt = receiptUrl != null;
+
+        return LotteryTicketPreviewCard(
+          filledTablesCount: group.populatedTableCount,
+          baseTicketCost: group.baseTicketCost,
+          isFullTicket: group.isComplete,
+          actionLabel: actionLabel,
+          onOpenFullScreen: () => _openPrimaryTicketView(group),
+          onSecondaryAction: hasReceipt
+              ? () => _openReceiptUrl(receiptUrl)
+              : null,
+          secondaryActionLabel: hasReceipt ? 'צפה בקבלה' : null,
+        );
+      },
+    );
+  }
+
+  Future<void> _openReceiptUrl(String? receiptUrl) async {
+    if (receiptUrl == null || receiptUrl.isEmpty) {
+      return;
+    }
+
+    final Uri uri = Uri.parse(receiptUrl);
+    final bool launched = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('פתיחת הקבלה נכשלה.')),
+      );
+    }
   }
 
   String _currentUserDisplayName() {
