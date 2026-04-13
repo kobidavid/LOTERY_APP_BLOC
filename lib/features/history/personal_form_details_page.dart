@@ -77,7 +77,6 @@ class PersonalFormDetailsPage extends StatelessWidget {
               );
               final String? receiptUrl = extractReceiptUrl(rawData);
               final bool hasReceipt = receiptUrl != null;
-
               return ListView(
                 padding: const EdgeInsets.all(16),
                 children: [

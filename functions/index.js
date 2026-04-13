@@ -174,6 +174,194 @@ exports.submitLotteryForm = functions.https.onCall(async (data, context) => {
   }
 });
 
+exports.cancelGroupDraft = functions.https.onCall(async (data, context) => {
+  try {
+    const authenticatedUserId = await resolveAuthenticatedUserId(data, context);
+    if (!authenticatedUserId) {
+      throw new functions.https.HttpsError(
+          "unauthenticated",
+          "Authentication is required.",
+      );
+    }
+
+    const groupId = typeof data?.groupId === "string" ? data.groupId.trim() : "";
+    if (!groupId) {
+      throw new functions.https.HttpsError(
+          "invalid-argument",
+          "groupId is required.",
+      );
+    }
+
+    const groupRef = firestore.collection("lottery_groups").doc(groupId);
+    const membershipsQuery = groupRef.collection("memberships");
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    await firestore.runTransaction(async (transaction) => {
+      const groupSnapshot = await transaction.get(groupRef);
+      if (!groupSnapshot.exists) {
+        throw new functions.https.HttpsError(
+            "not-found",
+            "הקבוצה לא נמצאה.",
+        );
+      }
+
+      const groupData = groupSnapshot.data() || {};
+      const creatorUserId = asTrimmedString(groupData.creatorUserId);
+      if (creatorUserId !== authenticatedUserId) {
+        throw new functions.https.HttpsError(
+            "permission-denied",
+            "רק יוצר הקבוצה יכול לבטל את הטופס הקבוצתי.",
+        );
+      }
+
+      const groupStatus = asTrimmedString(groupData.status);
+      if (groupStatus === "submitted") {
+        throw new functions.https.HttpsError(
+            "failed-precondition",
+            "לא ניתן לבטל קבוצה שכבר נשלחה.",
+        );
+      }
+      if (groupStatus === "cancelled") {
+        return;
+      }
+
+      const membershipsSnapshot = await transaction.get(membershipsQuery);
+      const memberships = membershipsSnapshot.docs.map((doc) => ({
+        userId: doc.id,
+        ...doc.data(),
+      }));
+      const cancelledByDisplayName = creatorDisplayNameFromMemberships(
+          memberships,
+          authenticatedUserId,
+      );
+      const currentPerParticipantCost = asPositiveNumber(
+          groupData.currentPerParticipantCost,
+      );
+      const sourceFormId = asTrimmedString(groupData.sourceFormId);
+      const groupName = asTrimmedString(groupData.groupName, groupId);
+
+      const cancelledSummaryUserIds = new Set([creatorUserId]);
+      let totalRefundedAmount = 0;
+
+      for (const membership of memberships) {
+        const refundAmount = refundAmountForMembership(
+            membership,
+            currentPerParticipantCost,
+        );
+        if (refundAmount <= 0) {
+          continue;
+        }
+
+        cancelledSummaryUserIds.add(membership.userId);
+        totalRefundedAmount += refundAmount;
+
+        const userRef = firestore.collection("users").doc(membership.userId);
+        transaction.set(userRef, {
+          balance: admin.firestore.FieldValue.increment(refundAmount),
+        }, {merge: true});
+      }
+
+      if (sourceFormId) {
+        const creatorRefundAmount = refundAmountForUser(
+            memberships,
+            creatorUserId,
+            currentPerParticipantCost,
+        );
+        transaction.set(
+            firestore.collection("users")
+                .doc(creatorUserId)
+                .collection("forms")
+                .doc(sourceFormId),
+            {
+              status: "cancelled",
+              updatedAt: now,
+              cancelledAt: now,
+              cancelledByUserId: authenticatedUserId,
+              cancelledByDisplayName,
+              refundAmount: creatorRefundAmount,
+              isEditable: false,
+            },
+            {merge: true},
+        );
+      }
+
+      transaction.set(groupRef, {
+        status: "cancelled",
+        updatedAt: now,
+        cancelledAt: now,
+        cancelledByUserId: authenticatedUserId,
+        cancelledByDisplayName,
+        totalRefundedAmount,
+      }, {merge: true});
+
+      for (const membership of memberships) {
+        const refundAmount = refundAmountForMembership(
+            membership,
+            currentPerParticipantCost,
+        );
+        transaction.set(
+            groupRef.collection("memberships").doc(membership.userId),
+            {
+              refundAmount,
+              ...(refundAmount > 0 ? {refundedAt: now} : {}),
+            },
+            {merge: true},
+        );
+        transaction.delete(
+            firestore.collection("users")
+                .doc(membership.userId)
+                .collection("active_groups")
+                .doc(groupId),
+        );
+      }
+
+      transaction.delete(
+          firestore.collection("users")
+              .doc(creatorUserId)
+              .collection("active_groups")
+              .doc(groupId),
+      );
+
+      for (const userId of cancelledSummaryUserIds) {
+        transaction.set(
+            firestore.collection("users")
+                .doc(userId)
+                .collection("cancelled_groups")
+                .doc(groupId),
+            {
+              groupId,
+              groupName,
+              creatorUserId,
+              creatorName: cancelledByDisplayName,
+              groupStatus: "cancelled",
+              cancelledAt: now,
+              cancelledByUserId: authenticatedUserId,
+              cancelledByDisplayName,
+              myRefundAmount: refundAmountForUser(
+                  memberships,
+                  userId,
+                  currentPerParticipantCost,
+              ),
+              updatedAt: now,
+            },
+            {merge: true},
+        );
+      }
+    });
+
+    return {success: true, groupId};
+  } catch (error) {
+    console.error("cancelGroupDraft failed", error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError(
+        "internal",
+        "ביטול הטופס הקבוצתי נכשל.",
+    );
+  }
+});
+
 async function resolveAuthenticatedUserId(data, context) {
   if (context.auth && context.auth.uid) {
     console.log("submitLotteryForm authenticated via callable context", context.auth.uid);
@@ -1147,6 +1335,50 @@ function validateSubmitPayload(data) {
       );
     }
   });
+}
+
+function asTrimmedString(value, fallback = "") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function asPositiveNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function refundAmountForMembership(membership, currentPerParticipantCost) {
+  if (asTrimmedString(membership.paymentStatus) !== "paid") {
+    return 0;
+  }
+
+  const directShare = asPositiveNumber(membership.costShare);
+  if (directShare > 0) {
+    return directShare;
+  }
+
+  return asPositiveNumber(currentPerParticipantCost);
+}
+
+function refundAmountForUser(memberships, userId, currentPerParticipantCost) {
+  const membership = memberships.find((entry) => entry.userId === userId);
+  if (!membership) {
+    return 0;
+  }
+  return refundAmountForMembership(membership, currentPerParticipantCost);
+}
+
+function creatorDisplayNameFromMemberships(memberships, creatorUserId) {
+  const creatorMembership = memberships.find((entry) =>
+    entry.userId === creatorUserId &&
+      typeof entry.displayName === "string" &&
+      entry.displayName.trim(),
+  );
+
+  if (creatorMembership && creatorMembership.displayName.trim()) {
+    return creatorMembership.displayName.trim();
+  }
+
+  return creatorUserId;
 }
 
 async function fetchWithRetry(

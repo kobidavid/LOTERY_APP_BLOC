@@ -299,6 +299,21 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     }
   }
 
+  Future<void> cancelSavedForm(LotteryForm form) async {
+    if (form.formId == null) {
+      return;
+    }
+
+    await _formRepository.cancelSavedForm(
+      userId: form.userId,
+      formId: form.formId!,
+    );
+
+    if (state.form.formId == form.formId) {
+      resetForUser(state.form.userId);
+    }
+  }
+
   Future<LotteryGroup?> createGroup(String groupName) async {
     final String trimmedName = groupName.trim();
     if (trimmedName.isEmpty) {

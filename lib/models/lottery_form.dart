@@ -7,6 +7,7 @@ enum LotteryFormStatus {
   draft,
   saved,
   lockedForGroup,
+  cancelled,
   submitted,
 }
 
@@ -31,6 +32,8 @@ extension LotteryFormStatusX on LotteryFormStatus {
         return 'saved';
       case LotteryFormStatus.lockedForGroup:
         return 'locked_for_group';
+      case LotteryFormStatus.cancelled:
+        return 'cancelled';
       case LotteryFormStatus.submitted:
         return 'submitted';
     }
@@ -74,6 +77,10 @@ class LotteryForm extends Equatable {
     required this.updatedAt,
     required this.submittedAt,
     required this.savedAt,
+    required this.cancelledAt,
+    required this.cancelledByUserId,
+    required this.cancelledByDisplayName,
+    required this.refundAmount,
     required this.source,
     required this.version,
     required this.lotteryId,
@@ -106,6 +113,10 @@ class LotteryForm extends Equatable {
   final DateTime? updatedAt;
   final DateTime? submittedAt;
   final DateTime? savedAt;
+  final DateTime? cancelledAt;
+  final String? cancelledByUserId;
+  final String? cancelledByDisplayName;
+  final num refundAmount;
   final String source;
   final int version;
   final int? lotteryId;
@@ -142,6 +153,10 @@ class LotteryForm extends Equatable {
       updatedAt: null,
       submittedAt: null,
       savedAt: null,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      cancelledByDisplayName: null,
+      refundAmount: 0,
       source: 'manual',
       version: 1,
       lotteryId: null,
@@ -184,6 +199,10 @@ class LotteryForm extends Equatable {
       updatedAt: _asDateTime(map['updatedAt']),
       submittedAt: _asDateTime(map['submittedAt']),
       savedAt: _asDateTime(map['savedAt']),
+      cancelledAt: _asDateTime(map['cancelledAt']),
+      cancelledByUserId: map['cancelledByUserId'] as String?,
+      cancelledByDisplayName: map['cancelledByDisplayName'] as String?,
+      refundAmount: (map['refundAmount'] as num?) ?? 0,
       source: map['source'] as String? ?? 'manual',
       version: (map['version'] as num?)?.toInt() ?? 1,
       lotteryId: (map['lotteryId'] as num?)?.toInt(),
@@ -214,6 +233,8 @@ class LotteryForm extends Equatable {
         return LotteryFormStatus.saved;
       case 'submitted':
         return LotteryFormStatus.submitted;
+      case 'cancelled':
+        return LotteryFormStatus.cancelled;
       case 'locked_for_group':
         return LotteryFormStatus.lockedForGroup;
       default:
@@ -265,6 +286,10 @@ class LotteryForm extends Equatable {
     DateTime? updatedAt,
     DateTime? submittedAt,
     DateTime? savedAt,
+    DateTime? cancelledAt,
+    String? cancelledByUserId,
+    String? cancelledByDisplayName,
+    num? refundAmount,
     String? source,
     int? version,
     int? lotteryId,
@@ -289,6 +314,9 @@ class LotteryForm extends Equatable {
     bool clearId = false,
     bool clearSubmittedAt = false,
     bool clearSavedAt = false,
+    bool clearCancelledAt = false,
+    bool clearCancelledByUserId = false,
+    bool clearCancelledByDisplayName = false,
     bool clearLotteryId = false,
     bool clearSalesCloseAt = false,
     bool clearResultStatus = false,
@@ -306,6 +334,14 @@ class LotteryForm extends Equatable {
       updatedAt: updatedAt ?? this.updatedAt,
       submittedAt: clearSubmittedAt ? null : (submittedAt ?? this.submittedAt),
       savedAt: clearSavedAt ? null : (savedAt ?? this.savedAt),
+      cancelledAt: clearCancelledAt ? null : (cancelledAt ?? this.cancelledAt),
+      cancelledByUserId: clearCancelledByUserId
+          ? null
+          : (cancelledByUserId ?? this.cancelledByUserId),
+      cancelledByDisplayName: clearCancelledByDisplayName
+          ? null
+          : (cancelledByDisplayName ?? this.cancelledByDisplayName),
+      refundAmount: refundAmount ?? this.refundAmount,
       source: source ?? this.source,
       version: version ?? this.version,
       lotteryId: clearLotteryId ? null : (lotteryId ?? this.lotteryId),
@@ -348,6 +384,10 @@ class LotteryForm extends Equatable {
         updatedAt,
         submittedAt,
         savedAt,
+        cancelledAt,
+        cancelledByUserId,
+        cancelledByDisplayName,
+        refundAmount,
         source,
         version,
         lotteryId,

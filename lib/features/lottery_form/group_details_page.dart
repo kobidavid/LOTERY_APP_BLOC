@@ -39,6 +39,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _isPaying = false;
   bool _isSubmitting = false;
   bool _isUpdatingDispatch = false;
+  bool _isCancelling = false;
   bool _showDebug = false;
 
   @override
@@ -99,11 +100,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               final LotteryGroupMembership? myMembership =
                   _findMyMembership(memberships);
               _syncEditorFromMembership(myMembership);
-              if (myMembership != null) {
+              if (myMembership != null &&
+                  group.status != LotteryGroupStatus.cancelled) {
+                final LotteryGroupMembership? creatorMembership =
+                    memberships.cast<LotteryGroupMembership?>().firstWhere(
+                          (m) => m?.userId == group.creatorUserId,
+                          orElse: () => null,
+                        );
                 widget.repository.upsertActiveGroupSummary(
                   userId: widget.currentUserId,
                   group: group,
                   membership: myMembership,
+                  creatorName: creatorMembership?.displayName,
                 );
               }
 
@@ -148,6 +156,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   : 'ממתין לתשלומים נוספים כדי לאפשר הגשה';
               final bool currentUserCanSimulatePayment = myMembership != null &&
                   myMembership.lockedIn &&
+                  group.status != LotteryGroupStatus.cancelled &&
                   group.status != LotteryGroupStatus.submitted &&
                   myMembership.paymentStatus ==
                       LotteryGroupPaymentStatus.unpaid;
@@ -163,6 +172,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               final bool canSubmit = isCreator &&
                   !_isSubmitting &&
                   group.status != LotteryGroupStatus.submitted &&
+                  group.status != LotteryGroupStatus.cancelled &&
                   group.status != LotteryGroupStatus.collectingResponses &&
                   validPaidMemberships.isNotEmpty;
               final String creatorDisplayName = _creatorDisplayName(
@@ -195,6 +205,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   dispatchStatus: group.dispatchStatus,
                   printReadyUrl: group.printReadyUrl,
                 );
+              } else if (group.status == LotteryGroupStatus.cancelled) {
+                submissionMessage =
+                    'הטופס הקבוצתי בוטל. רק מי שכבר שילם זוכה חזרה לארנק.';
               } else if (paidParticipantSetIsValid) {
                 submissionMessage =
                     'ניתן כבר לשלוח לפי המשלמים הנוכחיים. אם שולחים עכשיו, כל משלם ישלם $currentCostIfSubmittedNowLabel.';
@@ -208,7 +221,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   group.status == LotteryGroupStatus.collectingResponses;
               final bool showSubmitButton = isCreator &&
                   group.status != LotteryGroupStatus.submitted &&
+                  group.status != LotteryGroupStatus.cancelled &&
                   group.status != LotteryGroupStatus.collectingResponses;
+              final bool showCancelButton = isCreator &&
+                  group.status != LotteryGroupStatus.submitted &&
+                  group.status != LotteryGroupStatus.cancelled;
               final bool showPrintedButton = isCreator &&
                   group.status == LotteryGroupStatus.submitted &&
                   group.dispatchStatus ==
@@ -267,6 +284,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     canSubmit: canSubmit,
                     isSubmitting: _isSubmitting,
                     onSubmit: () => _submitGroup(groupId: group.groupId),
+                    showCancelButton: showCancelButton,
+                    isCancelling: _isCancelling,
+                    onCancel: () => _confirmAndCancelGroup(group),
                     showPrintedButton: showPrintedButton,
                     showSubmittedToStationButton: showSubmittedToStationButton,
                     isUpdatingDispatch: _isUpdatingDispatch,
@@ -529,6 +549,59 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  Future<void> _confirmAndCancelGroup(LotteryGroup group) async {
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('ביטול טופס קבוצתי'),
+            content: const Text(
+              'האם אתה בטוח? רק מי שכבר שילם על הטופס יזוכה בארנק שלו.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('חזרה'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('אשר ביטול'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() => _isCancelling = true);
+    try {
+      await widget.repository.cancelGroupDraft(
+        groupId: group.groupId,
+        cancelledByUserId: widget.currentUserId,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('הטופס הקבוצתי בוטל בהצלחה.')),
+      );
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isCancelling = false);
       }
     }
   }
@@ -907,6 +980,45 @@ class _GroupOutcomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (group.status == LotteryGroupStatus.cancelled) {
+      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('users')
+            .doc(currentUserId)
+            .collection('cancelled_groups')
+            .doc(group.groupId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          final Map<String, dynamic> data =
+              snapshot.data?.data() ?? const <String, dynamic>{};
+          final num myRefundAmount = (data['myRefundAmount'] as num?) ?? 0;
+          return _InfoCard(
+            title: 'פרטי הקבוצה',
+            rows: [
+              _InfoRow(label: 'שם קבוצה', value: group.groupName),
+              _InfoRow(label: 'יוצר הקבוצה', value: creatorDisplayName),
+              _InfoRow(
+                label: 'בוטל על ידי',
+                value: group.cancelledByDisplayName ?? creatorDisplayName,
+              ),
+              _InfoRow(
+                label: 'מועד ביטול',
+                value: formatPresentationDateTime(group.cancelledAt),
+              ),
+              _InfoRow(
+                label: 'סך הזיכויים',
+                value: '${group.totalRefundedAmount} ש״ח',
+              ),
+              _InfoRow(
+                label: 'הזיכוי שלי',
+                value: '$myRefundAmount ש״ח',
+              ),
+            ],
+          );
+        },
+      );
+    }
+
     final String? submittedFormId = group.submittedFormId;
     if (submittedFormId == null || submittedFormId.isEmpty) {
       return _InfoCard(
@@ -1018,6 +1130,9 @@ class _ActionBarCard extends StatelessWidget {
     required this.canSubmit,
     required this.isSubmitting,
     required this.onSubmit,
+    required this.showCancelButton,
+    required this.isCancelling,
+    required this.onCancel,
     required this.showPrintedButton,
     required this.showSubmittedToStationButton,
     required this.isUpdatingDispatch,
@@ -1038,6 +1153,9 @@ class _ActionBarCard extends StatelessWidget {
   final bool canSubmit;
   final bool isSubmitting;
   final VoidCallback onSubmit;
+  final bool showCancelButton;
+  final bool isCancelling;
+  final VoidCallback onCancel;
   final bool showPrintedButton;
   final bool showSubmittedToStationButton;
   final bool isUpdatingDispatch;
@@ -1079,6 +1197,13 @@ class _ActionBarCard extends StatelessWidget {
             label: isSubmitting
                 ? const Text('מגיש טופס...')
                 : const Text('הגש טופס קבוצתי'),
+          ),
+        if (showCancelButton)
+          OutlinedButton.icon(
+            onPressed: isCancelling ? null : onCancel,
+            icon: const Icon(Icons.cancel_outlined),
+            label:
+                isCancelling ? const Text('מבטל...') : const Text('בטל טיוטה'),
           ),
         if (showPrintedButton)
           OutlinedButton.icon(

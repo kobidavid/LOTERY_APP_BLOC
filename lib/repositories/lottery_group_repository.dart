@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/lottery_form.dart';
 import '../models/lottery_group.dart';
@@ -24,6 +25,7 @@ class UserGroupListItem {
     required this.groupId,
     required this.groupName,
     required this.creatorUserId,
+    this.creatorName,
     required this.groupStatus,
     required this.responseStatus,
     required this.minimumParticipantsRequired,
@@ -35,6 +37,8 @@ class UserGroupListItem {
   final String groupId;
   final String groupName;
   final String creatorUserId;
+  /// Display name of the group creator. Falls back to [creatorUserId] when null.
+  final String? creatorName;
   final String groupStatus;
   final String responseStatus;
   final int minimumParticipantsRequired;
@@ -61,6 +65,24 @@ class SubmittedGroupHistoryItem {
   final String dispatchStatus;
   final DateTime? submittedAt;
   final num myEffectiveShare;
+}
+
+class CancelledGroupHistoryItem {
+  const CancelledGroupHistoryItem({
+    required this.groupId,
+    required this.groupName,
+    required this.creatorName,
+    required this.cancelledAt,
+    required this.cancelledByDisplayName,
+    required this.myRefundAmount,
+  });
+
+  final String groupId;
+  final String groupName;
+  final String creatorName;
+  final DateTime? cancelledAt;
+  final String cancelledByDisplayName;
+  final num myRefundAmount;
 }
 
 class LotteryGroupRepository {
@@ -90,6 +112,7 @@ class LotteryGroupRepository {
   final FirebaseFunctions _functions;
   final PrintReadyArtifactService _printReadyArtifactService;
   static const String _submitFunctionName = 'submitLotteryForm';
+  static const String _cancelGroupDraftFunctionName = 'cancelGroupDraft';
 
   DocumentReference<Map<String, dynamic>> _groupRef(String groupId) {
     return _firestore.collection('lottery_groups').doc(groupId);
@@ -171,6 +194,7 @@ class LotteryGroupRepository {
           groupId: doc.id,
           groupName: data['groupName'] as String? ?? doc.id,
           creatorUserId: data['creatorUserId'] as String? ?? '',
+          creatorName: data['creatorName'] as String?,
           groupStatus: data['groupStatus'] as String? ?? '',
           responseStatus: data['responseStatus'] as String? ?? '',
           minimumParticipantsRequired:
@@ -221,6 +245,48 @@ class LotteryGroupRepository {
       });
       return items;
     });
+  }
+
+  Stream<List<CancelledGroupHistoryItem>> watchCancelledGroupsForUser(
+    String userId,
+  ) async* {
+    await _stabilizeAuthForInviteRead(expectedUserId: userId);
+
+    try {
+      await for (final QuerySnapshot<Map<String, dynamic>> snapshot
+          in _firestore
+              .collection('users')
+              .doc(userId)
+              .collection('cancelled_groups')
+              .snapshots()) {
+        final List<CancelledGroupHistoryItem> items = snapshot.docs.map((doc) {
+          final Map<String, dynamic> data = doc.data();
+          return CancelledGroupHistoryItem(
+            groupId: doc.id,
+            groupName: data['groupName'] as String? ?? doc.id,
+            creatorName: data['creatorName'] as String? ?? 'מנהל הקבוצה',
+            cancelledAt: _asDateTime(data['cancelledAt']),
+            cancelledByDisplayName:
+                data['cancelledByDisplayName'] as String? ?? 'מנהל הקבוצה',
+            myRefundAmount: (data['myRefundAmount'] as num?) ?? 0,
+          );
+        }).toList();
+
+        items.sort((a, b) {
+          final DateTime aDate = a.cancelledAt ?? DateTime(0);
+          final DateTime bDate = b.cancelledAt ?? DateTime(0);
+          return bDate.compareTo(aDate);
+        });
+        yield items;
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[LotteryGroupRepository] watchCancelledGroupsForUser fallback userId=$userId error=$error',
+        );
+      }
+      yield const <CancelledGroupHistoryItem>[];
+    }
   }
 
   Future<LotteryGroupInviteBundle> loadInvite({
@@ -562,6 +628,49 @@ class LotteryGroupRepository {
     }
   }
 
+  Future<void> cancelGroupDraft({
+    required String groupId,
+    required String cancelledByUserId,
+  }) async {
+    debugPrint(
+      '[LotteryGroupRepository] cancelGroupDraft start groupId=$groupId cancelledByUserId=$cancelledByUserId',
+    );
+    await _stabilizeAuthForInviteRead(expectedUserId: cancelledByUserId);
+    final User? currentUser = _auth.currentUser;
+    if (currentUser == null || currentUser.uid != cancelledByUserId) {
+      throw StateError('Authenticated user does not match the group creator.');
+    }
+
+    final String token = await currentUser.getIdToken(true) ?? '';
+    final HttpsCallable callable =
+        _functions.httpsCallable(_cancelGroupDraftFunctionName);
+
+    try {
+      await callable.call(<String, dynamic>{
+        'idToken': token,
+        'groupId': groupId,
+      });
+      debugPrint(
+        '[LotteryGroupRepository] cancelGroupDraft success groupId=$groupId',
+      );
+    } on FirebaseFunctionsException catch (error) {
+      debugPrint(
+        '[LotteryGroupRepository] cancelGroupDraft callable failed groupId=$groupId code=${error.code} message=${error.message}',
+      );
+      if (error.code == 'not-found') {
+        throw StateError(
+          'פונקציית ביטול הקבוצה עדיין לא נפרסה. יש לפרוס Cloud Functions ו-Firestore Rules.',
+        );
+      }
+      if (error.code == 'permission-denied') {
+        throw StateError(
+          'אין עדיין הרשאה לביטול קבוצתי. יש לפרוס את חוקי Firestore המעודכנים.',
+        );
+      }
+      throw StateError(error.message ?? 'ביטול הטופס הקבוצתי נכשל.');
+    }
+  }
+
   Future<String> submitGroupTicket({
     required String groupId,
     required String creatorUserId,
@@ -595,16 +704,11 @@ class LotteryGroupRepository {
 
     if (!_useCreateNewSnapshot) {
       // ── NEW PATH: update the existing sourceFormId form in-place ──────────
-      final String sourceFormId = initialGroup.sourceFormId ?? '';
+      final String sourceFormId = initialGroup.sourceFormId;
       if (sourceFormId.isEmpty) {
         await tempFormRef.delete();
         throw StateError('sourceFormId is missing on group $groupId.');
       }
-
-      print(
-        '[SubmitGroup] new path: '
-        'tempFormId=$tempFormId sourceFormId=$sourceFormId groupId=$groupId',
-      );
 
       // Read ALL fields written by the callable to the temp doc.
       // These are the server-computed values we must copy to the original form.
@@ -620,23 +724,11 @@ class LotteryGroupRepository {
           tempFormData['ticketFingerprint'] as String?;
       final String? ticketFingerprintSource =
           tempFormData['ticketFingerprintSource'] as String?;
-      final int? lotteryId =
-          (tempFormData['lotteryId'] as num?)?.toInt();
+      final int? lotteryId = (tempFormData['lotteryId'] as num?)?.toInt();
       final dynamic salesCloseAt = tempFormData['salesCloseAt'];
       final int? fingerprintVersion =
           (tempFormData['fingerprintVersion'] as num?)?.toInt();
-      final String? resultStatus =
-          tempFormData['resultStatus'] as String?;
-
-      print(
-        '[SubmitGroup] fields from temp doc: '
-        'lotteryId=$lotteryId '
-        'salesCloseAt=$salesCloseAt '
-        'fingerprintVersion=$fingerprintVersion '
-        'resultStatus=$resultStatus '
-        'hasFingerprint=${ticketFingerprint != null} '
-        'hasFingerprintSource=${ticketFingerprintSource != null}',
-      );
+      final String? resultStatus = tempFormData['resultStatus'] as String?;
 
       final DocumentReference<Map<String, dynamic>> sourceFormRef = _firestore
           .collection('users')
@@ -760,7 +852,8 @@ class LotteryGroupRepository {
               'dispatchStatus': dispatchStatusQueuedForPrint,
               'baseTicketCost': group.baseTicketCost,
               'effectiveParticipantCount': effectiveParticipantCount,
-              'effectiveCostPerPaidParticipant': effectiveCostPerPaidParticipant,
+              'effectiveCostPerPaidParticipant':
+                  effectiveCostPerPaidParticipant,
               'submittedParticipantUserIds': submittedParticipantUserIds,
               'paidParticipants': paidParticipants,
               // ── Fields copied from the Cloud Function's temp doc ──────────
@@ -817,15 +910,6 @@ class LotteryGroupRepository {
 
       // Transaction succeeded — remove the temp doc (all fields already merged).
       await tempFormRef.delete();
-      print(
-        '[SubmitGroup] updated existing formId=$sourceFormId '
-        'groupId=$groupId '
-        'lotteryId=$lotteryId '
-        'salesCloseAt=$salesCloseAt '
-        'hasFingerprint=${ticketFingerprint != null} '
-        'fingerprintVersion=$fingerprintVersion',
-      );
-
       await _generatePrintReadyArtifactAndSync(
         creatorUserId: creatorUserId,
         formId: sourceFormId,
@@ -1017,12 +1101,14 @@ class LotteryGroupRepository {
     required String userId,
     required LotteryGroup group,
     required LotteryGroupMembership membership,
+    String? creatorName,
   }) {
     return _activeGroupRef(userId, group.groupId).set(
       <String, dynamic>{
         'groupId': group.groupId,
         'groupName': group.groupName,
         'creatorUserId': group.creatorUserId,
+        if (creatorName != null) 'creatorName': creatorName,
         'groupStatus': group.status.value,
         'responseStatus': membership.responseStatus.value,
         'minimumParticipantsRequired': membership.minimumParticipantsRequired,

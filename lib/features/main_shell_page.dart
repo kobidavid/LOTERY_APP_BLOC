@@ -148,7 +148,7 @@ class _MainShellPageState extends State<MainShellPage> {
                 groupRepository: _groupRepository,
                 inviteLinkService: widget.inviteLinkService,
                 onFormSelected: _handleHistoryFormSelected,
-                onDeleteSavedForm: _handleDeleteSavedForm,
+                onCancelGroupDraft: _handleCancelGroupDraft,
               ),
               _PersonalAreaTab(user: widget.user),
             ],
@@ -205,32 +205,21 @@ class _MainShellPageState extends State<MainShellPage> {
     setState(() => _selectedTabIndex = 0);
   }
 
-  Future<bool> _handleDeleteSavedForm(LotteryForm form) async {
-    final bool confirmed = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('אישור'),
-            content: const Text('אתה בטוח שאתה רוצה למחוק את הטופס?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('ביטול'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('מחיקה'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-
-    if (!confirmed) {
+  Future<bool> _handleCancelGroupDraft(String groupId) async {
+    try {
+      await _groupRepository.cancelGroupDraft(
+        groupId: groupId,
+        cancelledByUserId: widget.user.uid,
+      );
+      return true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$error')),
+        );
+      }
       return false;
     }
-
-    await _formCubit.deleteSavedForm(form);
-    return true;
   }
 
   Future<void> _handlePendingInvite() async {

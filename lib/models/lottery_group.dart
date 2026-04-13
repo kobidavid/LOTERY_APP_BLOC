@@ -45,6 +45,10 @@ class LotteryGroup extends Equatable {
     required this.updatedAt,
     required this.finalizedAt,
     required this.submittedAt,
+    required this.cancelledAt,
+    required this.cancelledByUserId,
+    required this.cancelledByDisplayName,
+    required this.totalRefundedAmount,
     required this.submittedFormId,
     required this.dispatchStatus,
     required this.printReadyUrl,
@@ -68,6 +72,10 @@ class LotteryGroup extends Equatable {
   final DateTime? updatedAt;
   final DateTime? finalizedAt;
   final DateTime? submittedAt;
+  final DateTime? cancelledAt;
+  final String? cancelledByUserId;
+  final String? cancelledByDisplayName;
+  final num totalRefundedAmount;
   final String? submittedFormId;
   final String? dispatchStatus;
   final String? printReadyUrl;
@@ -115,6 +123,10 @@ class LotteryGroup extends Equatable {
       updatedAt: _asDateTime(map['updatedAt']),
       finalizedAt: _asDateTime(map['finalizedAt']),
       submittedAt: _asDateTime(map['submittedAt']),
+      cancelledAt: _asDateTime(map['cancelledAt']),
+      cancelledByUserId: map['cancelledByUserId'] as String?,
+      cancelledByDisplayName: map['cancelledByDisplayName'] as String?,
+      totalRefundedAmount: (map['totalRefundedAmount'] as num?) ?? 0,
       submittedFormId: map['submittedFormId'] as String?,
       dispatchStatus: map['dispatchStatus'] as String?,
       printReadyUrl: map['printReadyUrl'] as String?,
@@ -156,6 +168,10 @@ class LotteryGroup extends Equatable {
         updatedAt,
         finalizedAt,
         submittedAt,
+        cancelledAt,
+        cancelledByUserId,
+        cancelledByDisplayName,
+        totalRefundedAmount,
         submittedFormId,
         dispatchStatus,
         printReadyUrl,

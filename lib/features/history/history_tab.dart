@@ -17,7 +17,7 @@ class HistoryTab extends StatefulWidget {
     required this.groupRepository,
     required this.inviteLinkService,
     required this.onFormSelected,
-    required this.onDeleteSavedForm,
+    required this.onCancelGroupDraft,
   });
 
   final String userId;
@@ -25,7 +25,7 @@ class HistoryTab extends StatefulWidget {
   final LotteryGroupRepository groupRepository;
   final GroupInviteLinkService inviteLinkService;
   final ValueChanged<LotteryForm> onFormSelected;
-  final Future<bool> Function(LotteryForm) onDeleteSavedForm;
+  final Future<bool> Function(String groupId) onCancelGroupDraft;
 
   @override
   State<HistoryTab> createState() => _HistoryTabState();
@@ -33,6 +33,8 @@ class HistoryTab extends StatefulWidget {
 
 class _HistoryTabState extends State<HistoryTab> {
   int? _expandedSectionIndex = 0;
+  final Set<String> _hiddenDraftItemKeys = <String>{};
+  int _draftDismissGeneration = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -50,91 +52,185 @@ class _HistoryTabState extends State<HistoryTab> {
                   stream:
                       widget.groupRepository.watchGroupsForUser(widget.userId),
                   builder: (context, activeGroupsSnapshot) {
-                    final List<SubmittedGroupHistoryItem> submittedGroups =
-                        submittedGroupsSnapshot.data ??
-                            const <SubmittedGroupHistoryItem>[];
-                    final List<_FormsListItem> submittedItems = [
-                      ...(submittedFormsSnapshot.data ?? const <LotteryForm>[])
-                          .map(
-                        (form) => _FormsListItem.personalSubmitted(form),
-                      ),
-                      ...submittedGroups.map(
-                        (item) => _FormsListItem.groupSubmitted(item),
-                      ),
-                    ]..sort(
-                        (a, b) => b.sortDate.compareTo(a.sortDate),
-                      );
+                    return StreamBuilder<List<CancelledGroupHistoryItem>>(
+                      stream: widget.groupRepository
+                          .watchCancelledGroupsForUser(widget.userId),
+                      builder: (context, cancelledGroupsSnapshot) {
+                        final List<SubmittedGroupHistoryItem> submittedGroups =
+                            submittedGroupsSnapshot.data ??
+                                const <SubmittedGroupHistoryItem>[];
+                        final List<CancelledGroupHistoryItem> cancelledGroups =
+                            cancelledGroupsSnapshot.data ??
+                                const <CancelledGroupHistoryItem>[];
+                        final Set<String> submittedGroupIds =
+                            submittedGroups.map((item) => item.groupId).toSet();
+                        final Set<String> cancelledGroupIds =
+                            cancelledGroups.map((item) => item.groupId).toSet();
 
-                    final List<_FormsListItem> draftItems = [
-                      ...(savedFormsSnapshot.data ?? const <LotteryForm>[])
-                          .where(
-                            (form) => form.status == LotteryFormStatus.saved,
-                          )
-                          .map(
-                            (form) => _FormsListItem.personalDraft(form),
+                        final List<_FormsListItem> submittedItems = [
+                          ...(submittedFormsSnapshot.data ??
+                                  const <LotteryForm>[])
+                              .where(
+                                (form) =>
+                                    form.status == LotteryFormStatus.submitted,
+                              )
+                              .map(
+                                (form) =>
+                                    _FormsListItem.personalSubmitted(form),
+                              ),
+                          ...submittedGroups.map(
+                            (item) => _FormsListItem.groupSubmitted(item),
                           ),
-                      ...(activeGroupsSnapshot.data ??
-                              const <UserGroupListItem>[])
-                          .where(
-                            (item) =>
-                                item.groupStatus != 'submitted' &&
-                                !submittedGroups.any(
-                                  (submitted) =>
-                                      submitted.groupId == item.groupId,
-                                ),
-                          )
-                          .map(
-                            (item) => _FormsListItem.groupDraft(item),
-                          ),
-                    ]..sort(
-                        (a, b) => b.sortDate.compareTo(a.sortDate),
-                      );
+                        ]..sort(
+                            (a, b) => b.sortDate.compareTo(a.sortDate),
+                          );
 
-                    return ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                      children: [
-                        _FormsSection(
-                          viewerUserId: widget.userId,
-                          title: 'טפסים שנשלחו / שולמו',
-                          subtitle: 'טפסים אישיים וקבוצתיים שכבר הוגשו',
-                          items: submittedItems,
-                          emptyText: 'אין עדיין טפסים שנשלחו להצגה',
-                          onItemTap: (item) =>
-                              _handleItemTap(context: context, item: item),
-                          onDeleteDraft: null,
-                          isExpanded: _expandedSectionIndex == 0,
-                          onToggle: () {
-                            setState(() {
-                              _expandedSectionIndex =
-                                  _expandedSectionIndex == 0 ? null : 0;
-                            });
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        _FormsSection(
-                          viewerUserId: widget.userId,
-                          title: 'טיוטות',
-                          subtitle: 'טפסים שמורים או קבוצות שעדיין בתהליך',
-                          items: draftItems,
-                          emptyText: 'אין כרגע טיוטות להצגה',
-                          onItemTap: (item) =>
-                              _handleItemTap(context: context, item: item),
-                          onDeleteDraft: (item) {
-                            if (item.personalForm == null ||
-                                item.kind != _FormsItemKind.personalDraft) {
-                              return Future<bool>.value(false);
-                            }
-                            return widget.onDeleteSavedForm(item.personalForm!);
-                          },
-                          isExpanded: _expandedSectionIndex == 1,
-                          onToggle: () {
-                            setState(() {
-                              _expandedSectionIndex =
-                                  _expandedSectionIndex == 1 ? null : 1;
-                            });
-                          },
-                        ),
-                      ],
+                        final List<_FormsListItem> draftItems = [
+                          ...(savedFormsSnapshot.data ?? const <LotteryForm>[])
+                              .where(
+                                (form) =>
+                                    form.status == LotteryFormStatus.saved,
+                              )
+                              .map(
+                                (form) => _FormsListItem.personalDraft(form),
+                              ),
+                          ...(activeGroupsSnapshot.data ??
+                                  const <UserGroupListItem>[])
+                              .where(
+                                (item) =>
+                                    item.groupStatus != 'submitted' &&
+                                    item.groupStatus != 'cancelled' &&
+                                    !submittedGroupIds.contains(item.groupId) &&
+                                    !cancelledGroupIds.contains(item.groupId),
+                              )
+                              .map(
+                                (item) => _FormsListItem.groupDraft(item),
+                              ),
+                        ]
+                            .where(
+                              (item) => !_hiddenDraftItemKeys
+                                  .contains(item.stableKey),
+                            )
+                            .toList()
+                          ..sort(
+                            (a, b) => b.sortDate.compareTo(a.sortDate),
+                          );
+
+                        final List<_FormsListItem> cancelledItems = [
+                          ...cancelledGroups.map(
+                            (item) => _FormsListItem.groupCancelled(item),
+                          ),
+                        ]..sort(
+                            (a, b) => b.sortDate.compareTo(a.sortDate),
+                          );
+
+                        return ListView(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                          children: [
+                            _FormsSection(
+                              viewerUserId: widget.userId,
+                              title: 'טפסים שנשלחו / שולמו',
+                              subtitle: 'טפסים אישיים וקבוצתיים שכבר הוגשו',
+                              items: submittedItems,
+                              emptyText: 'אין עדיין טפסים שנשלחו להצגה',
+                              onItemTap: (item) =>
+                                  _handleItemTap(context: context, item: item),
+                              onCancelDraft: null,
+                              dismissGeneration: 0,
+                              isExpanded: _expandedSectionIndex == 0,
+                              onToggle: () {
+                                setState(() {
+                                  _expandedSectionIndex =
+                                      _expandedSectionIndex == 0 ? null : 0;
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _FormsSection(
+                              viewerUserId: widget.userId,
+                              title: 'טיוטות',
+                              subtitle: 'טפסים שמורים או קבוצות שעדיין בתהליך',
+                              items: draftItems,
+                              emptyText: 'אין כרגע טיוטות להצגה',
+                              onItemTap: (item) =>
+                                  _handleItemTap(context: context, item: item),
+                              onCancelDraft: (item) async {
+                                if (item.kind != _FormsItemKind.groupDraft ||
+                                    item.groupId == null) {
+                                  return false;
+                                }
+
+                                final bool confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (dialogContext) => AlertDialog(
+                                        title: const Text('ביטול טופס קבוצתי'),
+                                        content: const Text(
+                                          'האם אתה בטוח? רק מי שכבר שילם על הטופס יזוכה בארנק שלו.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.of(
+                                              dialogContext,
+                                            ).pop(false),
+                                            child: const Text('חזרה'),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () => Navigator.of(
+                                              dialogContext,
+                                            ).pop(true),
+                                            child: const Text('אשר ביטול'),
+                                          ),
+                                        ],
+                                      ),
+                                    ) ??
+                                    false;
+
+                                if (!confirmed) {
+                                  return false;
+                                }
+
+                                final bool cancelled = await widget
+                                    .onCancelGroupDraft(item.groupId!);
+                                if (cancelled && mounted) {
+                                  setState(() {
+                                    _hiddenDraftItemKeys.add(item.stableKey);
+                                    _draftDismissGeneration++;
+                                  });
+                                }
+                                return cancelled;
+                              },
+                              dismissGeneration: _draftDismissGeneration,
+                              isExpanded: _expandedSectionIndex == 1,
+                              onToggle: () {
+                                setState(() {
+                                  _expandedSectionIndex =
+                                      _expandedSectionIndex == 1 ? null : 1;
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _FormsSection(
+                              viewerUserId: widget.userId,
+                              title: 'טפסים שבוטלו',
+                              subtitle:
+                                  'טפסים קבוצתיים שבוטלו כולל זיכויים למי שכבר שילם',
+                              items: cancelledItems,
+                              emptyText: 'אין כרגע טפסים שבוטלו להצגה',
+                              onItemTap: (item) =>
+                                  _handleItemTap(context: context, item: item),
+                              onCancelDraft: null,
+                              dismissGeneration: 0,
+                              isExpanded: _expandedSectionIndex == 2,
+                              onToggle: () {
+                                setState(() {
+                                  _expandedSectionIndex =
+                                      _expandedSectionIndex == 2 ? null : 2;
+                                });
+                              },
+                            ),
+                          ],
+                        );
+                      },
                     );
                   },
                 );
@@ -154,15 +250,17 @@ class _HistoryTabState extends State<HistoryTab> {
       case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
         if (item.personalForm?.formId != null) {
+          String pageTitle = 'טופס אישי';
+          if (item.kind == _FormsItemKind.personalDraft) {
+            pageTitle = 'טיוטת טופס אישי';
+          }
           Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => PersonalFormDetailsPage(
                 ownerUserId: widget.userId,
                 formId: item.personalForm!.formId!,
                 repository: widget.repository,
-                title: item.kind == _FormsItemKind.personalDraft
-                    ? 'טיוטת טופס אישי'
-                    : 'טופס אישי',
+                title: pageTitle,
               ),
             ),
           );
@@ -170,6 +268,7 @@ class _HistoryTabState extends State<HistoryTab> {
         return;
       case _FormsItemKind.groupSubmitted:
       case _FormsItemKind.groupDraft:
+      case _FormsItemKind.groupCancelled:
         if (item.groupId == null) {
           return;
         }
@@ -192,6 +291,7 @@ enum _FormsItemKind {
   personalDraft,
   groupSubmitted,
   groupDraft,
+  groupCancelled,
 }
 
 class _FormsListItem {
@@ -201,6 +301,7 @@ class _FormsListItem {
     this.personalForm,
     this.submittedGroup,
     this.activeGroup,
+    this.cancelledGroup,
   });
 
   factory _FormsListItem.personalSubmitted(LotteryForm form) {
@@ -235,13 +336,39 @@ class _FormsListItem {
     );
   }
 
+  factory _FormsListItem.groupCancelled(CancelledGroupHistoryItem item) {
+    return _FormsListItem._(
+      kind: _FormsItemKind.groupCancelled,
+      sortDate: item.cancelledAt ?? DateTime(0),
+      cancelledGroup: item,
+    );
+  }
+
   final _FormsItemKind kind;
   final DateTime sortDate;
   final LotteryForm? personalForm;
   final SubmittedGroupHistoryItem? submittedGroup;
   final UserGroupListItem? activeGroup;
+  final CancelledGroupHistoryItem? cancelledGroup;
 
-  String? get groupId => submittedGroup?.groupId ?? activeGroup?.groupId;
+  String? get groupId =>
+      submittedGroup?.groupId ??
+      activeGroup?.groupId ??
+      cancelledGroup?.groupId;
+
+  String get stableKey {
+    switch (kind) {
+      case _FormsItemKind.personalSubmitted:
+      case _FormsItemKind.personalDraft:
+        return 'personal-${personalForm?.formId ?? sortDate.toIso8601String()}';
+      case _FormsItemKind.groupSubmitted:
+        return 'group-submitted-${submittedGroup?.groupId ?? sortDate.toIso8601String()}';
+      case _FormsItemKind.groupDraft:
+        return 'group-draft-${activeGroup?.groupId ?? sortDate.toIso8601String()}';
+      case _FormsItemKind.groupCancelled:
+        return 'group-cancelled-${cancelledGroup?.groupId ?? sortDate.toIso8601String()}';
+    }
+  }
 }
 
 class _FormsSection extends StatelessWidget {
@@ -252,7 +379,8 @@ class _FormsSection extends StatelessWidget {
     required this.items,
     required this.emptyText,
     required this.onItemTap,
-    required this.onDeleteDraft,
+    required this.onCancelDraft,
+    required this.dismissGeneration,
     required this.isExpanded,
     required this.onToggle,
   });
@@ -263,7 +391,8 @@ class _FormsSection extends StatelessWidget {
   final List<_FormsListItem> items;
   final String emptyText;
   final ValueChanged<_FormsListItem> onItemTap;
-  final Future<bool> Function(_FormsListItem item)? onDeleteDraft;
+  final Future<bool> Function(_FormsListItem item)? onCancelDraft;
+  final int dismissGeneration;
   final bool isExpanded;
   final VoidCallback onToggle;
 
@@ -327,14 +456,16 @@ class _FormsSection extends StatelessWidget {
                       children: items
                           .map(
                             (item) => Padding(
+                              key: ValueKey<String>(item.stableKey),
                               padding: const EdgeInsets.only(bottom: 10),
                               child: _FormsSummaryTile(
                                 viewerUserId: viewerUserId,
                                 item: item,
+                                dismissGeneration: dismissGeneration,
                                 onTap: () => onItemTap(item),
-                                onDelete: onDeleteDraft == null
+                                onDelete: onCancelDraft == null
                                     ? null
-                                    : () => onDeleteDraft!(item),
+                                    : () => onCancelDraft!(item),
                               ),
                             ),
                           )
@@ -353,26 +484,52 @@ class _FormsSection extends StatelessWidget {
   }
 }
 
-class _FormsSummaryTile extends StatelessWidget {
+class _FormsSummaryTile extends StatefulWidget {
   const _FormsSummaryTile({
     required this.viewerUserId,
     required this.item,
+    required this.dismissGeneration,
     required this.onTap,
     required this.onDelete,
   });
 
   final String viewerUserId;
   final _FormsListItem item;
+  final int dismissGeneration;
   final VoidCallback onTap;
   final Future<bool> Function()? onDelete;
 
   @override
+  State<_FormsSummaryTile> createState() => _FormsSummaryTileState();
+}
+
+class _FormsSummaryTileState extends State<_FormsSummaryTile> {
+  bool _isCollapsed = false;
+
+  @override
+  void didUpdateWidget(covariant _FormsSummaryTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.dismissGeneration != widget.dismissGeneration &&
+        _isCollapsed) {
+      _isCollapsed = false;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isCollapsed) {
+      return AnimatedSize(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+        child: const SizedBox.shrink(),
+      );
+    }
+
     final Widget tile = Material(
       color: Theme.of(context).colorScheme.primaryContainer,
       borderRadius: BorderRadius.circular(16),
       child: ListTile(
-        onTap: onTap,
+        onTap: widget.onTap,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         shape: RoundedRectangleBorder(
@@ -391,16 +548,20 @@ class _FormsSummaryTile extends StatelessWidget {
       ),
     );
 
-    if (onDelete == null ||
-        item.kind != _FormsItemKind.personalDraft ||
-        item.personalForm?.formId == null) {
+    final bool dismissibleGroupDraft =
+        widget.item.kind == _FormsItemKind.groupDraft &&
+            widget.item.groupId != null &&
+            widget.item.activeGroup?.creatorUserId == widget.viewerUserId;
+
+    if (widget.onDelete == null || !dismissibleGroupDraft) {
       return tile;
     }
 
     return Dismissible(
-      key: ValueKey<String>('draft-form-${item.personalForm!.formId}'),
+      key: ValueKey<String>(
+        'draft-group-${widget.item.groupId}-${widget.dismissGeneration}',
+      ),
       direction: DismissDirection.endToStart,
-      confirmDismiss: (_) => onDelete!(),
       background: Container(
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -409,20 +570,40 @@ class _FormsSummaryTile extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
         ),
         child: Icon(
-          Icons.delete_outline,
+          Icons.cancel_outlined,
           color: Theme.of(context).colorScheme.onErrorContainer,
         ),
       ),
+      secondaryBackground: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.errorContainer,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Icon(
+          Icons.cancel_outlined,
+          color: Theme.of(context).colorScheme.onErrorContainer,
+        ),
+      ),
+      confirmDismiss: (_) async {
+        final bool cancelled = await widget.onDelete!();
+        if (cancelled && mounted) {
+          setState(() => _isCollapsed = true);
+        }
+        return false;
+      },
       child: tile,
     );
   }
 
   Widget _buildSubtitle() {
-    if (item.kind == _FormsItemKind.groupSubmitted ||
-        item.kind == _FormsItemKind.groupDraft) {
+    if (widget.item.kind == _FormsItemKind.groupSubmitted ||
+        widget.item.kind == _FormsItemKind.groupDraft ||
+        widget.item.kind == _FormsItemKind.groupCancelled) {
       return _GroupSummaryDetails(
-        item: item,
-        viewerUserId: viewerUserId,
+        item: widget.item,
+        viewerUserId: widget.viewerUserId,
       );
     }
 
@@ -433,21 +614,23 @@ class _FormsSummaryTile extends StatelessWidget {
   }
 
   String _titleText() {
-    switch (item.kind) {
+    switch (widget.item.kind) {
       case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
         return 'טופס אישי';
       case _FormsItemKind.groupSubmitted:
-        return item.submittedGroup!.groupName;
+        return widget.item.submittedGroup!.groupName;
       case _FormsItemKind.groupDraft:
-        return item.activeGroup!.groupName;
+        return widget.item.activeGroup!.groupName;
+      case _FormsItemKind.groupCancelled:
+        return widget.item.cancelledGroup!.groupName;
     }
   }
 
   String _subtitleText() {
-    switch (item.kind) {
+    switch (widget.item.kind) {
       case _FormsItemKind.personalSubmitted:
-        final LotteryForm form = item.personalForm!;
+        final LotteryForm form = widget.item.personalForm!;
         final List<String> lines = [
           'סטטוס: ${_personalStatusLabel(form)}',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
@@ -459,26 +642,35 @@ class _FormsSummaryTile extends StatelessWidget {
         }
         return lines.join('\n');
       case _FormsItemKind.personalDraft:
-        final LotteryForm form = item.personalForm!;
+        final LotteryForm form = widget.item.personalForm!;
         return [
           'סטטוס: טיוטה',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
           'נוצר: ${_formatDate(form.createdAt ?? form.savedAt ?? form.updatedAt)}',
         ].join('\n');
       case _FormsItemKind.groupSubmitted:
-        final SubmittedGroupHistoryItem group = item.submittedGroup!;
+        final SubmittedGroupHistoryItem group = widget.item.submittedGroup!;
         return [
           'נוצר על ידי: ${group.creatorName}',
           'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
           'העלות שלי: ${group.myEffectiveShare} ש״ח',
         ].join('\n');
       case _FormsItemKind.groupDraft:
-        final UserGroupListItem group = item.activeGroup!;
+        final UserGroupListItem group = widget.item.activeGroup!;
         return [
-          'נוצר על ידי: ${group.creatorUserId}',
+          'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
           'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
           'עלות שלי: ${_draftGroupCostLabel(group)}',
           'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
+        ].join('\n');
+      case _FormsItemKind.groupCancelled:
+        final CancelledGroupHistoryItem group = widget.item.cancelledGroup!;
+        return [
+          'נוצר על ידי: ${group.creatorName}',
+          'סטטוס: בוטל',
+          'בוטל על ידי: ${group.cancelledByDisplayName}',
+          'מועד ביטול: ${_formatDate(group.cancelledAt)}',
+          'זיכוי לארנק: ${group.myRefundAmount} ש״ח',
         ].join('\n');
     }
   }
@@ -613,6 +805,13 @@ class _GroupSummaryDetails extends StatelessWidget {
           );
         }
 
+        if (item.kind == _FormsItemKind.groupCancelled) {
+          return Text(
+            _cancelledText(),
+            textAlign: TextAlign.right,
+          );
+        }
+
         return Text(
           _draftText(createdAt: createdAt),
           textAlign: TextAlign.right,
@@ -647,7 +846,7 @@ class _GroupSummaryDetails extends StatelessWidget {
     if (item.kind == _FormsItemKind.groupDraft) {
       final UserGroupListItem group = item.activeGroup!;
       return [
-        'נוצר על ידי: ${group.creatorUserId}',
+        'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
         'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
         'עלות שלי: ${_draftGroupCostLabel(group)}',
         'נוצר: ${formatPresentationDateTime(createdAt ?? group.updatedAt)}',
@@ -656,6 +855,17 @@ class _GroupSummaryDetails extends StatelessWidget {
     }
 
     return _fallbackText();
+  }
+
+  String _cancelledText() {
+    final CancelledGroupHistoryItem group = item.cancelledGroup!;
+    return [
+      'נוצר על ידי: ${group.creatorName}',
+      'סטטוס: בוטל',
+      'בוטל על ידי: ${group.cancelledByDisplayName}',
+      'מועד ביטול: ${formatPresentationDateTime(group.cancelledAt)}',
+      'זיכוי לארנק: ${group.myRefundAmount} ש״ח',
+    ].join('\n');
   }
 
   String _fallbackText() {
@@ -670,9 +880,13 @@ class _GroupSummaryDetails extends StatelessWidget {
       ].join('\n');
     }
 
+    if (item.kind == _FormsItemKind.groupCancelled) {
+      return _cancelledText();
+    }
+
     final UserGroupListItem group = item.activeGroup!;
     return [
-      'נוצר על ידי: ${group.creatorUserId}',
+      'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
       'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
       'עלות שלי: ${_draftGroupCostLabel(group)}',
       'נוצר: ${formatPresentationDateTime(group.updatedAt)}',

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 
 import '../models/lottery_form.dart';
@@ -55,6 +56,21 @@ class LotteryFormRepository {
                 (a, b) => (b.savedAt ?? b.updatedAt ?? DateTime(0)).compareTo(
                       a.savedAt ?? a.updatedAt ?? DateTime(0),
                     )),
+        );
+  }
+
+  Stream<List<LotteryForm>> watchCancelledForms(String userId) {
+    return _formsRef(userId).snapshots().map(
+          (snapshot) => _mapForms(snapshot)
+            ..retainWhere(
+              (form) =>
+                  form.status == LotteryFormStatus.cancelled &&
+                  form.mode == LotteryFormMode.personal,
+            )
+            ..sort((a, b) =>
+                (b.cancelledAt ?? b.updatedAt ?? DateTime(0)).compareTo(
+                  a.cancelledAt ?? a.updatedAt ?? DateTime(0),
+                )),
         );
   }
 
@@ -124,6 +140,10 @@ class LotteryFormRepository {
         'updatedAt': persistable.updatedAt,
         'submittedAt': persistable.submittedAt,
         'savedAt': persistable.savedAt,
+        'cancelledAt': persistable.cancelledAt,
+        'cancelledByUserId': persistable.cancelledByUserId,
+        'cancelledByDisplayName': persistable.cancelledByDisplayName,
+        'refundAmount': persistable.refundAmount,
         'source': persistable.source,
         'version': persistable.version,
         'lotteryId': persistable.lotteryId,
@@ -215,6 +235,77 @@ class LotteryFormRepository {
     required String formId,
   }) {
     return _formsRef(userId).doc(formId).delete();
+  }
+
+  Future<void> cancelSavedForm({
+    required String userId,
+    required String formId,
+  }) async {
+    debugPrint(
+      '[LotteryFormRepository] cancelSavedForm start userId=$userId formId=$formId',
+    );
+    final DateTime now = DateTime.now();
+    final String cancelledByUserId = _auth.currentUser?.uid ?? userId;
+    final String cancelledByDisplayName =
+        _auth.currentUser?.displayName?.trim().isNotEmpty == true
+            ? _auth.currentUser!.displayName!.trim()
+            : cancelledByUserId;
+    final DocumentReference<Map<String, dynamic>> formRef =
+        _formsRef(userId).doc(formId);
+
+    await _firestore.runTransaction((transaction) async {
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await transaction.get(formRef);
+      final Map<String, dynamic>? data = snapshot.data();
+      if (!snapshot.exists || data == null) {
+        throw StateError('הטיוטה לא נמצאה.');
+      }
+
+      final LotteryForm form = LotteryForm.fromFirestore(snapshot.id, data);
+      if (form.status != LotteryFormStatus.saved) {
+        debugPrint(
+          '[LotteryFormRepository] cancelSavedForm rejected formId=$formId status=${form.status.value}',
+        );
+        throw StateError('ניתן לבטל רק טיוטה שמורה.');
+      }
+
+      final num refundAmount = _calculateRefundAmount(data);
+      debugPrint(
+        '[LotteryFormRepository] cancelSavedForm applying refund formId=$formId refundAmount=$refundAmount',
+      );
+      if (refundAmount > 0) {
+        final DocumentReference<Map<String, dynamic>> userRef =
+            _firestore.collection('users').doc(userId);
+        final DocumentSnapshot<Map<String, dynamic>> userSnapshot =
+            await transaction.get(userRef);
+        final num currentBalance =
+            (userSnapshot.data()?['balance'] as num?) ?? 0;
+        transaction.set(
+          userRef,
+          <String, dynamic>{
+            'balance': currentBalance + refundAmount,
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      transaction.set(
+        formRef,
+        <String, dynamic>{
+          'status': LotteryFormStatus.cancelled.value,
+          'updatedAt': now,
+          'cancelledAt': now,
+          'cancelledByUserId': cancelledByUserId,
+          'cancelledByDisplayName': cancelledByDisplayName,
+          'refundAmount': refundAmount,
+          'isEditable': false,
+        },
+        SetOptions(merge: true),
+      );
+    });
+    debugPrint(
+      '[LotteryFormRepository] cancelSavedForm success userId=$userId formId=$formId',
+    );
   }
 
   Future<LotteryGroup> createGroupFromForm({
@@ -351,5 +442,19 @@ class LotteryFormRepository {
 
     final int tablePairs = (populatedTableCount / 2).ceil();
     return tablePairs * _regularLottoPairPriceNis;
+  }
+
+  num _calculateRefundAmount(Map<String, dynamic> data) {
+    final List<dynamic> candidates = <dynamic>[
+      data['paidAmount'],
+      data['walletChargeAmount'],
+      data['refundAmount'],
+    ];
+    for (final dynamic candidate in candidates) {
+      if (candidate is num && candidate > 0) {
+        return candidate;
+      }
+    }
+    return 0;
   }
 }
