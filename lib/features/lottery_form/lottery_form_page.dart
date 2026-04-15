@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../models/lottery_group.dart';
+import '../../repositories/lottery_form_repository.dart';
 import '../../repositories/lottery_group_repository.dart';
 import '../../services/group_invite_link_service.dart';
 import '../../models/lottery_table.dart';
+import '../payments/payment_options_page.dart';
 import 'group_details_page.dart';
 import 'lottery_form_cubit.dart';
 import 'lottery_form_state.dart';
@@ -34,6 +36,7 @@ class LotteryFormPage extends StatefulWidget {
 
 class _LotteryFormPageState extends State<LotteryFormPage> {
   late final LotteryGroupRepository _groupRepository;
+  late final LotteryFormRepository _paymentRepository;
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
 
@@ -41,6 +44,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   void initState() {
     super.initState();
     _groupRepository = LotteryGroupRepository();
+    _paymentRepository = LotteryFormRepository();
   }
 
   Future<void> _promptCreateGroup() async {
@@ -113,16 +117,34 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   }
 
   Future<void> _startPersonalSubmitFlow() async {
+    final LotteryFormState currentState = context.read<LotteryFormCubit>().state;
+    final List<LotteryTable> selectedTables =
+        currentState.form.tables.take(currentState.selectedTableCount).toList();
+    final num formCost = _paymentRepository.calculateTicketCost(selectedTables);
+
     final bool? paymentConfirmed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const _TemporaryPaymentPage(),
+        builder: (_) => PaymentOptionsPage(
+          userId: currentState.form.userId,
+          amount: formCost,
+          onWalletPayment: () async {
+            await _paymentRepository.chargeUserWallet(
+              userId: currentState.form.userId,
+              amount: formCost,
+            );
+            await _submitPersonalFormAndOpenHistory();
+          },
+          onExternalPayment: _submitPersonalFormAndOpenHistory,
+        ),
       ),
     );
 
     if (!mounted || paymentConfirmed != true) {
       return;
     }
+  }
 
+  Future<void> _submitPersonalFormAndOpenHistory() async {
     await context.read<LotteryFormCubit>().submitForm();
     if (!mounted) {
       return;
@@ -131,7 +153,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final LotteryFormState latestState = context.read<LotteryFormCubit>().state;
     if (latestState.errorMessage == null) {
       widget.onOpenMyForms();
+      return;
     }
+    throw StateError(latestState.errorMessage ?? 'שליחת הטופס נכשלה');
   }
 
   void _handleTableCountChanged(int? count) {
@@ -343,52 +367,6 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
           child: const Text('יצירה'),
         ),
       ],
-    );
-  }
-}
-
-class _TemporaryPaymentPage extends StatelessWidget {
-  const _TemporaryPaymentPage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('תשלום'),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'מסך תשלום זמני',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                      ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'הטופס האישי יישלח רק לאחר אישור התשלום.',
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () => Navigator.of(context).pop(true),
-                    child: const Text('בצע תשלום'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

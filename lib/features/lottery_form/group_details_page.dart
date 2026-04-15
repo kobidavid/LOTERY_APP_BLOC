@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../form_presentation_utils.dart';
+import '../payments/payment_options_page.dart';
 import '../../models/lottery_group.dart';
 import '../../models/lottery_group_membership.dart';
 import '../../repositories/lottery_group_repository.dart';
@@ -293,8 +294,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     ),
                     showPayButton: currentUserCanSimulatePayment,
                     isPaying: _isPaying,
-                    onSimulatePayment: () =>
-                        _simulatePayment(groupId: group.groupId),
+                    onSimulatePayment: myMembership == null
+                        ? null
+                        : () => _openPaymentFlow(
+                              group: group,
+                              membership: myMembership,
+                            ),
                   ),
                   const SizedBox(height: 12),
                   _ParticipantsCard(
@@ -484,33 +489,47 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
-  Future<void> _simulatePayment({
-    required String groupId,
+  Future<void> _openPaymentFlow({
+    required LotteryGroup group,
+    required LotteryGroupMembership membership,
   }) async {
-    setState(() => _isPaying = true);
-    try {
-      await widget.repository.simulatePayment(
-        groupId: groupId,
-        userId: widget.currentUserId,
-      );
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('התשלום סומן כהושלם.')),
-      );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$error')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isPaying = false);
-      }
-    }
+    final num payableAmount = membership.costShare ?? group.currentPerParticipantCost;
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => PaymentOptionsPage(
+          userId: widget.currentUserId,
+          amount: payableAmount,
+          title: 'תשלום לקבוצה',
+          onWalletPayment: () async {
+            setState(() => _isPaying = true);
+            try {
+              await widget.repository.chargeUserWalletForGroup(
+                groupId: group.groupId,
+                userId: widget.currentUserId,
+                amount: payableAmount,
+              );
+            } finally {
+              if (mounted) {
+                setState(() => _isPaying = false);
+              }
+            }
+          },
+          onExternalPayment: () async {
+            setState(() => _isPaying = true);
+            try {
+              await widget.repository.simulatePayment(
+                groupId: group.groupId,
+                userId: widget.currentUserId,
+              );
+            } finally {
+              if (mounted) {
+                setState(() => _isPaying = false);
+              }
+            }
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _submitGroup({
@@ -1217,7 +1236,7 @@ class _ActionBarCard extends StatelessWidget {
   final VoidCallback onMarkSubmittedToStation;
   final bool showPayButton;
   final bool isPaying;
-  final VoidCallback onSimulatePayment;
+  final VoidCallback? onSimulatePayment;
 
   @override
   Widget build(BuildContext context) {
@@ -1234,7 +1253,7 @@ class _ActionBarCard extends StatelessWidget {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text('סימון תשלום'),
+                : const Text('לתשלום'),
           ),
         if (showFinalizeButton)
           FilledButton.icon(
@@ -1390,7 +1409,7 @@ class _MyResponseCard extends StatelessWidget {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('סימון תשלום'),
+                    : const Text('לתשלום'),
               ),
               const SizedBox(height: 12),
             ] else if (membership!.paymentStatus ==

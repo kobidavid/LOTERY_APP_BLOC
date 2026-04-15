@@ -6,6 +6,7 @@ import 'dart:async';
 
 import '../models/lottery_form.dart';
 import '../models/lottery_group.dart';
+import '../models/lottery_table.dart';
 
 class LotteryFormRepository {
   LotteryFormRepository({
@@ -21,6 +22,7 @@ class LotteryFormRepository {
   final FirebaseFunctions _functions;
   final FirebaseAuth _auth;
   static const String _submitFunctionName = 'submitLotteryForm';
+  static const String _chargeWalletFunctionName = 'chargeUserWallet';
   static const int _regularLottoPairPriceNis = 6;
   static const String _groupSnapshotSource = 'group_snapshot';
 
@@ -211,6 +213,37 @@ class LotteryFormRepository {
     final DocumentSnapshot<Map<String, dynamic>> snapshot =
         await _formsRef(form.userId).doc(formId).get();
     return LotteryForm.fromFirestore(formId, snapshot.data()!);
+  }
+
+  Future<void> chargeUserWallet({
+    required String userId,
+    required num amount,
+    String? formId,
+  }) async {
+    await _stabilizeAuthBeforeSubmit(userId);
+
+    final User? currentUser = _auth.currentUser;
+    if (currentUser == null || currentUser.uid != userId) {
+      throw FirebaseFunctionsException(
+        code: 'permission-denied',
+        message: 'Authenticated user does not match the wallet owner.',
+      );
+    }
+
+    final String token = await currentUser.getIdToken(true) ?? '';
+    final HttpsCallable callable =
+        _functions.httpsCallable(_chargeWalletFunctionName);
+    await callable.call(<String, dynamic>{
+      'idToken': token,
+      'userId': userId,
+      'amount': amount,
+      if (formId != null && formId.isNotEmpty) 'formId': formId,
+    });
+  }
+
+  num calculateTicketCost(List<LotteryTable> tables) {
+    final int populatedTableCount = tables.where((table) => !table.isEmpty).length;
+    return _calculateRegularLottoBaseTicketCost(populatedTableCount);
   }
 
   Future<void> _stabilizeAuthBeforeSubmit(String expectedUserId) async {

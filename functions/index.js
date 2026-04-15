@@ -189,6 +189,203 @@ exports.getUpcomingLotteryMetadata = functions.https.onCall(async () => {
   }
 });
 
+exports.chargeUserWallet = functions.https.onCall(async (data, context) => {
+  try {
+    const authenticatedUserId = await resolveAuthenticatedUserId(data, context);
+    if (!authenticatedUserId) {
+      throw new functions.https.HttpsError(
+          "unauthenticated",
+          "Authentication is required.",
+      );
+    }
+
+    const userId = asTrimmedString(data?.userId, authenticatedUserId);
+    const groupId = asTrimmedString(data?.groupId);
+    const formId = asTrimmedString(data?.formId);
+    const amount = asPositiveNumber(data?.amount);
+
+    if (userId !== authenticatedUserId) {
+      throw new functions.https.HttpsError(
+          "permission-denied",
+          "Authenticated user does not match wallet owner.",
+      );
+    }
+    if (amount <= 0) {
+      throw new functions.https.HttpsError(
+          "invalid-argument",
+          "amount must be greater than zero.",
+      );
+    }
+
+    let updatedBalance = 0;
+    await firestore.runTransaction(async (transaction) => {
+      const userRef = firestore.collection("users").doc(userId);
+      const formRef = formId ? firestore.collection("users")
+          .doc(userId)
+          .collection("forms")
+          .doc(formId) : null;
+      const groupRef = groupId ? firestore.collection("lottery_groups").doc(groupId) : null;
+      const membershipRef = groupRef ?
+        groupRef.collection("memberships").doc(userId) :
+        null;
+
+      const userSnapshot = await transaction.get(userRef);
+      if (!userSnapshot.exists) {
+        throw new functions.https.HttpsError(
+            "not-found",
+            "המשתמש לא נמצא.",
+        );
+      }
+
+      const formSnapshot = formRef ? await transaction.get(formRef) : null;
+      const groupSnapshot = groupRef ? await transaction.get(groupRef) : null;
+      const membershipSnapshot = membershipRef ?
+        await transaction.get(membershipRef) :
+        null;
+      const membershipsSnapshot = groupRef ?
+        await transaction.get(groupRef.collection("memberships")) :
+        null;
+
+      const userData = userSnapshot.data() || {};
+      const currentBalance = asPositiveNumber(userData.balance);
+      if (currentBalance < amount) {
+        throw new functions.https.HttpsError(
+            "failed-precondition",
+            "אין יתרה מספיקה לביצוע התשלום.",
+        );
+      }
+
+      if (groupId) {
+        if (!groupSnapshot || !groupSnapshot.exists) {
+          throw new functions.https.HttpsError(
+              "not-found",
+              "הקבוצה לא נמצאה.",
+          );
+        }
+        if (!membershipSnapshot || !membershipSnapshot.exists) {
+          throw new functions.https.HttpsError(
+              "not-found",
+              "פרטי ההשתתפות בקבוצה לא נמצאו.",
+          );
+        }
+
+        const groupData = groupSnapshot.data() || {};
+        const membershipData = membershipSnapshot.data() || {};
+        if (!membershipData.lockedIn) {
+          throw new functions.https.HttpsError(
+              "failed-precondition",
+              "רק משתתפים שננעלו יכולים לשלם.",
+          );
+        }
+
+        if (asTrimmedString(membershipData.paymentStatus) === "paid") {
+          return;
+        }
+
+        const expectedAmount =
+          asPositiveNumber(membershipData.costShare) ||
+          asPositiveNumber(groupData.currentPerParticipantCost);
+        if (expectedAmount <= 0) {
+          throw new functions.https.HttpsError(
+              "failed-precondition",
+              "לא ניתן לחשב את עלות ההשתתפות בקבוצה.",
+          );
+        }
+
+        if (Math.abs(expectedAmount - amount) > 0.01) {
+          throw new functions.https.HttpsError(
+              "invalid-argument",
+              "סכום התשלום אינו תואם לעלות ההשתתפות בקבוצה.",
+          );
+        }
+
+        const now = admin.firestore.FieldValue.serverTimestamp();
+        const memberships = (membershipsSnapshot?.docs ?? []).map((doc) => {
+          const docData = {...(doc.data() || {})};
+          if (doc.id === userId) {
+            docData.paymentStatus = "paid";
+            docData.paidAt = now;
+            docData.walletChargeAmount = amount;
+          }
+          return {
+            userId: doc.id,
+            ...docData,
+          };
+        });
+
+        transaction.set(membershipRef, {
+          paymentStatus: "paid",
+          paidAt: now,
+          walletChargeAmount: amount,
+          paymentMethod: "wallet",
+        }, {merge: true});
+
+        const paidLockedInMemberships = memberships.filter((membership) =>
+          membership.lockedIn &&
+          asTrimmedString(membership.paymentStatus) === "paid",
+        );
+        const validPaidMemberships = computeStableValidMemberships(
+            paidLockedInMemberships,
+        );
+        const readyForSubmission = validPaidMemberships.length > 0;
+
+        if (readyForSubmission) {
+          transaction.set(groupRef, {
+            status: "ready_for_submission",
+            currentPerParticipantCost:
+              asPositiveNumber(groupData.baseTicketCost) /
+              validPaidMemberships.length,
+            updatedAt: now,
+          }, {merge: true});
+        } else if (asTrimmedString(groupData.status) !== "awaiting_payments") {
+          transaction.set(groupRef, {
+            status: "awaiting_payments",
+            updatedAt: now,
+          }, {merge: true});
+        }
+      }
+
+      if (formId && formRef) {
+        if (!formSnapshot || !formSnapshot.exists) {
+          throw new functions.https.HttpsError(
+              "not-found",
+              "הטופס לא נמצא.",
+          );
+        }
+        transaction.set(formRef, {
+          walletChargeAmount: amount,
+          paymentMethod: "wallet",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+      }
+
+      updatedBalance = currentBalance - amount;
+      transaction.set(userRef, {
+        balance: updatedBalance,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+    });
+
+    return {
+      success: true,
+      userId,
+      groupId: groupId || null,
+      formId: formId || null,
+      amountCharged: amount,
+      updatedBalance,
+    };
+  } catch (error) {
+    console.error("chargeUserWallet failed", error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError(
+        "internal",
+        "חיוב היתרה נכשל.",
+    );
+  }
+});
+
 exports.cancelGroupDraft = functions.https.onCall(async (data, context) => {
   try {
     const authenticatedUserId = await resolveAuthenticatedUserId(data, context);
@@ -1506,6 +1703,22 @@ function refundAmountForUser(memberships, userId, currentPerParticipantCost) {
     return 0;
   }
   return refundAmountForMembership(membership, currentPerParticipantCost);
+}
+
+function computeStableValidMemberships(memberships) {
+  let current = Array.isArray(memberships) ? [...memberships] : [];
+
+  while (true) {
+    const participantCount = current.length;
+    const next = current.filter((membership) =>
+      participantCount >=
+        (Number(membership.minimumParticipantsRequired) || 1),
+    );
+    if (next.length === current.length) {
+      return next;
+    }
+    current = next;
+  }
 }
 
 function creatorDisplayNameFromMemberships(memberships, creatorUserId) {

@@ -113,6 +113,7 @@ class LotteryGroupRepository {
   final PrintReadyArtifactService _printReadyArtifactService;
   static const String _submitFunctionName = 'submitLotteryForm';
   static const String _cancelGroupDraftFunctionName = 'cancelGroupDraft';
+  static const String _chargeWalletFunctionName = 'chargeUserWallet';
 
   DocumentReference<Map<String, dynamic>> _groupRef(String groupId) {
     return _firestore.collection('lottery_groups').doc(groupId);
@@ -611,6 +612,45 @@ class LotteryGroupRepository {
           SetOptions(merge: true),
         );
       }
+    });
+
+    final DocumentSnapshot<Map<String, dynamic>> groupSnapshot =
+        await _groupRef(groupId).get();
+    final DocumentSnapshot<Map<String, dynamic>> membershipSnapshot =
+        await _membershipRef(groupId, userId).get();
+    final Map<String, dynamic>? groupData = groupSnapshot.data();
+    final Map<String, dynamic>? membershipData = membershipSnapshot.data();
+    if (groupData != null && membershipData != null) {
+      await upsertActiveGroupSummary(
+        userId: userId,
+        group: LotteryGroup.fromFirestore(groupId, groupData),
+        membership: LotteryGroupMembership.fromFirestore(membershipData),
+      );
+    }
+  }
+
+  Future<void> chargeUserWalletForGroup({
+    required String groupId,
+    required String userId,
+    required num amount,
+  }) async {
+    await _stabilizeAuthForInviteRead(expectedUserId: userId);
+    final User? currentUser = _auth.currentUser;
+    if (currentUser == null || currentUser.uid != userId) {
+      throw FirebaseFunctionsException(
+        code: 'permission-denied',
+        message: 'Authenticated user does not match the wallet owner.',
+      );
+    }
+
+    final String token = await currentUser.getIdToken(true) ?? '';
+    final HttpsCallable callable =
+        _functions.httpsCallable(_chargeWalletFunctionName);
+    await callable.call(<String, dynamic>{
+      'idToken': token,
+      'userId': userId,
+      'groupId': groupId,
+      'amount': amount,
     });
 
     final DocumentSnapshot<Map<String, dynamic>> groupSnapshot =
