@@ -825,6 +825,8 @@ class _GroupSummaryDetails extends StatelessWidget {
     required Map<String, dynamic> formData,
   }) {
     final SubmittedGroupHistoryItem group = item.submittedGroup!;
+    final _SubmittedGroupPresentationState presentationState =
+        _SubmittedGroupPresentationState.fromRawData(formData);
     final num? myWin = extractMyWinningShare(
       winAllocations: formData['winAllocations'],
       userId: viewerUserId,
@@ -832,7 +834,7 @@ class _GroupSummaryDetails extends StatelessWidget {
 
     final List<String> lines = <String>[
       'נוצר על ידי: ${group.creatorName}',
-      'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+      'סטטוס: ${presentationState.statusLabel}',
       'העלות שלי: ${group.myEffectiveShare} ש״ח',
       'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
       'הזכייה שלי: ${myWin != null ? '$myWin ש״ח' : 'טרם פורסם'}',
@@ -933,5 +935,68 @@ class _GroupSummaryDetails extends StatelessWidget {
       return 'ממתין לתשלום';
     }
     return 'ייקבע בהמשך';
+  }
+}
+
+class _SubmittedGroupPresentationState {
+  const _SubmittedGroupPresentationState({
+    required this.dispatchStatus,
+    required this.printReadyUrl,
+    required this.printedAt,
+    required this.submittedToStationAt,
+    required this.hasReceipt,
+  });
+
+  factory _SubmittedGroupPresentationState.fromRawData(
+    Map<String, dynamic> rawData,
+  ) {
+    return _SubmittedGroupPresentationState(
+      dispatchStatus: rawData['dispatchStatus'] as String?,
+      printReadyUrl: rawData['printReadyUrl'] as String?,
+      printedAt: presentationAsDateTime(rawData['printedAt']),
+      submittedToStationAt:
+          presentationAsDateTime(rawData['submittedToStationAt']),
+      hasReceipt: extractReceiptUrl(rawData) != null,
+    );
+  }
+
+  final String? dispatchStatus;
+  final String? printReadyUrl;
+  final DateTime? printedAt;
+  final DateTime? submittedToStationAt;
+  final bool hasReceipt;
+
+  String get effectiveDispatchStatus {
+    if (submittedToStationAt != null ||
+        dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusSubmittedToStation) {
+      return LotteryGroupRepository.dispatchStatusSubmittedToStation;
+    }
+    if (printedAt != null ||
+        dispatchStatus == LotteryGroupRepository.dispatchStatusPrinted) {
+      return LotteryGroupRepository.dispatchStatusPrinted;
+    }
+    if ((printReadyUrl?.isNotEmpty ?? false) ||
+        dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusQueuedForPrint) {
+      return LotteryGroupRepository.dispatchStatusQueuedForPrint;
+    }
+    return LotteryGroupRepository.dispatchStatusQueuedForPrint;
+  }
+
+  String get statusLabel {
+    if (hasReceipt) {
+      return 'קבלה הועלתה';
+    }
+
+    switch (effectiveDispatchStatus) {
+      case LotteryGroupRepository.dispatchStatusPrinted:
+        return 'הודפס';
+      case LotteryGroupRepository.dispatchStatusSubmittedToStation:
+        return 'נמסר לתחנה';
+      case LotteryGroupRepository.dispatchStatusQueuedForPrint:
+      default:
+        return 'ממתין להדפסה';
+    }
   }
 }

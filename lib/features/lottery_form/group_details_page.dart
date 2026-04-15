@@ -181,10 +181,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 creatorUserId: group.creatorUserId,
                 currentUserDisplayName: currentUserDisplayName,
               );
-              final String groupStatusLabel = _groupStatusLabel(
-                group: group,
-                paidParticipantSetIsValid: paidParticipantSetIsValid,
-              );
               final String yourShareLabel = myMembership == null
                   ? 'עדיין לא הצטרפת לקבוצה'
                   : _displayShareForMembership(
@@ -200,22 +196,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   paidSetPerParticipantCost == null
                       ? 'עדיין אין קבוצת משלמים תקפה'
                       : '$paidSetPerParticipantCost ש״ח';
-              final String submissionMessage;
-              if (group.status == LotteryGroupStatus.submitted) {
-                submissionMessage = _dispatchStatusDescription(
-                  dispatchStatus: group.dispatchStatus,
-                  printReadyUrl: group.printReadyUrl,
-                );
-              } else if (group.status == LotteryGroupStatus.cancelled) {
-                submissionMessage =
-                    'הטופס הקבוצתי בוטל. רק מי שכבר שילם זוכה חזרה לארנק.';
-              } else if (paidParticipantSetIsValid) {
-                submissionMessage =
-                    'ניתן כבר לשלוח לפי המשלמים הנוכחיים. אם שולחים עכשיו, כל משלם ישלם $currentCostIfSubmittedNowLabel.';
-              } else {
-                submissionMessage =
-                    'ממתינים לתשלומים נוספים לפני שניתן יהיה לשלוח את הטופס.';
-              }
               final bool showInviteButton = isCreator &&
                   group.status == LotteryGroupStatus.collectingResponses;
               final bool showFinalizeButton = isCreator &&
@@ -227,143 +207,28 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               final bool showCancelButton = isCreator &&
                   group.status != LotteryGroupStatus.submitted &&
                   group.status != LotteryGroupStatus.cancelled;
-              final bool showPrintedButton = isCreator &&
-                  group.status == LotteryGroupStatus.submitted &&
-                  group.dispatchStatus ==
-                      LotteryGroupRepository.dispatchStatusQueuedForPrint;
-              final bool showSubmittedToStationButton = isCreator &&
-                  group.status == LotteryGroupStatus.submitted &&
-                  group.dispatchStatus ==
-                      LotteryGroupRepository.dispatchStatusPrinted;
-              return ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  _GroupHeaderCard(
-                    groupName: group.groupName,
-                    creatorDisplayName: creatorDisplayName,
-                    statusLabel: groupStatusLabel,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildTicketPreviewCard(group),
-                  const SizedBox(height: 12),
-                  _GroupOutcomeCard(
-                    group: group,
-                    currentUserId: widget.currentUserId,
-                    creatorDisplayName: creatorDisplayName,
-                  ),
-                  const SizedBox(height: 12),
-                  _CompactSummaryCard(
-                    filledTablesCount: group.populatedTableCount,
-                    paidCount: paidCount,
-                    yourShareLabel: yourShareLabel,
-                  ),
-                  const SizedBox(height: 12),
-                  _StatusBanner(message: submissionMessage),
-                  const SizedBox(height: 12),
-                  _ActionBarCard(
-                    showInviteButton: showInviteButton,
-                    onInvite: showInviteButton
-                        ? (buttonContext) => _shareInvite(
-                              buttonContext: buttonContext,
-                              group: group,
-                            )
-                        : null,
-                    showFinalizeButton: showFinalizeButton,
-                    canFinalize: canFinalize,
-                    isFinalizing: _isFinalizing,
-                    onFinalize: () => _finalizeGroup(group.groupId),
-                    showSubmitButton: showSubmitButton,
-                    canSubmit: canSubmit,
-                    isSubmitting: _isSubmitting,
-                    onSubmit: () => _submitGroup(groupId: group.groupId),
-                    showCancelButton: showCancelButton,
-                    isCancelling: _isCancelling,
-                    onCancel: () => _confirmAndCancelGroup(group),
-                    showPrintedButton: showPrintedButton,
-                    showSubmittedToStationButton: showSubmittedToStationButton,
-                    isUpdatingDispatch: _isUpdatingDispatch,
-                    onMarkPrinted: () => _updateDispatchStatus(
-                      groupId: group.groupId,
-                      dispatchStatus:
-                          LotteryGroupRepository.dispatchStatusPrinted,
-                    ),
-                    onMarkSubmittedToStation: () => _updateDispatchStatus(
-                      groupId: group.groupId,
-                      dispatchStatus: LotteryGroupRepository
-                          .dispatchStatusSubmittedToStation,
-                    ),
-                    showPayButton: currentUserCanSimulatePayment,
-                    isPaying: _isPaying,
-                    onSimulatePayment: myMembership == null
-                        ? null
-                        : () => _openPaymentFlow(
-                              group: group,
-                              membership: myMembership,
-                            ),
-                  ),
-                  const SizedBox(height: 12),
-                  _ParticipantsCard(
-                    memberships: memberships,
-                    group: group,
-                    currentUserId: widget.currentUserId,
-                    currentUserDisplayName: currentUserDisplayName,
-                    creatorUserId: group.creatorUserId,
-                    showDebug: _showDebug,
-                  ),
-                  if (canEditResponse) ...[
-                    const SizedBox(height: 12),
-                    _MyResponseCard(
-                      membership: myMembership,
-                      group: group,
-                      canEdit: canEditResponse,
-                      selectedStatus: _selectedStatus,
-                      minimumController: _minimumController,
-                      isSaving: _isSaving,
-                      onStatusChanged: (status) {
-                        setState(() => _selectedStatus = status);
-                      },
-                      onSave: myMembership == null
-                          ? null
-                          : () => _saveMyResponse(groupId: group.groupId),
-                      onSimulatePayment: null,
-                      isPaying: _isPaying,
-                      showDebug: _showDebug,
-                    ),
-                  ],
-                  if (_showDebug) ...[
-                    const SizedBox(height: 12),
-                    _InfoCard(
-                      title: 'Debug',
-                      rows: [
-                        _InfoRow(label: 'groupId', value: group.groupId),
-                        _InfoRow(
-                          label: 'creatorUserId',
-                          value: group.creatorUserId,
-                        ),
-                        _InfoRow(
-                          label: 'status(raw)',
-                          value: group.status.value,
-                        ),
-                        _InfoRow(
-                          label: 'מעוניינים(raw)',
-                          value: '$interestedCount',
-                        ),
-                        _InfoRow(
-                          label: 'יעברו finalize(raw)',
-                          value: '$finalizableCount',
-                        ),
-                        _InfoRow(
-                          label: 'estimatedPerParticipantCost(raw)',
-                          value: '${estimatedPerParticipantCost ?? 'null'}',
-                        ),
-                        _InfoRow(
-                          label: 'paymentReadiness(raw)',
-                          value: paymentReadinessMessage,
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
+              return _buildSubmittedFormAwareContent(
+                group: group,
+                creatorDisplayName: creatorDisplayName,
+                paidParticipantSetIsValid: paidParticipantSetIsValid,
+                currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+                showInviteButton: showInviteButton,
+                showFinalizeButton: showFinalizeButton,
+                canFinalize: canFinalize,
+                showSubmitButton: showSubmitButton,
+                canSubmit: canSubmit,
+                showCancelButton: showCancelButton,
+                currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+                myMembership: myMembership,
+                memberships: memberships,
+                canEditResponse: canEditResponse,
+                interestedCount: interestedCount,
+                finalizableCount: finalizableCount,
+                estimatedPerParticipantCost: estimatedPerParticipantCost,
+                paymentReadinessMessage: paymentReadinessMessage,
+                yourShareLabel: yourShareLabel,
+                paidCount: paidCount,
+                currentUserDisplayName: currentUserDisplayName,
               );
             },
           );
@@ -726,6 +591,308 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     );
   }
 
+  Widget _buildProgressTracker(LotteryGroup group) {
+    final String? submittedFormId = group.submittedFormId;
+    if (submittedFormId == null || submittedFormId.isEmpty) {
+      return _GroupTicketTracker(
+        group: group,
+        trackerFormState: const _GroupTrackerSubmittedFormState.empty(),
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(group.creatorUserId)
+          .collection('forms')
+          .doc(submittedFormId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final Map<String, dynamic> rawData =
+            snapshot.data?.data() ?? const <String, dynamic>{};
+        return _GroupTicketTracker(
+          group: group,
+          trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
+        );
+      },
+    );
+  }
+
+  Widget _buildSubmittedFormAwareContent({
+    required LotteryGroup group,
+    required String creatorDisplayName,
+    required bool paidParticipantSetIsValid,
+    required String currentCostIfSubmittedNowLabel,
+    required bool showInviteButton,
+    required bool showFinalizeButton,
+    required bool canFinalize,
+    required bool showSubmitButton,
+    required bool canSubmit,
+    required bool showCancelButton,
+    required bool currentUserCanSimulatePayment,
+    required LotteryGroupMembership? myMembership,
+    required List<LotteryGroupMembership> memberships,
+    required bool canEditResponse,
+    required int interestedCount,
+    required int finalizableCount,
+    required num? estimatedPerParticipantCost,
+    required String paymentReadinessMessage,
+    required String yourShareLabel,
+    required int paidCount,
+    required String currentUserDisplayName,
+  }) {
+    final String? submittedFormId = group.submittedFormId;
+    if (submittedFormId == null || submittedFormId.isEmpty) {
+      return _buildDetailsContent(
+        group: group,
+        creatorDisplayName: creatorDisplayName,
+        paidParticipantSetIsValid: paidParticipantSetIsValid,
+        currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+        trackerFormState: const _GroupTrackerSubmittedFormState.empty(),
+        showInviteButton: showInviteButton,
+        showFinalizeButton: showFinalizeButton,
+        canFinalize: canFinalize,
+        showSubmitButton: showSubmitButton,
+        canSubmit: canSubmit,
+        showCancelButton: showCancelButton,
+        currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+        myMembership: myMembership,
+        memberships: memberships,
+        canEditResponse: canEditResponse,
+        interestedCount: interestedCount,
+        finalizableCount: finalizableCount,
+        estimatedPerParticipantCost: estimatedPerParticipantCost,
+        paymentReadinessMessage: paymentReadinessMessage,
+        yourShareLabel: yourShareLabel,
+        paidCount: paidCount,
+        currentUserDisplayName: currentUserDisplayName,
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(group.creatorUserId)
+          .collection('forms')
+          .doc(submittedFormId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final Map<String, dynamic> rawData =
+            snapshot.data?.data() ?? const <String, dynamic>{};
+        return _buildDetailsContent(
+          group: group,
+          creatorDisplayName: creatorDisplayName,
+          paidParticipantSetIsValid: paidParticipantSetIsValid,
+          currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+          trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
+          showInviteButton: showInviteButton,
+          showFinalizeButton: showFinalizeButton,
+          canFinalize: canFinalize,
+          showSubmitButton: showSubmitButton,
+          canSubmit: canSubmit,
+          showCancelButton: showCancelButton,
+          currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+          myMembership: myMembership,
+          memberships: memberships,
+          canEditResponse: canEditResponse,
+          interestedCount: interestedCount,
+          finalizableCount: finalizableCount,
+          estimatedPerParticipantCost: estimatedPerParticipantCost,
+          paymentReadinessMessage: paymentReadinessMessage,
+          yourShareLabel: yourShareLabel,
+          paidCount: paidCount,
+          currentUserDisplayName: currentUserDisplayName,
+        );
+      },
+    );
+  }
+
+  Widget _buildDetailsContent({
+    required LotteryGroup group,
+    required String creatorDisplayName,
+    required bool paidParticipantSetIsValid,
+    required String currentCostIfSubmittedNowLabel,
+    required _GroupTrackerSubmittedFormState trackerFormState,
+    required bool showInviteButton,
+    required bool showFinalizeButton,
+    required bool canFinalize,
+    required bool showSubmitButton,
+    required bool canSubmit,
+    required bool showCancelButton,
+    required bool currentUserCanSimulatePayment,
+    required LotteryGroupMembership? myMembership,
+    required List<LotteryGroupMembership> memberships,
+    required bool canEditResponse,
+    required int interestedCount,
+    required int finalizableCount,
+    required num? estimatedPerParticipantCost,
+    required String paymentReadinessMessage,
+    required String yourShareLabel,
+    required int paidCount,
+    required String currentUserDisplayName,
+  }) {
+    final String groupStatusLabel = _groupStatusLabel(
+      group: group,
+      paidParticipantSetIsValid: paidParticipantSetIsValid,
+      trackerFormState: trackerFormState,
+    );
+    final String submissionMessage;
+    if (group.status == LotteryGroupStatus.submitted) {
+      submissionMessage = _dispatchStatusDescription(
+        trackerFormState: trackerFormState,
+      );
+    } else if (group.status == LotteryGroupStatus.cancelled) {
+      submissionMessage =
+          'הטופס הקבוצתי בוטל. רק מי שכבר שילם זוכה חזרה לארנק.';
+    } else if (paidParticipantSetIsValid) {
+      submissionMessage =
+          'ניתן כבר לשלוח לפי המשלמים הנוכחיים. אם שולחים עכשיו, כל משלם ישלם $currentCostIfSubmittedNowLabel.';
+    } else {
+      submissionMessage =
+          'ממתינים לתשלומים נוספים לפני שניתן יהיה לשלוח את הטופס.';
+    }
+    final bool showPrintedButton = group.creatorUserId == widget.currentUserId &&
+        group.status == LotteryGroupStatus.submitted &&
+        trackerFormState.effectiveDispatchStatus ==
+            LotteryGroupRepository.dispatchStatusQueuedForPrint;
+    final bool showSubmittedToStationButton =
+        group.creatorUserId == widget.currentUserId &&
+            group.status == LotteryGroupStatus.submitted &&
+            trackerFormState.effectiveDispatchStatus ==
+                LotteryGroupRepository.dispatchStatusPrinted;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _GroupHeaderCard(
+          groupName: group.groupName,
+          creatorDisplayName: creatorDisplayName,
+          statusLabel: groupStatusLabel,
+        ),
+        const SizedBox(height: 12),
+        _buildProgressTracker(group),
+        const SizedBox(height: 12),
+        _buildTicketPreviewCard(group),
+        const SizedBox(height: 12),
+        _GroupOutcomeCard(
+          group: group,
+          currentUserId: widget.currentUserId,
+          creatorDisplayName: creatorDisplayName,
+        ),
+        const SizedBox(height: 12),
+        _CompactSummaryCard(
+          filledTablesCount: group.populatedTableCount,
+          paidCount: paidCount,
+          yourShareLabel: yourShareLabel,
+        ),
+        const SizedBox(height: 12),
+        _StatusBanner(message: submissionMessage),
+        const SizedBox(height: 12),
+        _ActionBarCard(
+          showInviteButton: showInviteButton,
+          onInvite: showInviteButton
+              ? (buttonContext) => _shareInvite(
+                    buttonContext: buttonContext,
+                    group: group,
+                  )
+              : null,
+          showFinalizeButton: showFinalizeButton,
+          canFinalize: canFinalize,
+          isFinalizing: _isFinalizing,
+          onFinalize: () => _finalizeGroup(group.groupId),
+          showSubmitButton: showSubmitButton,
+          canSubmit: canSubmit,
+          isSubmitting: _isSubmitting,
+          onSubmit: () => _submitGroup(groupId: group.groupId),
+          showCancelButton: showCancelButton,
+          isCancelling: _isCancelling,
+          onCancel: () => _confirmAndCancelGroup(group),
+          showPrintedButton: showPrintedButton,
+          showSubmittedToStationButton: showSubmittedToStationButton,
+          isUpdatingDispatch: _isUpdatingDispatch,
+          onMarkPrinted: () => _updateDispatchStatus(
+            groupId: group.groupId,
+            dispatchStatus: LotteryGroupRepository.dispatchStatusPrinted,
+          ),
+          onMarkSubmittedToStation: () => _updateDispatchStatus(
+            groupId: group.groupId,
+            dispatchStatus:
+                LotteryGroupRepository.dispatchStatusSubmittedToStation,
+          ),
+          showPayButton: currentUserCanSimulatePayment,
+          isPaying: _isPaying,
+          onSimulatePayment: myMembership == null
+              ? null
+              : () => _openPaymentFlow(
+                    group: group,
+                    membership: myMembership,
+                  ),
+        ),
+        const SizedBox(height: 12),
+        _ParticipantsCard(
+          memberships: memberships,
+          group: group,
+          currentUserId: widget.currentUserId,
+          currentUserDisplayName: currentUserDisplayName,
+          creatorUserId: group.creatorUserId,
+          showDebug: _showDebug,
+        ),
+        if (canEditResponse) ...[
+          const SizedBox(height: 12),
+          _MyResponseCard(
+            membership: myMembership,
+            group: group,
+            canEdit: canEditResponse,
+            selectedStatus: _selectedStatus,
+            minimumController: _minimumController,
+            isSaving: _isSaving,
+            onStatusChanged: (status) {
+              setState(() => _selectedStatus = status);
+            },
+            onSave: myMembership == null
+                ? null
+                : () => _saveMyResponse(groupId: group.groupId),
+            onSimulatePayment: null,
+            isPaying: _isPaying,
+            showDebug: _showDebug,
+          ),
+        ],
+        if (_showDebug) ...[
+          const SizedBox(height: 12),
+          _InfoCard(
+            title: 'Debug',
+            rows: [
+              _InfoRow(label: 'groupId', value: group.groupId),
+              _InfoRow(label: 'creatorUserId', value: group.creatorUserId),
+              _InfoRow(label: 'status(raw)', value: group.status.value),
+              _InfoRow(label: 'dispatchStatus(group)', value: '${group.dispatchStatus}'),
+              _InfoRow(
+                label: 'dispatchStatus(form)',
+                value: '${trackerFormState.dispatchStatus}',
+              ),
+              _InfoRow(
+                label: 'מעוניינים(raw)',
+                value: '$interestedCount',
+              ),
+              _InfoRow(
+                label: 'יעברו finalize(raw)',
+                value: '$finalizableCount',
+              ),
+              _InfoRow(
+                label: 'estimatedPerParticipantCost(raw)',
+                value: '${estimatedPerParticipantCost ?? 'null'}',
+              ),
+              _InfoRow(
+                label: 'paymentReadiness(raw)',
+                value: paymentReadinessMessage,
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
   Future<void> _openReceiptUrl(String? receiptUrl) async {
     if (receiptUrl == null || receiptUrl.isEmpty) {
       return;
@@ -773,6 +940,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   String _groupStatusLabel({
     required LotteryGroup group,
     required bool paidParticipantSetIsValid,
+    required _GroupTrackerSubmittedFormState trackerFormState,
   }) {
     switch (group.status) {
       case LotteryGroupStatus.collectingResponses:
@@ -784,14 +952,20 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       case LotteryGroupStatus.readyForSubmission:
         return 'מוכן להגשה';
       case LotteryGroupStatus.submitted:
-        return _dispatchStatusLabel(group.dispatchStatus);
+        return _dispatchStatusLabel(trackerFormState: trackerFormState);
       case LotteryGroupStatus.cancelled:
         return 'הקבוצה בוטלה';
     }
   }
 
-  String _dispatchStatusLabel(String? dispatchStatus) {
-    switch (dispatchStatus) {
+  String _dispatchStatusLabel({
+    required _GroupTrackerSubmittedFormState trackerFormState,
+  }) {
+    if (trackerFormState.hasReceipt) {
+      return 'קבלה הועלתה';
+    }
+
+    switch (trackerFormState.effectiveDispatchStatus) {
       case LotteryGroupRepository.dispatchStatusPrinted:
         return 'הודפס';
       case LotteryGroupRepository.dispatchStatusSubmittedToStation:
@@ -803,17 +977,20 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   String _dispatchStatusDescription({
-    required String? dispatchStatus,
-    required String? printReadyUrl,
+    required _GroupTrackerSubmittedFormState trackerFormState,
   }) {
-    switch (dispatchStatus) {
+    if (trackerFormState.hasReceipt) {
+      return 'הקבלה הועלתה ונקלטה במערכת.';
+    }
+
+    switch (trackerFormState.effectiveDispatchStatus) {
       case LotteryGroupRepository.dispatchStatusPrinted:
         return 'הטופס הודפס ומוכן למסירה לתחנה.';
       case LotteryGroupRepository.dispatchStatusSubmittedToStation:
         return 'הטופס נמסר לתחנה.';
       case LotteryGroupRepository.dispatchStatusQueuedForPrint:
       default:
-        return (printReadyUrl?.isNotEmpty ?? false)
+        return (trackerFormState.printReadyUrl?.isNotEmpty ?? false)
             ? 'קובץ ההדפסה מוכן. ממתין להדפסה.'
             : 'הטופס אושר ונכנס לתור שליחה. קובץ ההדפסה נוצר ויופיע כאן בקרוב.';
     }
@@ -842,6 +1019,376 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       return null;
     }
     return membership.costShare;
+  }
+}
+
+class _GroupTrackerStepData {
+  const _GroupTrackerStepData({
+    required this.label,
+    required this.icon,
+    required this.isSystemOwned,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool isSystemOwned;
+}
+
+class _GroupTrackerSubmittedFormState {
+  const _GroupTrackerSubmittedFormState({
+    required this.dispatchStatus,
+    required this.hasReceipt,
+    required this.printReadyUrl,
+    required this.printedAt,
+    required this.submittedToStationAt,
+  });
+
+  const _GroupTrackerSubmittedFormState.empty()
+      : dispatchStatus = null,
+        hasReceipt = false,
+        printReadyUrl = null,
+        printedAt = null,
+        submittedToStationAt = null;
+
+  factory _GroupTrackerSubmittedFormState.fromRawData(
+    Map<String, dynamic> rawData,
+  ) {
+    return _GroupTrackerSubmittedFormState(
+      dispatchStatus: rawData['dispatchStatus'] as String?,
+      hasReceipt: extractReceiptUrl(rawData) != null,
+      printReadyUrl: rawData['printReadyUrl'] as String?,
+      printedAt: _asDateTime(rawData['printedAt']),
+      submittedToStationAt: _asDateTime(rawData['submittedToStationAt']),
+    );
+  }
+
+  final String? dispatchStatus;
+  final bool hasReceipt;
+  final String? printReadyUrl;
+  final DateTime? printedAt;
+  final DateTime? submittedToStationAt;
+
+  String get effectiveDispatchStatus {
+    if (submittedToStationAt != null ||
+        dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusSubmittedToStation) {
+      return LotteryGroupRepository.dispatchStatusSubmittedToStation;
+    }
+    if (printedAt != null ||
+        dispatchStatus == LotteryGroupRepository.dispatchStatusPrinted) {
+      return LotteryGroupRepository.dispatchStatusPrinted;
+    }
+    if ((printReadyUrl?.isNotEmpty ?? false) ||
+        dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusQueuedForPrint) {
+      return LotteryGroupRepository.dispatchStatusQueuedForPrint;
+    }
+    return LotteryGroupRepository.dispatchStatusQueuedForPrint;
+  }
+
+  static DateTime? _asDateTime(dynamic value) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+    if (value is DateTime) {
+      return value;
+    }
+    return null;
+  }
+}
+
+class _GroupTicketTracker extends StatefulWidget {
+  const _GroupTicketTracker({
+    required this.group,
+    required this.trackerFormState,
+  });
+
+  final LotteryGroup group;
+  final _GroupTrackerSubmittedFormState trackerFormState;
+
+  @override
+  State<_GroupTicketTracker> createState() => _GroupTicketTrackerState();
+}
+
+class _GroupTicketTrackerState extends State<_GroupTicketTracker>
+    with SingleTickerProviderStateMixin {
+  static const List<_GroupTrackerStepData> _steps = <_GroupTrackerStepData>[
+    _GroupTrackerStepData(
+      label: 'איסוף משתתפים',
+      icon: Icons.group_add_rounded,
+      isSystemOwned: false,
+    ),
+    _GroupTrackerStepData(
+      label: 'ממתין לתשלומים',
+      icon: Icons.payments_outlined,
+      isSystemOwned: false,
+    ),
+    _GroupTrackerStepData(
+      label: 'הגשת הטופס',
+      icon: Icons.send_rounded,
+      isSystemOwned: false,
+    ),
+    _GroupTrackerStepData(
+      label: 'הדפסת הטופס',
+      icon: Icons.print_rounded,
+      isSystemOwned: true,
+    ),
+    _GroupTrackerStepData(
+      label: 'מסירה בתחנה',
+      icon: Icons.storefront_rounded,
+      isSystemOwned: true,
+    ),
+  ];
+
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int completedCount = _deriveCompletedStepCount();
+    final int? currentIndex = completedCount >= _steps.length
+        ? null
+        : completedCount;
+    final ThemeData theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'מעקב התקדמות הטופס הקבוצתי',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Directionality(
+            textDirection: TextDirection.rtl,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List<Widget>.generate(_steps.length, (stepIndex) {
+                final _GroupTrackerStepData step = _steps[stepIndex];
+                return Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: AnimatedBuilder(
+                          animation: _pulseController,
+                          builder: (context, child) {
+                            return _TrackerStep(
+                              step: step,
+                              isCompleted: stepIndex < completedCount,
+                              isCurrent: currentIndex != null &&
+                                  stepIndex == currentIndex,
+                              pulseValue: _pulseController.value,
+                              color: _stepColor(context, step.isSystemOwned),
+                            );
+                          },
+                        ),
+                      ),
+                      if (stepIndex < _steps.length - 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: _TrackerConnector(
+                            filled: completedCount > stepIndex,
+                            glow: currentIndex != null &&
+                                currentIndex == stepIndex + 1,
+                            color: _stepColor(
+                              context,
+                              _steps[stepIndex + 1].isSystemOwned,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  int _deriveCompletedStepCount() {
+    if (widget.trackerFormState.submittedToStationAt != null ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusSubmittedToStation) {
+      return 5;
+    }
+
+    if (widget.trackerFormState.printedAt != null ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusPrinted) {
+      return 4;
+    }
+
+    if (widget.group.submittedAt != null ||
+        widget.group.status == LotteryGroupStatus.submitted ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusQueuedForPrint ||
+        (widget.trackerFormState.printReadyUrl?.isNotEmpty ?? false)) {
+      return 3;
+    }
+
+    if (widget.group.status == LotteryGroupStatus.readyForSubmission) {
+      return 1;
+    }
+
+    if (widget.group.status == LotteryGroupStatus.awaitingPayments ||
+        widget.group.finalizedAt != null ||
+        widget.group.currentPerParticipantCost > 0) {
+      return 1;
+    }
+
+    return 0;
+  }
+
+  Color _stepColor(BuildContext context, bool isSystemOwned) {
+    return isSystemOwned
+        ? Theme.of(context).colorScheme.secondary
+        : Theme.of(context).colorScheme.primary;
+  }
+}
+
+
+class _TrackerConnector extends StatelessWidget {
+  const _TrackerConnector({
+    required this.filled,
+    required this.glow,
+    required this.color,
+  });
+
+  final bool filled;
+  final bool glow;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color baseColor = Theme.of(context)
+        .colorScheme
+        .outlineVariant
+        .withValues(alpha: 0.45);
+    return Container(
+      width: 10,
+      height: 4,
+      decoration: BoxDecoration(
+        color: filled ? color.withValues(alpha: glow ? 0.8 : 0.65) : baseColor,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: glow
+            ? [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.18),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
+      ),
+    );
+  }
+}
+
+class _TrackerStep extends StatelessWidget {
+  const _TrackerStep({
+    required this.step,
+    required this.isCompleted,
+    required this.isCurrent,
+    required this.pulseValue,
+    required this.color,
+  });
+
+  final _GroupTrackerStepData step;
+  final bool isCompleted;
+  final bool isCurrent;
+  final double pulseValue;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Color futureColor = theme.colorScheme.outlineVariant;
+    final Color effectiveColor = isCompleted || isCurrent ? color : futureColor;
+    final double scale = isCurrent ? 1 + (pulseValue * 0.04) : 1;
+
+    return Column(
+      children: [
+        Transform.scale(
+          scale: scale,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 240),
+            width: isCurrent ? 28 : 24,
+            height: isCurrent ? 28 : 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isCompleted
+                  ? effectiveColor
+                  : isCurrent
+                      ? effectiveColor.withValues(alpha: 0.14)
+                      : theme.colorScheme.surface,
+              border: Border.all(
+                color: effectiveColor.withValues(
+                  alpha: isCompleted ? 1 : (isCurrent ? 0.9 : 0.4),
+                ),
+                width: isCurrent ? 2.2 : 1.4,
+              ),
+              boxShadow: isCurrent
+                  ? [
+                      BoxShadow(
+                        color: effectiveColor.withValues(alpha: 0.18),
+                        blurRadius: 10 + (pulseValue * 6),
+                        spreadRadius: 0.8 + (pulseValue * 1.2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              isCompleted ? Icons.check_rounded : step.icon,
+              size: isCurrent ? 14 : 12,
+              color: isCompleted
+                  ? theme.colorScheme.onPrimary
+                  : isCurrent
+                      ? effectiveColor
+                      : futureColor.withValues(alpha: 0.9),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          step.label,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: isCompleted || isCurrent
+                ? theme.colorScheme.onSurface
+                : futureColor,
+            fontWeight: isCurrent ? FontWeight.w900 : FontWeight.w700,
+            height: 1.1,
+          ),
+        ),
+      ],
+    );
   }
 }
 
