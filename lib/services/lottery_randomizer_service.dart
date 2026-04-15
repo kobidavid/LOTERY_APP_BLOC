@@ -8,25 +8,41 @@ class LotteryRandomizerService {
 
   final Random _random;
 
-  LotteryForm generateFullRandomForm(LotteryForm baseForm) {
+  LotteryForm generateFullRandomForm(
+    LotteryForm baseForm, {
+    required int tableCount,
+  }) {
+    final int normalizedCount = tableCount.clamp(1, baseForm.tables.length);
     return baseForm.copyWith(
       tables: List<LotteryTable>.generate(
-        14,
-        (index) => _generateFullTable(index + 1),
+        baseForm.tables.length,
+        (index) => index < normalizedCount
+            ? _generateFullTable(index + 1)
+            : LotteryTable.empty(index + 1),
       ),
       source: 'lotomat_full',
       isComplete: true,
     );
   }
 
-  LotteryForm completeRemainingTables(LotteryForm baseForm) {
-    final List<LotteryTable> completedTables =
-        baseForm.tables.map(_completeTablePreservingValues).toList();
+  LotteryForm completeRemainingTables(
+    LotteryForm baseForm, {
+    required int tableCount,
+  }) {
+    final int normalizedCount = tableCount.clamp(1, baseForm.tables.length);
+    final List<LotteryTable> completedTables = List<LotteryTable>.generate(
+      baseForm.tables.length,
+      (index) => index < normalizedCount
+          ? _completeTablePreservingValues(baseForm.tables[index])
+          : LotteryTable.empty(index + 1),
+    );
 
     return baseForm.copyWith(
       tables: completedTables,
       source: 'lotomat_partial',
-      isComplete: completedTables.every((table) => table.isComplete),
+      isComplete: completedTables.take(normalizedCount).every(
+            (table) => table.isComplete,
+          ),
     );
   }
 

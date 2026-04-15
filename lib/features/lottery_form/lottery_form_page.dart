@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -33,7 +36,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   late final LotteryGroupRepository _groupRepository;
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
-  int _selectedTableCount = 14;
 
   @override
   void initState() {
@@ -45,6 +47,13 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final LotteryFormState currentState =
         context.read<LotteryFormCubit>().state;
     if (!currentState.form.isComplete || currentState.isBusy) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('יש למלא את כל הטבלאות לפני שליחה'),
+          ),
+        );
       return;
     }
 
@@ -129,34 +138,32 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     if (count == null) {
       return;
     }
-    setState(() => _selectedTableCount = count);
-    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
-    final int currentIndex = cubit.state.activeRowIndex;
-    if (currentIndex >= count) {
-      cubit.selectRow(count - 1);
-    }
+    context.read<LotteryFormCubit>().setSelectedTableCount(count);
   }
 
-  String _nextDrawText() {
-    return 'הגרלה הקרובה: יום שלישי';
-  }
-
-  bool _areSelectedTablesComplete(List<LotteryTable> visibleTables) {
-    if (visibleTables.length != _selectedTableCount || visibleTables.isEmpty) {
+  bool _areSelectedTablesComplete(
+    List<LotteryTable> visibleTables,
+    int selectedTableCount,
+  ) {
+    if (visibleTables.length != selectedTableCount || visibleTables.isEmpty) {
       return false;
     }
     return visibleTables.every((table) => table.isComplete);
   }
 
   Future<void> _handlePrimarySubmit() async {
+    final LotteryFormState formState = context.read<LotteryFormCubit>().state;
     final List<LotteryTable> visibleTables = context
         .read<LotteryFormCubit>()
         .state
         .form
         .tables
-        .take(_selectedTableCount)
+        .take(formState.selectedTableCount)
         .toList();
-    if (!_areSelectedTablesComplete(visibleTables)) {
+    if (!_areSelectedTablesComplete(
+      visibleTables,
+      formState.selectedTableCount,
+    )) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -202,9 +209,10 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       },
       builder: (context, state) {
         final List<LotteryTable> visibleTables =
-            state.form.tables.take(_selectedTableCount).toList();
+            state.form.tables.take(state.selectedTableCount).toList();
         final bool canPrimarySubmit =
-            !state.isBusy && _areSelectedTablesComplete(visibleTables);
+            !state.isBusy &&
+            _areSelectedTablesComplete(visibleTables, state.selectedTableCount);
         return LayoutBuilder(
           builder: (context, constraints) {
             final double keyboardHeight =
@@ -216,16 +224,12 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                   padding: EdgeInsets.fromLTRB(10, 10, 10, keyboardHeight + 12),
                   child: Column(
                     children: [
-                      _CompactTopInfoRow(
-                        nextDrawText: _nextDrawText(),
-                        lottoPrizeText: '13 מיליון',
-                        doublePrizeText: '26 מיליון',
-                      ),
+                      const _CompactTopInfoRow(),
                       const SizedBox(height: 8),
                       _CompactControlRow(
                         isGroupMode: _isGroupMode,
                         isDoubleMode: _isDoubleMode,
-                        selectedTableCount: _selectedTableCount,
+                        selectedTableCount: state.selectedTableCount,
                         isBusy: state.isBusy,
                         onModeChanged: (value) =>
                             setState(() => _isGroupMode = value),
@@ -280,12 +284,12 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  child: _LotteryKeyboardSheet(
-                    height: keyboardHeight,
-                    state: state,
-                    visibleTableCount: _selectedTableCount,
+                    child: _LotteryKeyboardSheet(
+                      height: keyboardHeight,
+                      state: state,
+                      visibleTableCount: state.selectedTableCount,
+                    ),
                   ),
-                ),
               ],
             );
           },
@@ -389,40 +393,177 @@ class _TemporaryPaymentPage extends StatelessWidget {
   }
 }
 
-class _CompactTopInfoRow extends StatelessWidget {
-  const _CompactTopInfoRow({
-    required this.nextDrawText,
-    required this.lottoPrizeText,
-    required this.doublePrizeText,
+class _UpcomingLotteryMetadata {
+  const _UpcomingLotteryMetadata({
+    required this.displayDate,
+    required this.displayTime,
+    required this.regularLottoPrize,
+    required this.doubleLottoPrize,
   });
 
-  final String nextDrawText;
-  final String lottoPrizeText;
-  final String doublePrizeText;
+  factory _UpcomingLotteryMetadata.fromMap(Map<String, dynamic> data) {
+    return _UpcomingLotteryMetadata(
+      displayDate: (data['displayDate'] as String?)?.trim(),
+      displayTime: (data['displayTime'] as String?)?.trim(),
+      regularLottoPrize: (data['regularLottoPrize'] as String?)?.trim(),
+      doubleLottoPrize: (data['doubleLottoPrize'] as String?)?.trim(),
+    );
+  }
+
+  final String? displayDate;
+  final String? displayTime;
+  final String? regularLottoPrize;
+  final String? doubleLottoPrize;
+
+  String _formatPrize(String? value, {bool includeUntil = false}) {
+    final String normalized = (value ?? '').trim();
+    if (normalized.isEmpty) {
+      return 'טרם פורסם';
+    }
+    if (includeUntil && !normalized.startsWith('עד')) {
+      return 'עד $normalized';
+    }
+    return normalized;
+  }
+
+  String get tickerText {
+    final String dateLabel = (displayDate?.isNotEmpty ?? false)
+        ? displayDate!
+        : 'תאריך יעדכן בקרוב';
+    final String lottoLabel = _formatPrize(regularLottoPrize);
+    final String doubleLabel = _formatPrize(
+      doubleLottoPrize,
+      includeUntil: true,
+    );
+    return 'ההגרלה הקרובה: $dateLabel | לוטו: $lottoLabel | דאבל: $doubleLabel';
+  }
+}
+
+class _CompactTopInfoRow extends StatefulWidget {
+  const _CompactTopInfoRow();
+
+  @override
+  State<_CompactTopInfoRow> createState() => _CompactTopInfoRowState();
+}
+
+class _CompactTopInfoRowState extends State<_CompactTopInfoRow> {
+  late final Future<_UpcomingLotteryMetadata> _metadataFuture;
+  late final ScrollController _scrollController;
+  bool _scrollLoopStarted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _metadataFuture = _loadMetadata();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<_UpcomingLotteryMetadata> _loadMetadata() async {
+    final HttpsCallable callable =
+        FirebaseFunctions.instanceFor(region: 'us-central1')
+            .httpsCallable('getUpcomingLotteryMetadata');
+    final HttpsCallableResult<dynamic> result = await callable.call();
+    debugPrint(
+      '[HomeTopRow] getUpcomingLotteryMetadata raw payload: ${result.data}',
+    );
+    final Map<String, dynamic> data =
+        Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
+    return _UpcomingLotteryMetadata.fromMap(data);
+  }
+
+  void _ensureScrollLoop() {
+    if (_scrollLoopStarted) {
+      return;
+    }
+    _scrollLoopStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      while (mounted) {
+        if (!_scrollController.hasClients) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          continue;
+        }
+        final double maxExtent = _scrollController.position.maxScrollExtent;
+        if (maxExtent <= 4) {
+          await Future<void>.delayed(const Duration(seconds: 2));
+          continue;
+        }
+        final int durationMs = (maxExtent * 32).round().clamp(10000, 18000);
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        if (!mounted || !_scrollController.hasClients) {
+          return;
+        }
+        await _scrollController.animateTo(
+          maxExtent,
+          duration: Duration(milliseconds: durationMs),
+          curve: Curves.easeInOut,
+        );
+        if (!mounted || !_scrollController.hasClients) {
+          return;
+        }
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted || !_scrollController.hasClients) {
+          return;
+        }
+        _scrollController.jumpTo(0);
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: () {},
-          icon: const Icon(Icons.notifications_none_rounded),
-          tooltip: 'התראות',
-          visualDensity: VisualDensity.compact,
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            '$nextDrawText | 21:00 | לוטו $lottoPrizeText | דאבל $doublePrizeText',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.right,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
+    return FutureBuilder<_UpcomingLotteryMetadata>(
+      future: _metadataFuture,
+      builder: (context, snapshot) {
+        final String tickerText = snapshot.hasData
+            ? snapshot.data!.tickerText
+            : snapshot.hasError
+                ? 'ההגרלה הקרובה: הנתונים אינם זמינים כרגע'
+                : 'ההגרלה הקרובה: טוען נתונים...';
+        if (snapshot.hasData) {
+          _ensureScrollLoop();
+        }
+        return Row(
+          children: [
+            IconButton(
+              onPressed: () {},
+              icon: const Icon(Icons.notifications_none_rounded),
+              tooltip: 'התראות',
+              visualDensity: VisualDensity.compact,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: ClipRect(
+                child: Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    scrollDirection: Axis.horizontal,
+                    physics: const NeverScrollableScrollPhysics(),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        tickerText,
+                        maxLines: 1,
+                        textAlign: TextAlign.right,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ),
+                  ),
                 ),
-          ),
-        ),
-      ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

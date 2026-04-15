@@ -2,7 +2,7 @@ import '../models/lottery_form.dart';
 import '../models/lottery_table.dart';
 
 class LotteryFormService {
-  static const int tableCount = 14;
+  static const int maxTableCount = 14;
   static const int regularCount = 6;
 
   const LotteryFormService();
@@ -12,12 +12,30 @@ class LotteryFormService {
   bool isFormEmpty(LotteryForm form) =>
       form.tables.every((table) => table.isEmpty);
 
-  bool isFormComplete(LotteryForm form) =>
-      form.tables.length == tableCount && form.tables.every(isTableComplete);
+  bool isFormComplete(
+    LotteryForm form, {
+    required int selectedTableCount,
+  }) {
+    if (selectedTableCount <= 0 || selectedTableCount > maxTableCount) {
+      return false;
+    }
+
+    if (form.tables.length < selectedTableCount) {
+      return false;
+    }
+
+    return form.tables
+        .take(selectedTableCount)
+        .every(isTableComplete);
+  }
 
   bool canSave(LotteryForm form) => !isFormEmpty(form);
 
-  bool canSubmit(LotteryForm form) => isFormComplete(form);
+  bool canSubmit(
+    LotteryForm form, {
+    required int selectedTableCount,
+  }) =>
+      isFormComplete(form, selectedTableCount: selectedTableCount);
 
   LotteryTable toggleRegularNumber(LotteryTable table, int number) {
     final List<int> regulars = List<int>.from(table.regularNumbers);
@@ -51,7 +69,11 @@ class LotteryFormService {
     return table.copyWith(strongNumber: number);
   }
 
-  LotteryForm updateTable(LotteryForm form, LotteryTable updatedTable) {
+  LotteryForm updateTable(
+    LotteryForm form,
+    LotteryTable updatedTable, {
+    required int selectedTableCount,
+  }) {
     final List<LotteryTable> updatedTables = form.tables
         .map(
           (table) => table.tableIndex == updatedTable.tableIndex
@@ -62,7 +84,10 @@ class LotteryFormService {
 
     return form.copyWith(
       tables: updatedTables,
-      isComplete: isFormComplete(form.copyWith(tables: updatedTables)),
+      isComplete: isFormComplete(
+        form.copyWith(tables: updatedTables),
+        selectedTableCount: selectedTableCount,
+      ),
     );
   }
 }

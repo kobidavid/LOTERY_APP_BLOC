@@ -5,6 +5,7 @@ import '../../models/lottery_form.dart';
 class LotteryFormState extends Equatable {
   const LotteryFormState({
     required this.form,
+    required this.selectedTableCount,
     required this.activeRowIndex,
     required this.maxUnlockedRowIndex,
     required this.isEditingSavedRecord,
@@ -14,6 +15,7 @@ class LotteryFormState extends Equatable {
   });
 
   final LotteryForm form;
+  final int selectedTableCount;
   final int activeRowIndex;
   final int maxUnlockedRowIndex;
   final bool isEditingSavedRecord;
@@ -24,6 +26,7 @@ class LotteryFormState extends Equatable {
   factory LotteryFormState.initial(String userId) {
     return LotteryFormState(
       form: LotteryForm.empty(userId),
+      selectedTableCount: 14,
       activeRowIndex: 0,
       maxUnlockedRowIndex: 0,
       isEditingSavedRecord: false,
@@ -32,6 +35,7 @@ class LotteryFormState extends Equatable {
 
   LotteryFormState copyWith({
     LotteryForm? form,
+    int? selectedTableCount,
     int? activeRowIndex,
     int? maxUnlockedRowIndex,
     bool? isEditingSavedRecord,
@@ -43,6 +47,7 @@ class LotteryFormState extends Equatable {
   }) {
     return LotteryFormState(
       form: form ?? this.form,
+      selectedTableCount: selectedTableCount ?? this.selectedTableCount,
       activeRowIndex: activeRowIndex ?? this.activeRowIndex,
       maxUnlockedRowIndex: maxUnlockedRowIndex ?? this.maxUnlockedRowIndex,
       isEditingSavedRecord: isEditingSavedRecord ?? this.isEditingSavedRecord,
@@ -56,6 +61,7 @@ class LotteryFormState extends Equatable {
   @override
   List<Object?> get props => [
         form,
+        selectedTableCount,
         activeRowIndex,
         maxUnlockedRowIndex,
         isEditingSavedRecord,

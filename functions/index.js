@@ -15,7 +15,7 @@ const PAIS_CURRENT_LOTTO_URL =
 const HTTP_TIMEOUT_MS = 5000;
 const HTTP_RETRY_ATTEMPTS = 3;
 const ADMIN_SECRET_HEADER = "x-admin-secret";
-const EXPECTED_TABLE_COUNT = 14;
+const MAX_TABLE_COUNT = 14;
 const MAX_TABLES_JSON_LENGTH = 12000;
 const RESULT_STATUS = {
   waiting: "waiting_for_results",
@@ -170,6 +170,21 @@ exports.submitLotteryForm = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError(
         "internal",
         "Lottery form submission failed.",
+    );
+  }
+});
+
+exports.getUpcomingLotteryMetadata = functions.https.onCall(async () => {
+  try {
+    return await fetchNextLotteryMetadata();
+  } catch (error) {
+    console.error("getUpcomingLotteryMetadata failed", error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError(
+        "internal",
+        "Upcoming lottery metadata lookup failed.",
     );
   }
 });
@@ -712,6 +727,11 @@ async function fetchNextLotteryMetadata() {
         nextLottery.displayDate,
         nextLottery.displayTime,
     );
+    const displayDate = asTrimmedString(nextLottery.displayDate);
+    const displayTime = asTrimmedString(nextLottery.displayTime);
+    const regularLottoPrize = formatUpcomingFirstPrize(nextLottery.firstPrize);
+    const doubleLottoPrize =
+        deriveDoublePrizeTextFromFirstPrize(regularLottoPrize);
 
     if (!Number.isFinite(lotteryId) || !salesCloseAt) {
       throw new Error("Pais next lottery payload was missing required fields.");
@@ -723,10 +743,20 @@ async function fetchNextLotteryMetadata() {
         nextLottery.displayDate,
         nextLottery.displayTime,
     );
+    console.log("upcoming lottery final response", {
+      displayDate,
+      firstPrize: nextLottery.firstPrize,
+      regularLottoPrize,
+      doubleLottoPrize,
+    });
 
     return {
       lotteryId,
       salesCloseAt,
+      displayDate,
+      displayTime,
+      regularLottoPrize,
+      doubleLottoPrize,
     };
   } catch (error) {
     console.error("fetchNextLotteryMetadata failed", error);
@@ -819,6 +849,115 @@ async function fetchLotteryResult(lotteryId) {
     console.error("fetchLotteryResult failed", lotteryId, error);
     throw error;
   }
+}
+
+function extractUpcomingPrizeValue(payload, candidateKeys) {
+  for (const key of candidateKeys) {
+    const value = asTrimmedString(payload[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  for (const [key, rawValue] of Object.entries(payload)) {
+    const normalizedSourceKey = String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
+    const matchesCandidate = candidateKeys.some((candidate) => {
+      const normalizedCandidate = String(candidate).toLowerCase().replace(/[^a-z0-9]/g, "");
+      return normalizedSourceKey.includes(normalizedCandidate) ||
+        normalizedCandidate.includes(normalizedSourceKey);
+    });
+    if (!matchesCandidate) {
+      continue;
+    }
+
+    const value = asTrimmedString(rawValue);
+    if (value) {
+      return value;
+    }
+  }
+
+  const nestedValue = extractUpcomingPrizeValueFromNested(payload, candidateKeys);
+  if (nestedValue) {
+    return nestedValue;
+  }
+
+  return null;
+}
+
+function deriveDoublePrizeTextFromFirstPrize(firstPrizeText) {
+  const normalized = asTrimmedString(firstPrizeText);
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/([\d.,]+)/);
+  if (!match) {
+    return null;
+  }
+
+  const numericPortion = Number(match[1].replace(/,/g, ""));
+  if (!Number.isFinite(numericPortion)) {
+    return null;
+  }
+
+  const doubled = numericPortion * 2;
+  const suffix = normalized.replace(match[1], "").trim();
+  const formattedValue = Number.isInteger(doubled)
+    ? String(doubled)
+    : doubled.toFixed(1).replace(/\.0$/, "");
+
+  return suffix ? `${formattedValue} ${suffix}` : formattedValue;
+}
+
+function formatUpcomingFirstPrize(rawValue) {
+  const numericValue = Number(rawValue);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return null;
+  }
+
+  const millions = numericValue / 1000000;
+  const formattedMillions = Number.isInteger(millions)
+    ? String(millions)
+    : millions.toFixed(1).replace(/\.0$/, "");
+
+  return `${formattedMillions} מיליון`;
+}
+
+function extractUpcomingPrizeValueFromNested(payload, candidateKeys) {
+  const queue = [payload];
+  const visited = new Set();
+  const normalizedCandidates = candidateKeys.map((candidate) =>
+    String(candidate).toLowerCase().replace(/[^a-z0-9]/g, ""),
+  );
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    for (const [key, rawValue] of Object.entries(current)) {
+      const normalizedSourceKey = String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
+      const matchesCandidate = normalizedCandidates.some((candidate) =>
+        normalizedSourceKey.includes(candidate) ||
+        candidate.includes(normalizedSourceKey),
+      );
+
+      if (matchesCandidate) {
+        const value = asTrimmedString(rawValue);
+        if (value) {
+          return value;
+        }
+      }
+
+      if (rawValue && typeof rawValue === "object") {
+        queue.push(rawValue);
+      }
+    }
+  }
+
+  return null;
 }
 
 function parseWinningNumbers($) {
@@ -1283,10 +1422,12 @@ function validateSubmitPayload(data) {
     );
   }
 
-  if (!Array.isArray(data.tables) || data.tables.length !== EXPECTED_TABLE_COUNT) {
+  if (!Array.isArray(data.tables) ||
+      data.tables.length < 1 ||
+      data.tables.length > MAX_TABLE_COUNT) {
     throw new functions.https.HttpsError(
         "invalid-argument",
-        `Exactly ${EXPECTED_TABLE_COUNT} tables are required.`,
+        `Between 1 and ${MAX_TABLE_COUNT} tables are required.`,
     );
   }
 
@@ -1484,7 +1625,8 @@ function buildTicketFingerprintSource({lotteryId, tables}) {
 
 function isSubmittedFormValid(tables) {
   return Array.isArray(tables) &&
-    tables.length === EXPECTED_TABLE_COUNT &&
+    tables.length >= 1 &&
+    tables.length <= MAX_TABLE_COUNT &&
     tables.every((table) => isTableComplete(table));
 }
 

@@ -32,8 +32,35 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     emit(state.copyWith(clearError: true, clearSuccess: true));
   }
 
+  void setSelectedTableCount(int count) {
+    final int normalizedCount = count.clamp(1, state.form.tables.length);
+    final int clampedActiveIndex = state.activeRowIndex >= normalizedCount
+        ? normalizedCount - 1
+        : state.activeRowIndex;
+    final int clampedMaxUnlocked = state.maxUnlockedRowIndex >= normalizedCount
+        ? normalizedCount - 1
+        : state.maxUnlockedRowIndex;
+
+    emit(
+      state.copyWith(
+        selectedTableCount: normalizedCount,
+        activeRowIndex: clampedActiveIndex,
+        maxUnlockedRowIndex: clampedMaxUnlocked,
+        form: state.form.copyWith(
+          isComplete: _formService.isFormComplete(
+            state.form,
+            selectedTableCount: normalizedCount,
+          ),
+        ),
+        clearError: true,
+        clearSuccess: true,
+      ),
+    );
+  }
+
   void selectRow(int rowIndex) {
-    if (rowIndex > state.maxUnlockedRowIndex) {
+    if (rowIndex > state.maxUnlockedRowIndex ||
+        rowIndex >= state.selectedTableCount) {
       return;
     }
     emit(state.copyWith(activeRowIndex: rowIndex, clearError: true));
@@ -41,14 +68,16 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
 
   void handleKeyboardPageChanged(int rowIndex) {
     if (rowIndex == state.activeRowIndex ||
-        rowIndex > state.maxUnlockedRowIndex) {
+        rowIndex > state.maxUnlockedRowIndex ||
+        rowIndex >= state.selectedTableCount) {
       return;
     }
     emit(state.copyWith(activeRowIndex: rowIndex, clearError: true));
   }
 
   bool canSwipeForward() {
-    if (state.activeRowIndex >= state.maxUnlockedRowIndex) {
+    if (state.activeRowIndex >= state.maxUnlockedRowIndex ||
+        state.activeRowIndex >= state.selectedTableCount - 1) {
       return false;
     }
 
@@ -90,11 +119,12 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
   void completeRemainingTables() {
     final LotteryForm updated = _randomizerService.completeRemainingTables(
       state.form,
+      tableCount: state.selectedTableCount,
     );
     emit(
       state.copyWith(
         form: updated,
-        maxUnlockedRowIndex: 13,
+        maxUnlockedRowIndex: state.selectedTableCount - 1,
         isEditingSavedRecord: false,
         successMessage: 'שאר הטבלאות הושלמו',
         clearError: true,
@@ -104,12 +134,15 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
 
   void generateFullRandomForm() {
     final LotteryForm updated =
-        _randomizerService.generateFullRandomForm(state.form);
+        _randomizerService.generateFullRandomForm(
+      state.form,
+      tableCount: state.selectedTableCount,
+    );
     emit(
       state.copyWith(
         form: updated,
         activeRowIndex: 0,
-        maxUnlockedRowIndex: 13,
+        maxUnlockedRowIndex: state.selectedTableCount - 1,
         isEditingSavedRecord: false,
         successMessage: 'נוצר טופס לוטומט מלא',
         clearError: true,
@@ -120,6 +153,7 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
   void clearForm() {
     emit(
       LotteryFormState.initial(state.form.userId).copyWith(
+        selectedTableCount: state.selectedTableCount,
         successMessage: 'הטופס נוקה',
       ),
     );
@@ -138,8 +172,11 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     emit(
       state.copyWith(
         form: formForEditing,
+        selectedTableCount: state.selectedTableCount,
         activeRowIndex: 0,
-        maxUnlockedRowIndex: 13,
+        maxUnlockedRowIndex: state.selectedTableCount > 0
+            ? state.selectedTableCount - 1
+            : 0,
         isEditingSavedRecord: isSavedRecord,
         successMessage: 'הטופס נטען לעריכה',
         clearError: true,
@@ -177,7 +214,10 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
 
       final LotteryForm candidate = state.form.copyWith(
         status: LotteryFormStatus.saved,
-        isComplete: _formService.isFormComplete(state.form),
+        isComplete: _formService.isFormComplete(
+          state.form,
+          selectedTableCount: state.selectedTableCount,
+        ),
         savedAt: DateTime.now(),
         clearSubmittedAt: true,
         clearId: true,
@@ -220,7 +260,10 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
   }
 
   Future<void> submitForm() async {
-    if (!_formService.canSubmit(state.form)) {
+    if (!_formService.canSubmit(
+      state.form,
+      selectedTableCount: state.selectedTableCount,
+    )) {
       emit(
         state.copyWith(
           errorMessage: 'ניתן לשלוח רק טופס מלא',
@@ -235,6 +278,7 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     try {
       final LotteryForm submitted = await _formRepository.submitForm(
         state.form.copyWith(
+          tables: state.form.tables.take(state.selectedTableCount).toList(),
           status: LotteryFormStatus.submitted,
           isComplete: true,
           clearSavedAt: true,
@@ -326,7 +370,10 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
       return null;
     }
 
-    if (!_formService.canSubmit(state.form)) {
+    if (!_formService.canSubmit(
+      state.form,
+      selectedTableCount: state.selectedTableCount,
+    )) {
       emit(
         state.copyWith(
           errorMessage: 'ניתן ליצור קבוצה רק מטופס מלא',
@@ -341,6 +388,7 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     try {
       final LotteryGroup group = await _formRepository.createGroupFromForm(
         form: state.form.copyWith(
+          tables: state.form.tables.take(state.selectedTableCount).toList(),
           isComplete: true,
         ),
         groupName: trimmedName,
@@ -370,10 +418,15 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     bool advanceIfCompleted = false,
   }) {
     final LotteryForm updatedForm =
-        _formService.updateTable(state.form, updatedTable);
+        _formService.updateTable(
+      state.form,
+      updatedTable,
+      selectedTableCount: state.selectedTableCount,
+    );
 
     int maxUnlockedRowIndex = state.maxUnlockedRowIndex;
-    if (updatedTable.isComplete && updatedTable.tableIndex < 14) {
+    if (updatedTable.isComplete &&
+        updatedTable.tableIndex < state.selectedTableCount) {
       maxUnlockedRowIndex = maxUnlockedRowIndex < updatedTable.tableIndex
           ? updatedTable.tableIndex
           : maxUnlockedRowIndex;
@@ -382,7 +435,7 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     int activeRowIndex = state.activeRowIndex;
     if (advanceIfCompleted &&
         updatedTable.isComplete &&
-        activeRowIndex < 13 &&
+        activeRowIndex < state.selectedTableCount - 1 &&
         activeRowIndex + 1 <= maxUnlockedRowIndex) {
       activeRowIndex += 1;
     }
