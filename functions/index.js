@@ -189,6 +189,106 @@ exports.getUpcomingLotteryMetadata = functions.https.onCall(async () => {
   }
 });
 
+exports.getReceiptOpenTarget = functions.https.onCall(async (data, context) => {
+  try {
+    const authenticatedUserId = await resolveAuthenticatedUserId(data, context);
+    if (!authenticatedUserId) {
+      throw new functions.https.HttpsError(
+          "unauthenticated",
+          "Authentication is required.",
+      );
+    }
+
+    const ownerUserId = asTrimmedString(data?.ownerUserId);
+    const formId = asTrimmedString(data?.formId);
+    if (!ownerUserId || !formId) {
+      throw new functions.https.HttpsError(
+          "invalid-argument",
+          "ownerUserId and formId are required.",
+      );
+    }
+
+    const formRef = firestore
+        .collection("users")
+        .doc(ownerUserId)
+        .collection("forms")
+        .doc(formId);
+    const formSnapshot = await formRef.get();
+    if (!formSnapshot.exists) {
+      throw new functions.https.HttpsError(
+          "not-found",
+          "הטופס לא נמצא.",
+      );
+    }
+
+    const formData = formSnapshot.data() || {};
+    const groupId = asTrimmedString(formData.groupId);
+    const canRead = authenticatedUserId === ownerUserId ||
+      (groupId &&
+        (await firestore
+            .collection("lottery_groups")
+            .doc(groupId)
+            .collection("memberships")
+            .doc(authenticatedUserId)
+            .get()).exists);
+
+    if (!canRead) {
+      throw new functions.https.HttpsError(
+          "permission-denied",
+          "אין הרשאה לצפות בקבלה עבור טופס זה.",
+      );
+    }
+
+    const directTarget = await resolveReceiptOpenTargetFromData(formData);
+    if (directTarget) {
+      return {
+        matched: asTrimmedString(formData.stationReceiptMatchStatus) === "matched",
+        targetUrl: directTarget.targetUrl,
+        targetStoragePath: directTarget.targetStoragePath,
+        source: "form",
+      };
+    }
+
+    const intakeId = asTrimmedString(formData.stationReceiptIntakeId);
+    if (!intakeId) {
+      return {
+        matched: asTrimmedString(formData.stationReceiptMatchStatus) === "matched",
+        targetUrl: null,
+        targetStoragePath: null,
+        source: null,
+      };
+    }
+
+    const intakeSnapshot = await firestore.collection("receipt_intake").doc(intakeId).get();
+    if (!intakeSnapshot.exists) {
+      return {
+        matched: asTrimmedString(formData.stationReceiptMatchStatus) === "matched",
+        targetUrl: null,
+        targetStoragePath: null,
+        source: null,
+      };
+    }
+
+    const intakeData = intakeSnapshot.data() || {};
+    const intakeTarget = await resolveReceiptOpenTargetFromData(intakeData);
+    return {
+      matched: asTrimmedString(formData.stationReceiptMatchStatus) === "matched",
+      targetUrl: intakeTarget ? intakeTarget.targetUrl : null,
+      targetStoragePath: intakeTarget ? intakeTarget.targetStoragePath : null,
+      source: intakeTarget ? "receipt_intake" : null,
+    };
+  } catch (error) {
+    console.error("getReceiptOpenTarget failed", error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError(
+        "internal",
+        "Receipt open target lookup failed.",
+    );
+  }
+});
+
 exports.chargeUserWallet = functions.https.onCall(async (data, context) => {
   try {
     const authenticatedUserId = await resolveAuthenticatedUserId(data, context);
@@ -599,6 +699,88 @@ async function resolveAuthenticatedUserId(data, context) {
     hasIdToken: typeof idToken === "string" && idToken.trim().length > 0,
   });
   return null;
+}
+
+async function resolveReceiptOpenTargetFromData(rawData) {
+  const directUrl = firstValidReceiptUrl(rawData);
+  if (directUrl) {
+    return {
+      targetUrl: directUrl,
+      targetStoragePath: firstReceiptStoragePath(rawData),
+    };
+  }
+
+  const storagePath = firstReceiptStoragePath(rawData);
+  if (!storagePath) {
+    return null;
+  }
+
+  const signedUrl = await buildSignedStorageUrl(storagePath);
+  if (!signedUrl) {
+    return null;
+  }
+
+  return {
+    targetUrl: signedUrl,
+    targetStoragePath: storagePath,
+  };
+}
+
+function firstValidReceiptUrl(rawData) {
+  const candidateKeys = [
+    "stationReceiptUrl",
+    "receiptUrl",
+    "uploadedReceiptUrl",
+    "downloadUrl",
+  ];
+  for (const key of candidateKeys) {
+    const value = asTrimmedString(rawData?.[key]);
+    if (isValidHttpUrl(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function firstReceiptStoragePath(rawData) {
+  const candidateKeys = [
+    "stationReceiptStoragePath",
+    "receiptStoragePath",
+    "uploadedReceiptStoragePath",
+    "storagePath",
+  ];
+  for (const key of candidateKeys) {
+    const value = asTrimmedString(rawData?.[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function buildSignedStorageUrl(storagePath) {
+  try {
+    const [signedUrl] = await admin.storage().bucket().file(storagePath).getSignedUrl({
+      action: "read",
+      expires: "2100-01-01",
+    });
+    return isValidHttpUrl(signedUrl) ? signedUrl : null;
+  } catch (error) {
+    console.error("buildSignedStorageUrl failed", {storagePath, error});
+    return null;
+  }
+}
+
+function isValidHttpUrl(value) {
+  if (!value) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch (_) {
+    return false;
+  }
 }
 
 exports.checkLotteryResults = functions.pubsub

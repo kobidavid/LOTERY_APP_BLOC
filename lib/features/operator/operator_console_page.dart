@@ -541,7 +541,7 @@ class _OperatorConsolePageState extends State<OperatorConsolePage>
         'submissionType': 'personal',
         'dispatchStatus': 'submitted_to_station',
         'lotteryId': 3890,
-        'ticketFingerprint': 'MANUAL_TEST_3890',
+        'ticketFingerprint': ' ',
         'ticketFingerprintSource': '3890-2-030809111925-5-021112152326-1',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),

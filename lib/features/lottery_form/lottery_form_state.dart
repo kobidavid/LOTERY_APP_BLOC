@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../models/lottery_form.dart';
+import '../../models/lottery_table.dart';
 
 class LotteryFormState extends Equatable {
   const LotteryFormState({
@@ -69,4 +70,44 @@ class LotteryFormState extends Equatable {
         errorMessage,
         successMessage,
       ];
+
+  List<LotteryTable> get visibleTables =>
+      form.tables.take(selectedTableCount).toList(growable: false);
+
+  int? get firstEmptyRowIndex {
+    for (int index = 0; index < visibleTables.length; index += 1) {
+      if (visibleTables[index].isEmpty) {
+        return index;
+      }
+    }
+    return null;
+  }
+
+  int? get firstGapRowIndex {
+    int? firstEmpty;
+    for (int index = 0; index < visibleTables.length; index += 1) {
+      final LotteryTable table = visibleTables[index];
+      if (table.isEmpty) {
+        firstEmpty ??= index;
+        continue;
+      }
+      if (firstEmpty != null) {
+        return firstEmpty;
+      }
+    }
+    return null;
+  }
+
+  bool get hasGap => firstGapRowIndex != null;
+
+  bool isRowInteractable(int rowIndex) {
+    if (rowIndex < 0 || rowIndex >= selectedTableCount) {
+      return false;
+    }
+    final LotteryTable table = form.tables[rowIndex];
+    if (!table.isEmpty) {
+      return true;
+    }
+    return firstEmptyRowIndex == rowIndex;
+  }
 }

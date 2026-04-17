@@ -1,11 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../form_presentation_utils.dart';
-import '../payments/payment_options_page.dart';
 import '../../models/lottery_group.dart';
 import '../../models/lottery_group_membership.dart';
 import '../../repositories/lottery_group_repository.dart';
@@ -42,6 +42,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _isUpdatingDispatch = false;
   bool _isCancelling = false;
   bool _showDebug = false;
+  String? _receiptLookupCacheKey;
+  Future<_ResolvedReceiptOpenTarget?>? _receiptLookupFuture;
 
   @override
   void dispose() {
@@ -354,47 +356,94 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
-  Future<void> _openPaymentFlow({
+  Future<void> _confirmAndFinalizeGroup(String groupId) async {
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('סיום בחירת משתתפים'),
+            content: const Text(
+              'האם אתה בטוח שברצונך לסיים את בחירת המשתתפים? לא ניתן יהיה לשנות לאחר מכן.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('ביטול'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('אישור'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) {
+      return;
+    }
+
+    await _finalizeGroup(groupId);
+  }
+
+  Future<void> _payGroupViaWallet({
     required LotteryGroup group,
     required LotteryGroupMembership membership,
   }) async {
     final num payableAmount = membership.costShare ?? group.currentPerParticipantCost;
-    await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => PaymentOptionsPage(
-          userId: widget.currentUserId,
-          amount: payableAmount,
-          title: 'תשלום לקבוצה',
-          onWalletPayment: () async {
-            setState(() => _isPaying = true);
-            try {
-              await widget.repository.chargeUserWalletForGroup(
-                groupId: group.groupId,
-                userId: widget.currentUserId,
-                amount: payableAmount,
-              );
-            } finally {
-              if (mounted) {
-                setState(() => _isPaying = false);
-              }
-            }
-          },
-          onExternalPayment: () async {
-            setState(() => _isPaying = true);
-            try {
-              await widget.repository.simulatePayment(
-                groupId: group.groupId,
-                userId: widget.currentUserId,
-              );
-            } finally {
-              if (mounted) {
-                setState(() => _isPaying = false);
-              }
-            }
-          },
-        ),
-      ),
-    );
+    setState(() => _isPaying = true);
+    try {
+      await widget.repository.chargeUserWalletForGroup(
+        groupId: group.groupId,
+        userId: widget.currentUserId,
+        amount: payableAmount,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('התשלום בוצע מהיתרה.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isPaying = false);
+      }
+    }
+  }
+
+  Future<void> _payGroupExternally({
+    required LotteryGroup group,
+  }) async {
+    setState(() => _isPaying = true);
+    try {
+      await widget.repository.simulatePayment(
+        groupId: group.groupId,
+        userId: widget.currentUserId,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('התשלום החיצוני נקלט בהצלחה.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isPaying = false);
+      }
+    }
   }
 
   Future<void> _submitGroup({
@@ -545,52 +594,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     _openGroupSnapshotPreview(group);
   }
 
-  Widget _buildTicketPreviewCard(LotteryGroup group) {
-    final String actionLabel =
-        group.status == LotteryGroupStatus.submitted &&
-                (group.printReadyUrl?.isNotEmpty ?? false)
-            ? 'צפה בקובץ להדפסה'
-            : 'צפה בטופס';
-
-    final String? submittedFormId = group.submittedFormId;
-    if (submittedFormId == null || submittedFormId.isEmpty) {
-      return LotteryTicketPreviewCard(
-        filledTablesCount: group.populatedTableCount,
-        baseTicketCost: group.baseTicketCost,
-        isFullTicket: group.isComplete,
-        actionLabel: actionLabel,
-        onOpenFullScreen: () => _openPrimaryTicketView(group),
-      );
-    }
-
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(group.creatorUserId)
-          .collection('forms')
-          .doc(submittedFormId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        final Map<String, dynamic> rawData =
-            snapshot.data?.data() ?? const <String, dynamic>{};
-        final String? receiptUrl = extractReceiptUrl(rawData);
-        final bool hasReceipt = receiptUrl != null;
-
-        return LotteryTicketPreviewCard(
-          filledTablesCount: group.populatedTableCount,
-          baseTicketCost: group.baseTicketCost,
-          isFullTicket: group.isComplete,
-          actionLabel: actionLabel,
-          onOpenFullScreen: () => _openPrimaryTicketView(group),
-          onSecondaryAction: hasReceipt
-              ? () => _openReceiptUrl(receiptUrl)
-              : null,
-          secondaryActionLabel: hasReceipt ? 'צפה בקבלה' : null,
-        );
-      },
-    );
-  }
-
   Widget _buildProgressTracker(LotteryGroup group) {
     final String? submittedFormId = group.submittedFormId;
     if (submittedFormId == null || submittedFormId.isEmpty) {
@@ -641,14 +644,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     required int paidCount,
     required String currentUserDisplayName,
   }) {
-    final String? submittedFormId = group.submittedFormId;
-    if (submittedFormId == null || submittedFormId.isEmpty) {
+    final String formDocumentId = (group.submittedFormId?.isNotEmpty ?? false)
+        ? group.submittedFormId!
+        : group.sourceFormId;
+    if (formDocumentId.isEmpty) {
       return _buildDetailsContent(
         group: group,
         creatorDisplayName: creatorDisplayName,
         paidParticipantSetIsValid: paidParticipantSetIsValid,
         currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
         trackerFormState: const _GroupTrackerSubmittedFormState.empty(),
+        formData: const <String, dynamic>{},
+        receiptTarget: null,
         showInviteButton: showInviteButton,
         showFinalizeButton: showFinalizeButton,
         canFinalize: canFinalize,
@@ -674,34 +681,79 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           .collection('users')
           .doc(group.creatorUserId)
           .collection('forms')
-          .doc(submittedFormId)
+          .doc(formDocumentId)
           .snapshots(),
       builder: (context, snapshot) {
         final Map<String, dynamic> rawData =
             snapshot.data?.data() ?? const <String, dynamic>{};
-        return _buildDetailsContent(
-          group: group,
-          creatorDisplayName: creatorDisplayName,
-          paidParticipantSetIsValid: paidParticipantSetIsValid,
-          currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
-          trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
-          showInviteButton: showInviteButton,
-          showFinalizeButton: showFinalizeButton,
-          canFinalize: canFinalize,
-          showSubmitButton: showSubmitButton,
-          canSubmit: canSubmit,
-          showCancelButton: showCancelButton,
-          currentUserCanSimulatePayment: currentUserCanSimulatePayment,
-          myMembership: myMembership,
-          memberships: memberships,
-          canEditResponse: canEditResponse,
-          interestedCount: interestedCount,
-          finalizableCount: finalizableCount,
-          estimatedPerParticipantCost: estimatedPerParticipantCost,
-          paymentReadinessMessage: paymentReadinessMessage,
-          yourShareLabel: yourShareLabel,
-          paidCount: paidCount,
-          currentUserDisplayName: currentUserDisplayName,
+        final _ResolvedReceiptOpenTarget? directReceiptTarget =
+            _resolvedReceiptTargetFromRawData(rawData);
+        final bool requiresReceiptLookup =
+            _hasMatchedReceipt(rawData) && directReceiptTarget == null;
+
+        if (!requiresReceiptLookup) {
+          return _buildDetailsContent(
+            group: group,
+            creatorDisplayName: creatorDisplayName,
+            paidParticipantSetIsValid: paidParticipantSetIsValid,
+            currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+            trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
+            formData: rawData,
+            receiptTarget: directReceiptTarget,
+            showInviteButton: showInviteButton,
+            showFinalizeButton: showFinalizeButton,
+            canFinalize: canFinalize,
+            showSubmitButton: showSubmitButton,
+            canSubmit: canSubmit,
+            showCancelButton: showCancelButton,
+            currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+            myMembership: myMembership,
+            memberships: memberships,
+            canEditResponse: canEditResponse,
+            interestedCount: interestedCount,
+            finalizableCount: finalizableCount,
+            estimatedPerParticipantCost: estimatedPerParticipantCost,
+            paymentReadinessMessage: paymentReadinessMessage,
+            yourShareLabel: yourShareLabel,
+            paidCount: paidCount,
+            currentUserDisplayName: currentUserDisplayName,
+          );
+        }
+
+        return FutureBuilder<_ResolvedReceiptOpenTarget?>(
+          future: _lookupReceiptOpenTarget(
+            ownerUserId: group.creatorUserId,
+            formId: formDocumentId,
+            formData: rawData,
+          ),
+          builder: (context, receiptSnapshot) {
+            return _buildDetailsContent(
+              group: group,
+              creatorDisplayName: creatorDisplayName,
+              paidParticipantSetIsValid: paidParticipantSetIsValid,
+              currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+              trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
+              formData: rawData,
+              receiptTarget: receiptSnapshot.data,
+              showInviteButton: showInviteButton,
+              showFinalizeButton: showFinalizeButton,
+              canFinalize: canFinalize,
+              showSubmitButton: showSubmitButton,
+              canSubmit: canSubmit,
+              showCancelButton: showCancelButton,
+              currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+              myMembership: myMembership,
+              memberships: memberships,
+              canEditResponse: canEditResponse,
+              interestedCount: interestedCount,
+              finalizableCount: finalizableCount,
+              estimatedPerParticipantCost: estimatedPerParticipantCost,
+              paymentReadinessMessage: paymentReadinessMessage,
+              yourShareLabel: yourShareLabel,
+              paidCount: paidCount,
+              currentUserDisplayName: currentUserDisplayName,
+            );
+          },
         );
       },
     );
@@ -713,6 +765,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     required bool paidParticipantSetIsValid,
     required String currentCostIfSubmittedNowLabel,
     required _GroupTrackerSubmittedFormState trackerFormState,
+    required Map<String, dynamic> formData,
+    required _ResolvedReceiptOpenTarget? receiptTarget,
     required bool showInviteButton,
     required bool showFinalizeButton,
     required bool canFinalize,
@@ -736,21 +790,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       paidParticipantSetIsValid: paidParticipantSetIsValid,
       trackerFormState: trackerFormState,
     );
-    final String submissionMessage;
-    if (group.status == LotteryGroupStatus.submitted) {
-      submissionMessage = _dispatchStatusDescription(
-        trackerFormState: trackerFormState,
-      );
-    } else if (group.status == LotteryGroupStatus.cancelled) {
-      submissionMessage =
-          'הטופס הקבוצתי בוטל. רק מי שכבר שילם זוכה חזרה לארנק.';
-    } else if (paidParticipantSetIsValid) {
-      submissionMessage =
-          'ניתן כבר לשלוח לפי המשלמים הנוכחיים. אם שולחים עכשיו, כל משלם ישלם $currentCostIfSubmittedNowLabel.';
-    } else {
-      submissionMessage =
-          'ממתינים לתשלומים נוספים לפני שניתן יהיה לשלוח את הטופס.';
-    }
     final bool showPrintedButton = group.creatorUserId == widget.currentUserId &&
         group.status == LotteryGroupStatus.submitted &&
         trackerFormState.effectiveDispatchStatus ==
@@ -760,35 +799,28 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             group.status == LotteryGroupStatus.submitted &&
             trackerFormState.effectiveDispatchStatus ==
                 LotteryGroupRepository.dispatchStatusPrinted;
+    final bool showOutcomeCard =
+        group.status == LotteryGroupStatus.submitted ||
+        group.status == LotteryGroupStatus.cancelled;
+    final bool canOpenReceipt =
+        _hasMatchedReceipt(formData) && receiptTarget != null;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _GroupHeaderCard(
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+        _GroupInfoPanel(
           groupName: group.groupName,
           creatorDisplayName: creatorDisplayName,
           statusLabel: groupStatusLabel,
-        ),
-        const SizedBox(height: 12),
-        _buildProgressTracker(group),
-        const SizedBox(height: 12),
-        _buildTicketPreviewCard(group),
-        const SizedBox(height: 12),
-        _GroupOutcomeCard(
-          group: group,
-          currentUserId: widget.currentUserId,
-          creatorDisplayName: creatorDisplayName,
-        ),
-        const SizedBox(height: 12),
-        _CompactSummaryCard(
-          filledTablesCount: group.populatedTableCount,
-          paidCount: paidCount,
-          yourShareLabel: yourShareLabel,
-        ),
-        const SizedBox(height: 12),
-        _StatusBanner(message: submissionMessage),
-        const SizedBox(height: 12),
-        _ActionBarCard(
+          ticketTypeLabel: _ticketTypeLabel(formData),
+          lotteryNumber: formData['lotteryId']?.toString(),
+          tablesCount: group.populatedTableCount,
+          totalCost: group.baseTicketCost,
+          onOpenForm: () => _openPrimaryTicketView(group),
+          onOpenReceipt:
+              canOpenReceipt ? () => _openReceiptTarget(receiptTarget) : null,
           showInviteButton: showInviteButton,
           onInvite: showInviteButton
               ? (buttonContext) => _shareInvite(
@@ -799,14 +831,19 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           showFinalizeButton: showFinalizeButton,
           canFinalize: canFinalize,
           isFinalizing: _isFinalizing,
-          onFinalize: () => _finalizeGroup(group.groupId),
+          onFinalize: () => _confirmAndFinalizeGroup(group.groupId),
+          showDeleteButton: showCancelButton,
+          isCancelling: _isCancelling,
+          onDelete: () => _confirmAndCancelGroup(group),
+        ),
+        const SizedBox(height: 12),
+        _buildProgressTracker(group),
+        const SizedBox(height: 12),
+        _WorkflowActionsRow(
           showSubmitButton: showSubmitButton,
           canSubmit: canSubmit,
           isSubmitting: _isSubmitting,
           onSubmit: () => _submitGroup(groupId: group.groupId),
-          showCancelButton: showCancelButton,
-          isCancelling: _isCancelling,
-          onCancel: () => _confirmAndCancelGroup(group),
           showPrintedButton: showPrintedButton,
           showSubmittedToStationButton: showSubmittedToStationButton,
           isUpdatingDispatch: _isUpdatingDispatch,
@@ -819,26 +856,17 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             dispatchStatus:
                 LotteryGroupRepository.dispatchStatusSubmittedToStation,
           ),
-          showPayButton: currentUserCanSimulatePayment,
-          isPaying: _isPaying,
-          onSimulatePayment: myMembership == null
-              ? null
-              : () => _openPaymentFlow(
-                    group: group,
-                    membership: myMembership,
-                  ),
         ),
-        const SizedBox(height: 12),
-        _ParticipantsCard(
-          memberships: memberships,
-          group: group,
-          currentUserId: widget.currentUserId,
-          currentUserDisplayName: currentUserDisplayName,
-          creatorUserId: group.creatorUserId,
-          showDebug: _showDebug,
-        ),
-        if (canEditResponse) ...[
+        if (showOutcomeCard) ...[
           const SizedBox(height: 12),
+          _GroupOutcomeCard(
+            group: group,
+            currentUserId: widget.currentUserId,
+            creatorDisplayName: creatorDisplayName,
+          ),
+        ],
+        const SizedBox(height: 12),
+        if (canEditResponse) ...[
           _MyResponseCard(
             membership: myMembership,
             group: group,
@@ -846,6 +874,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             selectedStatus: _selectedStatus,
             minimumController: _minimumController,
             isSaving: _isSaving,
+            isPaying: _isPaying,
             onStatusChanged: (status) {
               setState(() => _selectedStatus = status);
             },
@@ -853,7 +882,40 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 ? null
                 : () => _saveMyResponse(groupId: group.groupId),
             onSimulatePayment: null,
-            isPaying: _isPaying,
+            showDebug: _showDebug,
+          ),
+          const SizedBox(height: 12),
+          _ParticipantsCard(
+            memberships: memberships,
+            group: group,
+            currentUserId: widget.currentUserId,
+            currentUserDisplayName: currentUserDisplayName,
+            creatorUserId: group.creatorUserId,
+            showDebug: _showDebug,
+          ),
+        ] else ...[
+          if (myMembership != null &&
+              group.status != LotteryGroupStatus.submitted &&
+              group.status != LotteryGroupStatus.cancelled) ...[
+            _GroupPaymentSection(
+              userId: widget.currentUserId,
+              group: group,
+              membership: myMembership,
+              isPaying: _isPaying,
+              onWalletPayment: () => _payGroupViaWallet(
+                group: group,
+                membership: myMembership,
+              ),
+              onExternalPayment: () => _payGroupExternally(group: group),
+            ),
+            const SizedBox(height: 12),
+          ],
+          _ParticipantsCard(
+            memberships: memberships,
+            group: group,
+            currentUserId: widget.currentUserId,
+            currentUserDisplayName: currentUserDisplayName,
+            creatorUserId: group.creatorUserId,
             showDebug: _showDebug,
           ),
         ],
@@ -889,12 +951,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             ],
           ),
         ],
-      ],
+        ],
+      ),
     );
   }
 
   Future<void> _openReceiptUrl(String? receiptUrl) async {
     if (receiptUrl == null || receiptUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('הקבלה הותאמה אך אין קישור פתיחה זמין.')),
+        );
+      }
       return;
     }
 
@@ -908,6 +976,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         const SnackBar(content: Text('פתיחת הקבלה נכשלה.')),
       );
     }
+  }
+
+  Future<void> _openReceiptTarget(_ResolvedReceiptOpenTarget? receiptTarget) {
+    return _openReceiptUrl(receiptTarget?.targetUrl);
   }
 
   String _currentUserDisplayName() {
@@ -935,6 +1007,119 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return creatorUserId == widget.currentUserId
         ? currentUserDisplayName
         : 'מנהל הקבוצה';
+  }
+
+  String _ticketTypeLabel(Map<String, dynamic> formData) {
+    final String? rawTicketType = formData['ticketType'] as String?;
+    switch (rawTicketType) {
+      case 'double':
+      case 'double_lotto':
+        return 'דאבל';
+      case 'regular':
+      case 'regular_lotto':
+        return 'רגיל';
+      default:
+        return 'רגיל';
+    }
+  }
+
+  bool _hasMatchedReceipt(Map<String, dynamic> formData) {
+    return (formData['stationReceiptMatchStatus'] as String?) == 'matched';
+  }
+
+  _ResolvedReceiptOpenTarget? _resolvedReceiptTargetFromRawData(
+    Map<String, dynamic> rawData,
+  ) {
+    final String? receiptUrl = _validReceiptUrl(rawData);
+    if (receiptUrl == null) {
+      return null;
+    }
+    return _ResolvedReceiptOpenTarget(
+      targetUrl: receiptUrl,
+      targetStoragePath: _receiptStoragePath(rawData),
+      source: 'form',
+    );
+  }
+
+  String? _validReceiptUrl(Map<String, dynamic> formData) {
+    final String? receiptUrl = extractReceiptUrl(formData);
+    if (receiptUrl == null || receiptUrl.isEmpty) {
+      return null;
+    }
+    final Uri? uri = Uri.tryParse(receiptUrl);
+    if (uri == null || (!uri.hasScheme || !uri.hasAuthority)) {
+      return null;
+    }
+    return receiptUrl;
+  }
+
+  String? _receiptStoragePath(Map<String, dynamic> rawData) {
+    final List<String> candidateKeys = <String>[
+      'stationReceiptStoragePath',
+      'receiptStoragePath',
+      'uploadedReceiptStoragePath',
+      'storagePath',
+    ];
+    for (final String key in candidateKeys) {
+      final String? value = rawData[key] as String?;
+      if (value != null && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  Future<_ResolvedReceiptOpenTarget?> _lookupReceiptOpenTarget({
+    required String ownerUserId,
+    required String formId,
+    required Map<String, dynamic> formData,
+  }) {
+    final String matchedAtKey =
+        '${formData['stationReceiptMatchedAt'] ?? ''}|${formData['updatedAt'] ?? ''}';
+    final String cacheKey =
+        '$ownerUserId|$formId|${formData['stationReceiptIntakeId'] ?? ''}|$matchedAtKey';
+    if (_receiptLookupCacheKey == cacheKey && _receiptLookupFuture != null) {
+      return _receiptLookupFuture!;
+    }
+    _receiptLookupCacheKey = cacheKey;
+    _receiptLookupFuture = _fetchReceiptOpenTarget(
+      ownerUserId: ownerUserId,
+      formId: formId,
+    );
+    return _receiptLookupFuture!;
+  }
+
+  Future<_ResolvedReceiptOpenTarget?> _fetchReceiptOpenTarget({
+    required String ownerUserId,
+    required String formId,
+  }) async {
+    try {
+      final HttpsCallable callable =
+          FirebaseFunctions.instance.httpsCallable('getReceiptOpenTarget');
+      final HttpsCallableResult<dynamic> result = await callable.call(
+        <String, dynamic>{
+          'ownerUserId': ownerUserId,
+          'formId': formId,
+        },
+      );
+      final dynamic raw = result.data;
+      if (raw is! Map) {
+        return null;
+      }
+      final Map<String, dynamic> data = Map<String, dynamic>.from(raw);
+      final String? targetUrl = (data['targetUrl'] as String?)?.trim();
+      if (targetUrl == null || targetUrl.isEmpty) {
+        return null;
+      }
+      return _ResolvedReceiptOpenTarget(
+        targetUrl: targetUrl,
+        targetStoragePath: (data['targetStoragePath'] as String?)?.trim(),
+        source: (data['source'] as String?)?.trim(),
+      );
+    } catch (error) {
+      debugPrint('[GroupDetails] receipt target lookup failed: $error');
+      return null;
+    }
   }
 
   String _groupStatusLabel({
@@ -973,26 +1158,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       case LotteryGroupRepository.dispatchStatusQueuedForPrint:
       default:
         return 'ממתין להדפסה';
-    }
-  }
-
-  String _dispatchStatusDescription({
-    required _GroupTrackerSubmittedFormState trackerFormState,
-  }) {
-    if (trackerFormState.hasReceipt) {
-      return 'הקבלה הועלתה ונקלטה במערכת.';
-    }
-
-    switch (trackerFormState.effectiveDispatchStatus) {
-      case LotteryGroupRepository.dispatchStatusPrinted:
-        return 'הטופס הודפס ומוכן למסירה לתחנה.';
-      case LotteryGroupRepository.dispatchStatusSubmittedToStation:
-        return 'הטופס נמסר לתחנה.';
-      case LotteryGroupRepository.dispatchStatusQueuedForPrint:
-      default:
-        return (trackerFormState.printReadyUrl?.isNotEmpty ?? false)
-            ? 'קובץ ההדפסה מוכן. ממתין להדפסה.'
-            : 'הטופס אושר ונכנס לתור שליחה. קובץ ההדפסה נוצר ויופיע כאן בקרוב.';
     }
   }
 
@@ -1095,6 +1260,18 @@ class _GroupTrackerSubmittedFormState {
     }
     return null;
   }
+}
+
+class _ResolvedReceiptOpenTarget {
+  const _ResolvedReceiptOpenTarget({
+    required this.targetUrl,
+    required this.targetStoragePath,
+    required this.source,
+  });
+
+  final String targetUrl;
+  final String? targetStoragePath;
+  final String? source;
 }
 
 class _GroupTicketTracker extends StatefulWidget {
@@ -1231,37 +1408,58 @@ class _GroupTicketTrackerState extends State<_GroupTicketTracker>
   }
 
   int _deriveCompletedStepCount() {
-    if (widget.trackerFormState.submittedToStationAt != null ||
-        widget.trackerFormState.dispatchStatus ==
-            LotteryGroupRepository.dispatchStatusSubmittedToStation) {
+    if (_isSubmittedToStationCompleted) {
       return 5;
     }
-
-    if (widget.trackerFormState.printedAt != null ||
-        widget.trackerFormState.dispatchStatus ==
-            LotteryGroupRepository.dispatchStatusPrinted) {
+    if (_isPrintedCompleted) {
       return 4;
     }
+    if (_isGroupSubmissionCompleted) {
+      return 3;
+    }
+    if (_areRequiredPaymentsCompleted) {
+      return 2;
+    }
+    if (_isParticipantCollectionCompleted) {
+      return 1;
+    }
+    return 0;
+  }
 
-    if (widget.group.submittedAt != null ||
+  bool get _isParticipantCollectionCompleted {
+    return widget.group.status != LotteryGroupStatus.collectingResponses ||
+        widget.group.finalizedAt != null ||
+        widget.group.currentPerParticipantCost > 0;
+  }
+
+  bool get _areRequiredPaymentsCompleted {
+    return widget.group.status == LotteryGroupStatus.readyForSubmission ||
+        widget.group.status == LotteryGroupStatus.submitted ||
+        _isPrintedCompleted ||
+        _isSubmittedToStationCompleted;
+  }
+
+  bool get _isGroupSubmissionCompleted {
+    return widget.group.submittedAt != null ||
         widget.group.status == LotteryGroupStatus.submitted ||
         widget.trackerFormState.dispatchStatus ==
             LotteryGroupRepository.dispatchStatusQueuedForPrint ||
-        (widget.trackerFormState.printReadyUrl?.isNotEmpty ?? false)) {
-      return 3;
-    }
+        (widget.trackerFormState.printReadyUrl?.isNotEmpty ?? false) ||
+        _isPrintedCompleted ||
+        _isSubmittedToStationCompleted;
+  }
 
-    if (widget.group.status == LotteryGroupStatus.readyForSubmission) {
-      return 1;
-    }
+  bool get _isPrintedCompleted {
+    return widget.trackerFormState.printedAt != null ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusPrinted ||
+        _isSubmittedToStationCompleted;
+  }
 
-    if (widget.group.status == LotteryGroupStatus.awaitingPayments ||
-        widget.group.finalizedAt != null ||
-        widget.group.currentPerParticipantCost > 0) {
-      return 1;
-    }
-
-    return 0;
+  bool get _isSubmittedToStationCompleted {
+    return widget.trackerFormState.submittedToStationAt != null ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusSubmittedToStation;
   }
 
   Color _stepColor(BuildContext context, bool isSystemOwned) {
@@ -1464,96 +1662,211 @@ class _InfoCard extends StatelessWidget {
   }
 }
 
-class _GroupHeaderCard extends StatelessWidget {
-  const _GroupHeaderCard({
+class _GroupInfoPanel extends StatelessWidget {
+  const _GroupInfoPanel({
     required this.groupName,
     required this.creatorDisplayName,
     required this.statusLabel,
+    required this.ticketTypeLabel,
+    required this.lotteryNumber,
+    required this.tablesCount,
+    required this.totalCost,
+    required this.onOpenForm,
+    required this.onOpenReceipt,
+    required this.showInviteButton,
+    required this.onInvite,
+    required this.showFinalizeButton,
+    required this.canFinalize,
+    required this.isFinalizing,
+    required this.onFinalize,
+    required this.showDeleteButton,
+    required this.isCancelling,
+    required this.onDelete,
   });
 
   final String groupName;
   final String creatorDisplayName;
   final String statusLabel;
+  final String ticketTypeLabel;
+  final String? lotteryNumber;
+  final int tablesCount;
+  final num totalCost;
+  final VoidCallback onOpenForm;
+  final VoidCallback? onOpenReceipt;
+  final bool showInviteButton;
+  final void Function(BuildContext buttonContext)? onInvite;
+  final bool showFinalizeButton;
+  final bool canFinalize;
+  final bool isFinalizing;
+  final VoidCallback onFinalize;
+  final bool showDeleteButton;
+  final bool isCancelling;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(20),
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            groupName,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'נוצר על ידי: $creatorDisplayName',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (showDeleteButton)
+                  IconButton.filledTonal(
+                    onPressed: isCancelling ? null : onDelete,
+                    icon: isCancelling
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.delete_outline_rounded, size: 18),
+                    tooltip: 'מחק טופס',
+                  ),
+                if (showFinalizeButton)
+                  IconButton.filledTonal(
+                    onPressed: canFinalize && !isFinalizing ? onFinalize : null,
+                    icon: isFinalizing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.how_to_reg_rounded, size: 18),
+                    tooltip: 'סיום בחירת משתתפים',
+                  ),
+                if (showInviteButton && onInvite != null)
+                  Builder(
+                    builder: (buttonContext) => IconButton.filledTonal(
+                      onPressed: () => onInvite!(buttonContext),
+                      icon: const Icon(Icons.share_outlined, size: 18),
+                      tooltip: 'שלח לינק להצטרפות',
+                    ),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: 8),
-          Text(statusLabel),
+          Directionality(
+            textDirection: TextDirection.rtl,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'שם הקבוצה: $groupName',
+                    textAlign: TextAlign.right,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        'סטאטוס: $statusLabel',
+                        textAlign: TextAlign.right,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'הגרלה מס׳: ${lotteryNumber?.isNotEmpty == true ? lotteryNumber : '—'}',
+                        textAlign: TextAlign.right,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _InfoPillsGrid(
+            children: [
+              _MetaPill(label: 'יוצר הקבוצה', value: creatorDisplayName),
+              _MetaPill(label: 'סוג טופס', value: ticketTypeLabel),
+              _MetaPill(label: 'מספר טבלאות', value: '$tablesCount'),
+              _MetaPill(label: 'עלות כוללת', value: '$totalCost ש״ח'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            alignment: WrapAlignment.end,
+            children: [
+              TextButton.icon(
+                onPressed: onOpenForm,
+                icon: const Icon(Icons.confirmation_num_outlined),
+                label: const Text('צפה בטופס'),
+              ),
+              Tooltip(
+                message: onOpenReceipt == null
+                    ? 'הקבלה הותאמה אך עדיין אין קישור לפתיחה'
+                    : 'צפה בקבלה',
+                child: TextButton.icon(
+                  onPressed: onOpenReceipt,
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  label: const Text('צפה בקבלה'),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 }
 
-class _CompactSummaryCard extends StatelessWidget {
-  const _CompactSummaryCard({
-    required this.filledTablesCount,
-    required this.paidCount,
-    required this.yourShareLabel,
+class _InfoPillsGrid extends StatelessWidget {
+  const _InfoPillsGrid({
+    required this.children,
   });
 
-  final int filledTablesCount;
-  final int paidCount;
-  final String yourShareLabel;
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _CompactStat(
-              label: 'טבלאות שמולאו',
-              value: '$filledTablesCount',
-            ),
-          ),
-          Expanded(
-            child: _CompactStat(
-              label: 'שילמו',
-              value: '$paidCount',
-            ),
-          ),
-          Expanded(
-            child: _CompactStat(
-              label: 'החלק שלך',
-              value: yourShareLabel,
-            ),
-          ),
-        ],
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const double spacing = 8;
+        final double itemWidth = (constraints.maxWidth - spacing) / 2;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          alignment: WrapAlignment.end,
+          textDirection: TextDirection.rtl,
+          children: children
+              .map((child) => SizedBox(width: itemWidth, child: child))
+              .toList(),
+        );
+      },
     );
   }
 }
 
-class _CompactStat extends StatelessWidget {
-  const _CompactStat({
+class _MetaPill extends StatelessWidget {
+  const _MetaPill({
     required this.label,
     required this.value,
   });
@@ -1563,26 +1876,100 @@ class _CompactStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+    final ThemeData theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              label,
+              textAlign: TextAlign.right,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
+          const SizedBox(height: 2),
+          Center(
+            child: Text(
+              value,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _WorkflowActionsRow extends StatelessWidget {
+  const _WorkflowActionsRow({
+    required this.showSubmitButton,
+    required this.canSubmit,
+    required this.isSubmitting,
+    required this.onSubmit,
+    required this.showPrintedButton,
+    required this.showSubmittedToStationButton,
+    required this.isUpdatingDispatch,
+    required this.onMarkPrinted,
+    required this.onMarkSubmittedToStation,
+  });
+
+  final bool showSubmitButton;
+  final bool canSubmit;
+  final bool isSubmitting;
+  final VoidCallback onSubmit;
+  final bool showPrintedButton;
+  final bool showSubmittedToStationButton;
+  final bool isUpdatingDispatch;
+  final VoidCallback onMarkPrinted;
+  final VoidCallback onMarkSubmittedToStation;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!showSubmitButton && !showPrintedButton && !showSubmittedToStationButton) {
+      return const SizedBox.shrink();
+    }
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      children: [
+        if (showSubmitButton)
+          FilledButton.icon(
+            onPressed: canSubmit && !isSubmitting ? onSubmit : null,
+            icon: isSubmitting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.send_outlined, size: 18),
+            label: const Text('הגש טופס קבוצתי'),
+          ),
+        if (showPrintedButton)
+          OutlinedButton.icon(
+            onPressed: isUpdatingDispatch ? null : onMarkPrinted,
+            icon: const Icon(Icons.print_outlined, size: 18),
+            label: const Text('סמן כהודפס'),
+          ),
+        if (showSubmittedToStationButton)
+          OutlinedButton.icon(
+            onPressed: isUpdatingDispatch ? null : onMarkSubmittedToStation,
+            icon: const Icon(Icons.store_outlined, size: 18),
+            label: const Text('סמן כנמסר לתחנה'),
+          ),
+      ],
     );
   }
 }
@@ -1615,8 +2002,6 @@ class _GroupOutcomeCard extends StatelessWidget {
           return _InfoCard(
             title: 'פרטי הקבוצה',
             rows: [
-              _InfoRow(label: 'שם קבוצה', value: group.groupName),
-              _InfoRow(label: 'יוצר הקבוצה', value: creatorDisplayName),
               _InfoRow(
                 label: 'בוטל על ידי',
                 value: group.cancelledByDisplayName ?? creatorDisplayName,
@@ -1644,8 +2029,6 @@ class _GroupOutcomeCard extends StatelessWidget {
       return _InfoCard(
         title: 'פרטי הקבוצה',
         rows: [
-          _InfoRow(label: 'שם קבוצה', value: group.groupName),
-          _InfoRow(label: 'יוצר הקבוצה', value: creatorDisplayName),
           _InfoRow(
             label: 'עלות למשתתף',
             value: group.currentPerParticipantCost > 0
@@ -1683,8 +2066,6 @@ class _GroupOutcomeCard extends StatelessWidget {
         return _InfoCard(
           title: 'פרטי הקבוצה',
           rows: [
-            _InfoRow(label: 'שם קבוצה', value: group.groupName),
-            _InfoRow(label: 'יוצר הקבוצה', value: creatorDisplayName),
             _InfoRow(
               label: 'עלות למשתתף',
               value: group.currentPerParticipantCost > 0
@@ -1709,147 +2090,6 @@ class _GroupOutcomeCard extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({
-    required this.message,
-  });
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Text(
-        message,
-        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
-      ),
-    );
-  }
-}
-
-class _ActionBarCard extends StatelessWidget {
-  const _ActionBarCard({
-    required this.showInviteButton,
-    required this.onInvite,
-    required this.showFinalizeButton,
-    required this.canFinalize,
-    required this.isFinalizing,
-    required this.onFinalize,
-    required this.showSubmitButton,
-    required this.canSubmit,
-    required this.isSubmitting,
-    required this.onSubmit,
-    required this.showCancelButton,
-    required this.isCancelling,
-    required this.onCancel,
-    required this.showPrintedButton,
-    required this.showSubmittedToStationButton,
-    required this.isUpdatingDispatch,
-    required this.onMarkPrinted,
-    required this.onMarkSubmittedToStation,
-    required this.showPayButton,
-    required this.isPaying,
-    required this.onSimulatePayment,
-  });
-
-  final bool showInviteButton;
-  final void Function(BuildContext buttonContext)? onInvite;
-  final bool showFinalizeButton;
-  final bool canFinalize;
-  final bool isFinalizing;
-  final VoidCallback onFinalize;
-  final bool showSubmitButton;
-  final bool canSubmit;
-  final bool isSubmitting;
-  final VoidCallback onSubmit;
-  final bool showCancelButton;
-  final bool isCancelling;
-  final VoidCallback onCancel;
-  final bool showPrintedButton;
-  final bool showSubmittedToStationButton;
-  final bool isUpdatingDispatch;
-  final VoidCallback onMarkPrinted;
-  final VoidCallback onMarkSubmittedToStation;
-  final bool showPayButton;
-  final bool isPaying;
-  final VoidCallback? onSimulatePayment;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: [
-        if (showPayButton)
-          FilledButton(
-            onPressed: isPaying ? null : onSimulatePayment,
-            child: isPaying
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('לתשלום'),
-          ),
-        if (showFinalizeButton)
-          FilledButton.icon(
-            onPressed: canFinalize ? onFinalize : null,
-            icon: const Icon(Icons.lock_clock_outlined),
-            label: isFinalizing
-                ? const Text('מבצע finalize...')
-                : const Text('סיום בחירת משתתפים'),
-          ),
-        if (showSubmitButton)
-          FilledButton.icon(
-            onPressed: canSubmit ? onSubmit : null,
-            icon: const Icon(Icons.send_outlined),
-            label: isSubmitting
-                ? const Text('מגיש טופס...')
-                : const Text('הגש טופס קבוצתי'),
-          ),
-        if (showCancelButton)
-          OutlinedButton.icon(
-            onPressed: isCancelling ? null : onCancel,
-            icon: const Icon(Icons.cancel_outlined),
-            label:
-                isCancelling ? const Text('מבטל...') : const Text('בטל טיוטה'),
-          ),
-        if (showPrintedButton)
-          OutlinedButton.icon(
-            onPressed: isUpdatingDispatch ? null : onMarkPrinted,
-            icon: const Icon(Icons.print_outlined),
-            label: isUpdatingDispatch
-                ? const Text('מעדכן...')
-                : const Text('סמן כהודפס'),
-          ),
-        if (showSubmittedToStationButton)
-          OutlinedButton.icon(
-            onPressed: isUpdatingDispatch ? null : onMarkSubmittedToStation,
-            icon: const Icon(Icons.store_outlined),
-            label: isUpdatingDispatch
-                ? const Text('מעדכן...')
-                : const Text('סמן כנמסר לתחנה'),
-          ),
-        if (showInviteButton && onInvite != null)
-          Builder(
-            builder: (buttonContext) => OutlinedButton.icon(
-              onPressed: () => onInvite!(buttonContext),
-              icon: const Icon(Icons.share_outlined),
-              label: const Text('הזמנה דרך WhatsApp'),
-            ),
-          ),
-      ],
     );
   }
 }
@@ -1914,69 +2154,39 @@ class _MyResponseCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'התגובה שלי',
+            'השתתפות',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           if (membership == null)
             const Text('אין membership פעיל למשתמש זה.')
           else ...[
-            Text(_myMembershipHeadline(membership!)),
-            if (_displayShareForMembership(group, membership!) != null)
-              Text(
-                'החלק שלך: ${_displayShareForMembership(group, membership!)} ש״ח',
+            Text(
+              _myMembershipHeadline(membership!),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
+            ),
             if (showDebug) ...[
               const SizedBox(height: 8),
               Text('lockedIn: ${membership!.lockedIn}'),
               Text('paymentStatus: ${membership!.paymentStatus.value}'),
               Text('costShare: ${membership!.costShare ?? 0}'),
             ],
-            const SizedBox(height: 12),
-            if (membership!.lockedIn &&
-                membership!.paymentStatus ==
-                    LotteryGroupPaymentStatus.unpaid) ...[
-              FilledButton(
-                onPressed: isPaying ? null : onSimulatePayment,
-                child: isPaying
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('לתשלום'),
-              ),
-              const SizedBox(height: 12),
-            ] else if (membership!.paymentStatus ==
-                LotteryGroupPaymentStatus.paid) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'שולם',
-                  style: TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
+            const SizedBox(height: 10),
             if (!canEdit) ...[
               Text(
                 'הקבוצה עברה finalize ולכן התגובה נעולה לעריכה.',
@@ -1987,7 +2197,18 @@ class _MyResponseCard extends StatelessWidget {
               const SizedBox(height: 12),
             ],
             SegmentedButton<LotteryGroupResponseStatus>(
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                  EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                ),
+              ),
               segments: const [
+                ButtonSegment(
+                  value: LotteryGroupResponseStatus.undecided,
+                  label: Text('לא החלטתי'),
+                ),
                 ButtonSegment(
                   value: LotteryGroupResponseStatus.interested,
                   label: Text('מעוניין'),
@@ -1995,10 +2216,6 @@ class _MyResponseCard extends StatelessWidget {
                 ButtonSegment(
                   value: LotteryGroupResponseStatus.notInterested,
                   label: Text('לא מעוניין'),
-                ),
-                ButtonSegment(
-                  value: LotteryGroupResponseStatus.undecided,
-                  label: Text('לא החלטתי'),
                 ),
               ],
               selected: <LotteryGroupResponseStatus>{selectedStatus},
@@ -2008,16 +2225,19 @@ class _MyResponseCard extends StatelessWidget {
                     }
                   : null,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             TextField(
               controller: minimumController,
               enabled: canEdit,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: 'מינימום משתתפים נדרש',
+                labelText: 'מינימום משתתפים',
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             FilledButton(
               onPressed: (!canEdit || isSaving) ? null : onSave,
               child: isSaving
@@ -2052,20 +2272,6 @@ class _MyResponseCard extends StatelessWidget {
     }
     return 'כרגע אינך משתתף בתשלום בקבוצה.';
   }
-
-  num? _displayShareForMembership(
-    LotteryGroup group,
-    LotteryGroupMembership membership,
-  ) {
-    if (group.status == LotteryGroupStatus.submitted) {
-      if (membership.lockedIn &&
-          membership.paymentStatus == LotteryGroupPaymentStatus.paid) {
-        return group.currentPerParticipantCost;
-      }
-      return null;
-    }
-    return membership.costShare;
-  }
 }
 
 class _ParticipantsCard extends StatelessWidget {
@@ -2087,11 +2293,15 @@ class _ParticipantsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool collectionStage =
+        group.status == LotteryGroupStatus.collectingResponses;
+    final ThemeData theme = Theme.of(context);
+
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2102,55 +2312,107 @@ class _ParticipantsCard extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
           ),
-          const SizedBox(height: 12),
-          ...memberships.map(
-            (membership) {
-              final int index = memberships.indexOf(membership);
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(14),
+          const SizedBox(height: 10),
+          if (collectionStage)
+            ...List<Widget>.generate(memberships.length, (index) {
+              final LotteryGroupMembership membership = memberships[index];
+              return Column(
+                children: [
+                  _ParticipantRow(
+                    name: _participantDisplayName(membership, index),
+                    badgeText: _responseStatusLabel(membership.responseStatus.value),
+                    badgeColor: _responseStatusColor(context, membership),
+                    trailingText: membership.responseStatus ==
+                            LotteryGroupResponseStatus.interested
+                        ? 'מינימום: ${membership.minimumParticipantsRequired}'
+                        : null,
+                    shareText: _displayShareForMembership(membership) != null
+                        ? 'חלק מתוכנן: ${_displayShareForMembership(membership)} ש״ח'
+                        : null,
+                    debugLines: showDebug
+                        ? <String>[
+                            'userId: ${membership.userId}',
+                            'displayName: ${membership.displayName}',
+                            'lockedIn: ${membership.lockedIn}',
+                            'paymentStatus: ${membership.paymentStatus.value}',
+                          ]
+                        : const <String>[],
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _participantDisplayName(membership, index),
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(_participantStatusLabel(membership)),
-                      Text(
-                        'נכנס במינימום משתתפים: ${membership.minimumParticipantsRequired}',
-                      ),
-                      if (_displayShareForMembership(membership) != null)
-                        Text(
-                          group.status == LotteryGroupStatus.submitted
-                              ? 'חלק סופי בהגשה: ${_displayShareForMembership(membership)} ש״ח'
-                              : 'חלק מתוכנן: ${_displayShareForMembership(membership)} ש״ח',
-                        ),
-                      if (showDebug) ...[
-                        const SizedBox(height: 8),
-                        Text('userId: ${membership.userId}'),
-                        Text('displayName: ${membership.displayName}'),
-                        Text(
-                            'responseStatus: ${membership.responseStatus.value}'),
-                        Text('lockedIn: ${membership.lockedIn}'),
-                        Text(
-                            'paymentStatus: ${membership.paymentStatus.value}'),
-                      ],
-                    ],
-                  ),
-                ),
+                  if (index < memberships.length - 1)
+                    Divider(
+                      height: 16,
+                      color: theme.colorScheme.outlineVariant,
+                    ),
+                ],
               );
-            },
-          ),
+            })
+          else ...[
+            _ParticipantGroupList(
+              title: 'שילמו',
+              memberships: memberships
+                  .where(
+                    (membership) =>
+                        membership.lockedIn &&
+                        membership.paymentStatus ==
+                            LotteryGroupPaymentStatus.paid,
+                  )
+                  .toList(),
+              emptyText: 'אין משתתפים ששילמו עדיין',
+              accentColor: Colors.green,
+              nameBuilder: _participantDisplayName,
+              shareBuilder: (membership) => _displayShareForMembership(membership) != null
+                  ? '${_displayShareForMembership(membership)} ש״ח'
+                  : null,
+            ),
+            const SizedBox(height: 12),
+            _ParticipantGroupList(
+              title: 'לא שילמו',
+              memberships: memberships
+                  .where(
+                    (membership) =>
+                        membership.lockedIn &&
+                        membership.paymentStatus !=
+                            LotteryGroupPaymentStatus.paid,
+                  )
+                  .toList(),
+              emptyText: 'אין משתתפים שממתינים לתשלום',
+              accentColor: Colors.red,
+              nameBuilder: _participantDisplayName,
+              shareBuilder: (membership) => _displayShareForMembership(membership) != null
+                  ? '${_displayShareForMembership(membership)} ש״ח'
+                  : null,
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  Color _responseStatusColor(
+    BuildContext context,
+    LotteryGroupMembership membership,
+  ) {
+    switch (membership.responseStatus) {
+      case LotteryGroupResponseStatus.interested:
+        return Theme.of(context).colorScheme.primary;
+      case LotteryGroupResponseStatus.notInterested:
+        return Theme.of(context).colorScheme.error;
+      case LotteryGroupResponseStatus.undecided:
+        return Theme.of(context).colorScheme.outline;
+    }
+  }
+
+  String _responseStatusLabel(String rawStatus) {
+    switch (rawStatus) {
+      case 'interested':
+        return 'מעוניין';
+      case 'declined':
+      case 'not_interested':
+        return 'לא מעוניין';
+      case 'undecided':
+      default:
+        return 'לא החלטתי';
+    }
   }
 
   String _participantDisplayName(LotteryGroupMembership membership, int index) {
@@ -2166,27 +2428,6 @@ class _ParticipantsCard extends StatelessWidget {
     return 'משתתף ${index + 1}';
   }
 
-  String _participantStatusLabel(LotteryGroupMembership membership) {
-    if (group.status == LotteryGroupStatus.submitted) {
-      if (membership.lockedIn &&
-          membership.paymentStatus == LotteryGroupPaymentStatus.paid) {
-        return 'השתתף בהגשה';
-      }
-      return 'לא השתתף בהגשה';
-    }
-    if (membership.paymentStatus == LotteryGroupPaymentStatus.paid) {
-      return 'שילם';
-    }
-    if (membership.lockedIn &&
-        membership.paymentStatus == LotteryGroupPaymentStatus.unpaid) {
-      return 'ממתין לתשלום';
-    }
-    if (membership.responseStatus == LotteryGroupResponseStatus.interested) {
-      return 'ממתין לאישור סופי';
-    }
-    return 'לא משתתף';
-  }
-
   num? _displayShareForMembership(LotteryGroupMembership membership) {
     if (group.status == LotteryGroupStatus.submitted) {
       if (membership.lockedIn &&
@@ -2196,5 +2437,267 @@ class _ParticipantsCard extends StatelessWidget {
       return null;
     }
     return membership.costShare;
+  }
+}
+
+class _GroupPaymentSection extends StatelessWidget {
+  const _GroupPaymentSection({
+    required this.userId,
+    required this.group,
+    required this.membership,
+    required this.isPaying,
+    required this.onWalletPayment,
+    required this.onExternalPayment,
+  });
+
+  final String userId;
+  final LotteryGroup group;
+  final LotteryGroupMembership membership;
+  final bool isPaying;
+  final VoidCallback onWalletPayment;
+  final VoidCallback onExternalPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    final num payableAmount =
+        membership.costShare ?? group.currentPerParticipantCost;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final num balance = (snapshot.data?.data()?['balance'] as num?) ?? 0;
+        final bool hasEnoughBalance = balance >= payableAmount;
+        final bool alreadyPaid =
+            membership.paymentStatus == LotteryGroupPaymentStatus.paid;
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'תשלום',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _MetaPill(
+                    label: 'עלות למשתתף',
+                    value: '$payableAmount ש״ח',
+                  ),
+                  _MetaPill(
+                    label: 'יתרה נוכחית',
+                    value: '$balance ש״ח',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (alreadyPaid)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'התשלום בוצע',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                )
+              else
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    if (hasEnoughBalance)
+                      FilledButton(
+                        onPressed: isPaying ? null : onWalletPayment,
+                        child: isPaying
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Text('שלם מהיתרה'),
+                      ),
+                    OutlinedButton(
+                      onPressed: isPaying ? null : onExternalPayment,
+                      child: Text(
+                        hasEnoughBalance
+                            ? 'שלם באמצעי אחר'
+                            : 'טען כסף ושלם',
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ParticipantRow extends StatelessWidget {
+  const _ParticipantRow({
+    required this.name,
+    required this.badgeText,
+    required this.badgeColor,
+    this.trailingText,
+    this.shareText,
+    this.debugLines = const <String>[],
+  });
+
+  final String name;
+  final String badgeText;
+  final Color badgeColor;
+  final String? trailingText;
+  final String? shareText;
+  final List<String> debugLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool hasInlineAmount = trailingText != null && badgeText.isEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            textDirection: TextDirection.rtl,
+            children: [
+              Expanded(
+                child: Text(
+                  name,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (hasInlineAmount)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Text(
+                    trailingText!,
+                    textAlign: TextAlign.left,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                ),
+              if (badgeText.isNotEmpty)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: badgeColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: badgeColor.withValues(alpha: 0.28),
+                    ),
+                  ),
+                  child: Text(
+                    badgeText,
+                    style: TextStyle(
+                      color: badgeColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if ((!hasInlineAmount && trailingText != null) || shareText != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              [
+                if (!hasInlineAmount) trailingText,
+                shareText,
+              ].whereType<String>().join(' • '),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          for (final String line in debugLines) ...[
+            const SizedBox(height: 2),
+            Text(line, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ParticipantGroupList extends StatelessWidget {
+  const _ParticipantGroupList({
+    required this.title,
+    required this.memberships,
+    required this.emptyText,
+    required this.accentColor,
+    required this.nameBuilder,
+    required this.shareBuilder,
+  });
+
+  final String title;
+  final List<LotteryGroupMembership> memberships;
+  final String emptyText;
+  final Color accentColor;
+  final String Function(LotteryGroupMembership membership, int index) nameBuilder;
+  final String? Function(LotteryGroupMembership membership) shareBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accentColor.withValues(alpha: 0.35), width: 1.4),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w900,
+              color: accentColor,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (memberships.isEmpty)
+            Text(emptyText, style: Theme.of(context).textTheme.bodySmall)
+          else
+            ...List<Widget>.generate(memberships.length, (index) {
+              final LotteryGroupMembership membership = memberships[index];
+              return Column(
+                children: [
+                  _ParticipantRow(
+                    name: nameBuilder(membership, index),
+                    badgeText: '',
+                    badgeColor: accentColor,
+                    trailingText: shareBuilder(membership),
+                  ),
+                  if (index < memberships.length - 1)
+                    Divider(
+                      height: 14,
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                    ),
+                ],
+              );
+            }),
+        ],
+      ),
+    );
   }
 }

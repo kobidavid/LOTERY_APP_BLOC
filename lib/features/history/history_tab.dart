@@ -778,6 +778,7 @@ class _GroupSummaryDetails extends StatelessWidget {
             presentationAsDateTime(groupData['submittedAt']);
         final String? creatorUserId = groupData['creatorUserId'] as String?;
         final String? submittedFormId = groupData['submittedFormId'] as String?;
+        final String? sourceFormId = groupData['sourceFormId'] as String?;
 
         if (item.kind == _FormsItemKind.groupSubmitted &&
             creatorUserId != null &&
@@ -797,6 +798,32 @@ class _GroupSummaryDetails extends StatelessWidget {
               return Text(
                 _submittedText(
                   submittedAt: submittedAt,
+                  formData: formData,
+                ),
+                textAlign: TextAlign.right,
+              );
+            },
+          );
+        }
+
+        if (item.kind == _FormsItemKind.groupDraft &&
+            creatorUserId != null &&
+            creatorUserId.isNotEmpty &&
+            sourceFormId != null &&
+            sourceFormId.isNotEmpty) {
+          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('users')
+                .doc(creatorUserId)
+                .collection('forms')
+                .doc(sourceFormId)
+                .snapshots(),
+            builder: (context, formSnapshot) {
+              final Map<String, dynamic> formData =
+                  formSnapshot.data?.data() ?? const <String, dynamic>{};
+              return Text(
+                _draftText(
+                  createdAt: createdAt,
                   formData: formData,
                 ),
                 textAlign: TextAlign.right,
@@ -835,6 +862,7 @@ class _GroupSummaryDetails extends StatelessWidget {
     final List<String> lines = <String>[
       'נוצר על ידי: ${group.creatorName}',
       'סטטוס: ${presentationState.statusLabel}',
+      'מס׳ הגרלה: ${_lotteryNumberLabel(formData)}',
       'העלות שלי: ${group.myEffectiveShare} ש״ח',
       'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
       'הזכייה שלי: ${myWin != null ? '$myWin ש״ח' : 'טרם פורסם'}',
@@ -844,12 +872,14 @@ class _GroupSummaryDetails extends StatelessWidget {
 
   String _draftText({
     required DateTime? createdAt,
+    Map<String, dynamic> formData = const <String, dynamic>{},
   }) {
     if (item.kind == _FormsItemKind.groupDraft) {
       final UserGroupListItem group = item.activeGroup!;
       return [
         'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
         'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+        'מס׳ הגרלה: ${_lotteryNumberLabel(formData)}',
         'עלות שלי: ${_draftGroupCostLabel(group)}',
         'נוצר: ${formatPresentationDateTime(createdAt ?? group.updatedAt)}',
         'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
@@ -876,6 +906,7 @@ class _GroupSummaryDetails extends StatelessWidget {
       return [
         'נוצר על ידי: ${group.creatorName}',
         'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+        'מס׳ הגרלה: —',
         'העלות שלי: ${group.myEffectiveShare} ש״ח',
         'נשלח: ${formatPresentationDateTime(group.submittedAt)}',
         'הזכייה שלי: טרם פורסם',
@@ -890,6 +921,7 @@ class _GroupSummaryDetails extends StatelessWidget {
     return [
       'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
       'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
+      'מס׳ הגרלה: —',
       'עלות שלי: ${_draftGroupCostLabel(group)}',
       'נוצר: ${formatPresentationDateTime(group.updatedAt)}',
       'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
@@ -935,6 +967,14 @@ class _GroupSummaryDetails extends StatelessWidget {
       return 'ממתין לתשלום';
     }
     return 'ייקבע בהמשך';
+  }
+
+  String _lotteryNumberLabel(Map<String, dynamic> formData) {
+    final dynamic lotteryId = formData['lotteryId'];
+    if (lotteryId == null) {
+      return '—';
+    }
+    return '$lotteryId';
   }
 }
 

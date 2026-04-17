@@ -37,14 +37,25 @@ class LotteryFormPage extends StatefulWidget {
 class _LotteryFormPageState extends State<LotteryFormPage> {
   late final LotteryGroupRepository _groupRepository;
   late final LotteryFormRepository _paymentRepository;
+  final ScrollController _tablesScrollController = ScrollController();
+  final GlobalKey _tablesListKey = GlobalKey();
+  final Map<int, GlobalKey> _tableRowKeys = <int, GlobalKey>{};
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
+  int? _lastAutoScrolledActiveRowIndex;
+  int? _lastAutoScrolledSelectedTableCount;
 
   @override
   void initState() {
     super.initState();
     _groupRepository = LotteryGroupRepository();
     _paymentRepository = LotteryFormRepository();
+  }
+
+  @override
+  void dispose() {
+    _tablesScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _promptCreateGroup() async {
@@ -114,6 +125,33 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     }
 
     context.read<LotteryFormCubit>().clearForm();
+  }
+
+  Future<void> _confirmClearTable(int rowIndex) async {
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('מחיקת טבלה'),
+            content: const Text('האם למחוק את המספרים בטבלה זו?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('ביטול'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('אישור'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    context.read<LotteryFormCubit>().clearSingleTable(rowIndex);
   }
 
   Future<void> _startPersonalSubmitFlow() async {
@@ -204,6 +242,90 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     await _startPersonalSubmitFlow();
   }
 
+  GlobalKey _tableRowKeyForIndex(int index) {
+    return _tableRowKeys.putIfAbsent(index, () => GlobalKey());
+  }
+
+  void _scheduleEnsureActiveTableVisible({
+    required LotteryFormState state,
+    required double keyboardHeight,
+  }) {
+    final bool activeRowChanged =
+        _lastAutoScrolledActiveRowIndex != state.activeRowIndex;
+    final bool tableCountChanged =
+        _lastAutoScrolledSelectedTableCount != state.selectedTableCount;
+    if (!activeRowChanged && !tableCountChanged) {
+      return;
+    }
+
+    _lastAutoScrolledActiveRowIndex = state.activeRowIndex;
+    _lastAutoScrolledSelectedTableCount = state.selectedTableCount;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _ensureTableVisibleAboveKeyboard(
+        rowIndex: state.activeRowIndex,
+      );
+    });
+  }
+
+  Future<void> _ensureTableVisibleAboveKeyboard({
+    required int rowIndex,
+  }) async {
+    if (!_tablesScrollController.hasClients) {
+      return;
+    }
+
+    final BuildContext? rowContext = _tableRowKeyForIndex(rowIndex).currentContext;
+    final BuildContext? listContext = _tablesListKey.currentContext;
+    if (rowContext == null || listContext == null) {
+      return;
+    }
+
+    final RenderObject? rowRenderObject = rowContext.findRenderObject();
+    final RenderObject? listRenderObject = listContext.findRenderObject();
+    if (rowRenderObject is! RenderBox || listRenderObject is! RenderBox) {
+      return;
+    }
+
+    final Offset rowTopLeft = rowRenderObject.localToGlobal(Offset.zero);
+    final double rowTop = rowTopLeft.dy;
+    final double rowBottom = rowTop + rowRenderObject.size.height;
+
+    final Offset listTopLeft = listRenderObject.localToGlobal(Offset.zero);
+    final double listTop = listTopLeft.dy;
+    final double listBottom = listTop + listRenderObject.size.height;
+
+    const double visiblePadding = 12;
+    final double safeTop = listTop + visiblePadding;
+    final double safeBottom = listBottom - visiblePadding;
+
+    double targetOffset = _tablesScrollController.offset;
+    if (rowBottom > safeBottom) {
+      targetOffset += rowBottom - safeBottom;
+    } else if (rowTop < safeTop) {
+      targetOffset -= safeTop - rowTop;
+    } else {
+      return;
+    }
+
+    final double clampedTarget = targetOffset.clamp(
+      _tablesScrollController.position.minScrollExtent,
+      _tablesScrollController.position.maxScrollExtent,
+    );
+    if ((clampedTarget - _tablesScrollController.offset).abs() < 2) {
+      return;
+    }
+
+    await _tablesScrollController.animateTo(
+      clampedTarget,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<LotteryFormCubit, LotteryFormState>(
@@ -233,14 +355,19 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       },
       builder: (context, state) {
         final List<LotteryTable> visibleTables =
-            state.form.tables.take(state.selectedTableCount).toList();
+            state.visibleTables;
         final bool canPrimarySubmit =
             !state.isBusy &&
             _areSelectedTablesComplete(visibleTables, state.selectedTableCount);
+        final int? gapRowIndex = state.firstGapRowIndex;
         return LayoutBuilder(
           builder: (context, constraints) {
             final double keyboardHeight =
                 (constraints.maxHeight * 0.275).clamp(194.0, 246.0);
+            _scheduleEnsureActiveTableVisible(
+              state: state,
+              keyboardHeight: keyboardHeight,
+            );
 
             return Stack(
               children: [
@@ -282,21 +409,60 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                           }
                         },
                       ),
+                      if (gapRowIndex != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                            'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          'החלק ימינה ללוטומט בטבלה אחת, שמאלה לניקוי',
+                          textAlign: TextAlign.right,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ),
                       const SizedBox(height: 10),
                       Expanded(
                         child: ListView.separated(
+                          key: _tablesListKey,
+                          controller: _tablesScrollController,
                           padding: EdgeInsets.zero,
                           itemCount: visibleTables.length,
                           separatorBuilder: (_, __) =>
                               const SizedBox(height: 8),
                           itemBuilder: (context, index) {
                             return _LotteryRowCard(
+                              key: _tableRowKeyForIndex(index),
                               table: visibleTables[index],
                               isActive: index == state.activeRowIndex,
-                              isEnabled: index <= state.maxUnlockedRowIndex,
+                              isEnabled: state.isRowInteractable(index),
+                              isGapTarget: gapRowIndex == index,
                               onTap: () => context
                                   .read<LotteryFormCubit>()
                                   .selectRow(index),
+                              onSwipeRight: () => context
+                                  .read<LotteryFormCubit>()
+                                  .randomizeSingleTable(index),
+                              onSwipeLeft: () => _confirmClearTable(index),
                             );
                           },
                         ),
@@ -868,72 +1034,229 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
-class _LotteryRowCard extends StatelessWidget {
+class _LotteryRowCard extends StatefulWidget {
   const _LotteryRowCard({
+    super.key,
     required this.table,
     required this.isActive,
     required this.isEnabled,
+    required this.isGapTarget,
     required this.onTap,
+    required this.onSwipeRight,
+    required this.onSwipeLeft,
   });
 
   final LotteryTable table;
   final bool isActive;
   final bool isEnabled;
+  final bool isGapTarget;
   final VoidCallback onTap;
+  final VoidCallback onSwipeRight;
+  final VoidCallback onSwipeLeft;
+
+  @override
+  State<_LotteryRowCard> createState() => _LotteryRowCardState();
+}
+
+class _LotteryRowCardState extends State<_LotteryRowCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+  late final AnimationController _shakeController;
+  late final Animation<double> _pulseAnimation;
+  late final Animation<double> _scaleAnimation;
+  late final Animation<double> _shakeOffsetAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    );
+    _pulseAnimation = CurvedAnimation(
+      parent: _pulseController,
+      curve: Curves.easeInOut,
+    );
+    _scaleAnimation = Tween<double>(
+      begin: 1,
+      end: 1.02,
+    ).animate(_pulseAnimation);
+    _shakeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+    );
+    _shakeOffsetAnimation = TweenSequence<double>([
+      TweenSequenceItem<double>(
+        tween: Tween<double>(begin: 0, end: 3)
+            .chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 1,
+      ),
+      TweenSequenceItem<double>(
+        tween: Tween<double>(begin: 3, end: -3)
+            .chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 1,
+      ),
+      TweenSequenceItem<double>(
+        tween: Tween<double>(begin: -3, end: 2)
+            .chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 1,
+      ),
+      TweenSequenceItem<double>(
+        tween: Tween<double>(begin: 2, end: 0)
+            .chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 1,
+      ),
+    ]).animate(_shakeController);
+    _syncAnimationWithActiveState();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LotteryRowCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive != widget.isActive) {
+      _syncAnimationWithActiveState();
+      if (!oldWidget.isActive && widget.isActive) {
+        _triggerFocusShake();
+      }
+    }
+  }
+
+  void _syncAnimationWithActiveState() {
+    if (widget.isActive) {
+      _pulseController.repeat(reverse: true);
+    } else {
+      _pulseController.stop();
+      _pulseController.value = 0;
+    }
+  }
+
+  void _triggerFocusShake() {
+    _shakeController
+      ..stop()
+      ..forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _shakeController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color rowBackground = isActive
+    final ThemeData theme = Theme.of(context);
+    final Color rowBackground = widget.isActive
         ? (isDark ? const Color(0xFF243B4E) : const Color(0xFFCAE7FF))
-        : Theme.of(context).colorScheme.surfaceContainerHighest;
+        : theme.colorScheme.surfaceContainerHighest;
+    final Color gapHighlightColor = theme.colorScheme.primary;
+    return AnimatedBuilder(
+      animation: Listenable.merge(<Listenable>[
+        _pulseController,
+        _shakeController,
+      ]),
+      builder: (context, child) {
+        final double pulseValue = _pulseAnimation.value;
+        final Color activeBorderColor = theme.colorScheme.primary.withValues(
+          alpha: 0.72 + (pulseValue * 0.28),
+        );
+        final List<BoxShadow>? activeGlow = widget.isActive
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: theme.colorScheme.primary.withValues(
+                    alpha: 0.12 + (pulseValue * 0.10),
+                  ),
+                  blurRadius: 10 + (pulseValue * 6),
+                  spreadRadius: 0.4 + (pulseValue * 0.8),
+                ),
+              ]
+            : null;
 
-    return Opacity(
-      opacity: isEnabled ? 1 : 0.45,
-      child: InkWell(
-        onTap: isEnabled ? onTap : null,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          height: 56,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          decoration: BoxDecoration(
-            color: rowBackground,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isActive
-                  ? Theme.of(context).colorScheme.primary
-                  : Colors.transparent,
-              width: 1.4,
+        return Transform.scale(
+          scale: widget.isActive ? _scaleAnimation.value : 1,
+          child: Transform.translate(
+            offset: Offset(
+              widget.isActive ? _shakeOffsetAnimation.value : 0,
+              0,
             ),
-          ),
-          child: Row(
-            children: [
-              _RowLabel(text: 'טבלה ${table.tableIndex}'),
-              const SizedBox(width: 8),
-              ...List.generate(
-                6,
-                (index) => Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(right: index == 5 ? 8 : 6),
-                    child: _LotteryCell(
-                      value: index < table.regularNumbers.length
-                          ? table.regularNumbers[index]
-                          : null,
-                      isStrong: false,
+            child: Opacity(
+              opacity: widget.isEnabled ? 1 : 0.45,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragEnd: widget.isEnabled
+                    ? (details) {
+                        final double velocity = details.primaryVelocity ?? 0;
+                        if (velocity > 250) {
+                          widget.onSwipeRight();
+                        } else if (velocity < -250) {
+                          widget.onSwipeLeft();
+                        }
+                      }
+                    : null,
+                child: InkWell(
+                  onTap: widget.isEnabled ? widget.onTap : null,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    height: 56,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: rowBackground,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: widget.isActive
+                            ? activeBorderColor
+                            : widget.isGapTarget
+                                ? gapHighlightColor.withValues(alpha: 0.7)
+                                : Colors.transparent,
+                        width: widget.isActive ? 1.5 : (widget.isGapTarget ? 1.1 : 1.4),
+                      ),
+                      boxShadow: widget.isActive
+                          ? activeGlow
+                          : widget.isGapTarget
+                              ? [
+                                  BoxShadow(
+                                    color: gapHighlightColor.withValues(alpha: 0.12),
+                                    blurRadius: 10,
+                                    spreadRadius: 1,
+                                  ),
+                                ]
+                              : null,
+                    ),
+                    child: Row(
+                      children: [
+                        _RowLabel(text: 'טבלה ${widget.table.tableIndex}'),
+                        const SizedBox(width: 8),
+                        ...List.generate(
+                          6,
+                          (index) => Expanded(
+                            child: Padding(
+                              padding: EdgeInsets.only(right: index == 5 ? 8 : 6),
+                              child: _LotteryCell(
+                                value: index < widget.table.regularNumbers.length
+                                    ? widget.table.regularNumbers[index]
+                                    : null,
+                                isStrong: false,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: _LotteryCell(
+                            value: widget.table.strongNumber,
+                            isStrong: true,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
-              Expanded(
-                child: _LotteryCell(
-                  value: table.strongNumber,
-                  isStrong: true,
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

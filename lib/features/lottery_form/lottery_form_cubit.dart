@@ -37,15 +37,18 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     final int clampedActiveIndex = state.activeRowIndex >= normalizedCount
         ? normalizedCount - 1
         : state.activeRowIndex;
-    final int clampedMaxUnlocked = state.maxUnlockedRowIndex >= normalizedCount
-        ? normalizedCount - 1
-        : state.maxUnlockedRowIndex;
+    final int preferredUnlockedIndex =
+        _preferredUnlockedRowIndexForForm(state.form, normalizedCount);
+    final int nextActiveIndex =
+        _isRowInteractableForForm(state.form, clampedActiveIndex, normalizedCount)
+            ? clampedActiveIndex
+            : _fallbackActiveRowIndexForForm(state.form, normalizedCount);
 
     emit(
       state.copyWith(
         selectedTableCount: normalizedCount,
-        activeRowIndex: clampedActiveIndex,
-        maxUnlockedRowIndex: clampedMaxUnlocked,
+        activeRowIndex: nextActiveIndex,
+        maxUnlockedRowIndex: preferredUnlockedIndex,
         form: state.form.copyWith(
           isComplete: _formService.isFormComplete(
             state.form,
@@ -59,8 +62,7 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
   }
 
   void selectRow(int rowIndex) {
-    if (rowIndex > state.maxUnlockedRowIndex ||
-        rowIndex >= state.selectedTableCount) {
+    if (!state.isRowInteractable(rowIndex)) {
       return;
     }
     emit(state.copyWith(activeRowIndex: rowIndex, clearError: true));
@@ -68,39 +70,52 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
 
   void handleKeyboardPageChanged(int rowIndex) {
     if (rowIndex == state.activeRowIndex ||
-        rowIndex > state.maxUnlockedRowIndex ||
-        rowIndex >= state.selectedTableCount) {
+        !state.isRowInteractable(rowIndex)) {
       return;
     }
     emit(state.copyWith(activeRowIndex: rowIndex, clearError: true));
   }
 
   bool canSwipeForward() {
-    if (state.activeRowIndex >= state.maxUnlockedRowIndex ||
-        state.activeRowIndex >= state.selectedTableCount - 1) {
-      return false;
-    }
-
-    final LotteryTable activeTable = state.form.tables[state.activeRowIndex];
-    return activeTable.isComplete;
+    return _nextAccessibleRowIndexFromForm(
+          state.form,
+          state.activeRowIndex,
+          state.selectedTableCount,
+        ) !=
+        null;
   }
 
   bool canSwipeBackward() {
-    return state.activeRowIndex > 0;
+    return _previousAccessibleRowIndexFromForm(
+          state.form,
+          state.activeRowIndex,
+          state.selectedTableCount,
+        ) !=
+        null;
   }
 
   void swipeToNextRow() {
-    if (!canSwipeForward()) {
+    final int? nextIndex = _nextAccessibleRowIndexFromForm(
+      state.form,
+      state.activeRowIndex,
+      state.selectedTableCount,
+    );
+    if (nextIndex == null) {
       return;
     }
-    selectRow(state.activeRowIndex + 1);
+    selectRow(nextIndex);
   }
 
   void swipeToPreviousRow() {
-    if (!canSwipeBackward()) {
+    final int? previousIndex = _previousAccessibleRowIndexFromForm(
+      state.form,
+      state.activeRowIndex,
+      state.selectedTableCount,
+    );
+    if (previousIndex == null) {
       return;
     }
-    selectRow(state.activeRowIndex - 1);
+    selectRow(previousIndex);
   }
 
   void toggleRegularNumber(int number) {
@@ -147,6 +162,31 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
         successMessage: 'נוצר טופס לוטומט מלא',
         clearError: true,
       ),
+    );
+  }
+
+  void randomizeSingleTable(int rowIndex) {
+    if (!_isRowInteractableForForm(state.form, rowIndex, state.selectedTableCount)) {
+      return;
+    }
+
+    final LotteryTable randomTable =
+        _randomizerService.generateRandomTable(rowIndex + 1);
+    _updateTable(
+      randomTable,
+      advanceIfCompleted: true,
+      successMessage: 'טבלה ${rowIndex + 1} מולאה בלוטומט',
+    );
+  }
+
+  void clearSingleTable(int rowIndex) {
+    if (!_isRowInteractableForForm(state.form, rowIndex, state.selectedTableCount)) {
+      return;
+    }
+
+    _updateTable(
+      LotteryTable.empty(rowIndex + 1),
+      successMessage: 'טבלה ${rowIndex + 1} נוקתה',
     );
   }
 
@@ -416,6 +456,7 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
   void _updateTable(
     LotteryTable updatedTable, {
     bool advanceIfCompleted = false,
+    String? successMessage,
   }) {
     final LotteryForm updatedForm =
         _formService.updateTable(
@@ -424,31 +465,151 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
       selectedTableCount: state.selectedTableCount,
     );
 
-    int maxUnlockedRowIndex = state.maxUnlockedRowIndex;
-    if (updatedTable.isComplete &&
-        updatedTable.tableIndex < state.selectedTableCount) {
-      maxUnlockedRowIndex = maxUnlockedRowIndex < updatedTable.tableIndex
-          ? updatedTable.tableIndex
-          : maxUnlockedRowIndex;
-    }
-
     int activeRowIndex = state.activeRowIndex;
     if (advanceIfCompleted &&
-        updatedTable.isComplete &&
-        activeRowIndex < state.selectedTableCount - 1 &&
-        activeRowIndex + 1 <= maxUnlockedRowIndex) {
-      activeRowIndex += 1;
+        _isTableCompleteStrict(updatedTable)) {
+      final int? nextIndex = _nextRelevantRowIndexAfterCompletion(
+        updatedForm,
+        activeRowIndex,
+        state.selectedTableCount,
+      );
+      if (nextIndex != null) {
+        activeRowIndex = nextIndex;
+      }
+    }
+
+    if (!_isRowInteractableForForm(
+      updatedForm,
+      activeRowIndex,
+      state.selectedTableCount,
+    )) {
+      activeRowIndex = _fallbackActiveRowIndexForForm(
+        updatedForm,
+        state.selectedTableCount,
+      );
     }
 
     emit(
       state.copyWith(
         form: updatedForm,
         activeRowIndex: activeRowIndex,
-        maxUnlockedRowIndex: maxUnlockedRowIndex,
+        maxUnlockedRowIndex: _preferredUnlockedRowIndexForForm(
+          updatedForm,
+          state.selectedTableCount,
+        ),
         isEditingSavedRecord: state.isEditingSavedRecord,
         clearError: true,
-        clearSuccess: true,
+        successMessage: successMessage,
+        clearSuccess: successMessage == null,
       ),
+    );
+  }
+
+  bool _isRowInteractableForForm(
+    LotteryForm form,
+    int rowIndex,
+    int selectedTableCount,
+  ) {
+    if (rowIndex < 0 || rowIndex >= selectedTableCount) {
+      return false;
+    }
+    final int? firstEmptyIndex =
+        _firstEmptyRowIndexForForm(form, selectedTableCount);
+    final LotteryTable table = form.tables[rowIndex];
+    if (!table.isEmpty) {
+      return true;
+    }
+    return firstEmptyIndex == rowIndex;
+  }
+
+  int? _firstEmptyRowIndexForForm(LotteryForm form, int selectedTableCount) {
+    for (int index = 0; index < selectedTableCount; index += 1) {
+      if (form.tables[index].isEmpty) {
+        return index;
+      }
+    }
+    return null;
+  }
+
+  int? _nextAccessibleRowIndexFromForm(
+    LotteryForm form,
+    int currentIndex,
+    int selectedTableCount,
+  ) {
+    for (int index = currentIndex + 1; index < selectedTableCount; index += 1) {
+      if (_isRowInteractableForForm(form, index, selectedTableCount)) {
+        return index;
+      }
+    }
+    return null;
+  }
+
+  int? _previousAccessibleRowIndexFromForm(
+    LotteryForm form,
+    int currentIndex,
+    int selectedTableCount,
+  ) {
+    for (int index = currentIndex - 1; index >= 0; index -= 1) {
+      if (_isRowInteractableForForm(form, index, selectedTableCount)) {
+        return index;
+      }
+    }
+    return null;
+  }
+
+  int _fallbackActiveRowIndexForForm(LotteryForm form, int selectedTableCount) {
+    final int? firstEmptyIndex =
+        _firstEmptyRowIndexForForm(form, selectedTableCount);
+    if (firstEmptyIndex != null) {
+      return firstEmptyIndex;
+    }
+    return selectedTableCount > 0 ? selectedTableCount - 1 : 0;
+  }
+
+  int _preferredUnlockedRowIndexForForm(LotteryForm form, int selectedTableCount) {
+    final int? firstEmptyIndex =
+        _firstEmptyRowIndexForForm(form, selectedTableCount);
+    return firstEmptyIndex ?? (selectedTableCount > 0 ? selectedTableCount - 1 : 0);
+  }
+
+  int? _firstIncompleteRowIndexForForm(
+    LotteryForm form,
+    int selectedTableCount,
+  ) {
+    for (int index = 0; index < selectedTableCount; index += 1) {
+      if (!_isTableCompleteStrict(form.tables[index])) {
+        return index;
+      }
+    }
+    return null;
+  }
+
+  bool _isTableCompleteStrict(LotteryTable table) {
+    return _formService.isTableComplete(table) &&
+        table.regularNumbers.length == LotteryFormService.regularCount &&
+        table.strongNumber != null;
+  }
+
+  int? _nextRelevantRowIndexAfterCompletion(
+    LotteryForm form,
+    int currentIndex,
+    int selectedTableCount,
+  ) {
+    final int? firstIncompleteIndex =
+        _firstIncompleteRowIndexForForm(form, selectedTableCount);
+    if (firstIncompleteIndex == null) {
+      return null;
+    }
+
+    if (firstIncompleteIndex != currentIndex &&
+        _isRowInteractableForForm(form, firstIncompleteIndex, selectedTableCount)) {
+      return firstIncompleteIndex;
+    }
+
+    return _nextAccessibleRowIndexFromForm(
+      form,
+      currentIndex,
+      selectedTableCount,
     );
   }
 }

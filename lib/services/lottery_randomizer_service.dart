@@ -46,6 +46,10 @@ class LotteryRandomizerService {
     );
   }
 
+  LotteryTable generateRandomTable(int tableIndex) {
+    return _generateFullTable(tableIndex);
+  }
+
   LotteryTable _generateFullTable(int tableIndex) {
     final List<int> candidates = List<int>.generate(37, (index) => index + 1)
       ..shuffle(_random);
