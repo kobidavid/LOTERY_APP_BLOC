@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
@@ -27,6 +28,8 @@ class LotteryFormPage extends StatefulWidget {
   });
 
   static const double rowLabelWidth = 98;
+  static const double minKeyboardHeight = 236;
+  static const double maxKeyboardHeight = 300;
   final GroupInviteLinkService inviteLinkService;
   final VoidCallback onOpenMyForms;
 
@@ -248,7 +251,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   void _scheduleEnsureActiveTableVisible({
     required LotteryFormState state,
-    required double keyboardHeight,
   }) {
     final bool activeRowChanged =
         _lastAutoScrolledActiveRowIndex != state.activeRowIndex;
@@ -274,13 +276,17 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   Future<void> _ensureTableVisibleAboveKeyboard({
     required int rowIndex,
   }) async {
-    if (!_tablesScrollController.hasClients) {
+    if (!mounted || !_tablesScrollController.hasClients) {
       return;
     }
 
-    final BuildContext? rowContext = _tableRowKeyForIndex(rowIndex).currentContext;
+    final BuildContext? rowContext =
+        _tableRowKeyForIndex(rowIndex).currentContext;
     final BuildContext? listContext = _tablesListKey.currentContext;
-    if (rowContext == null || listContext == null) {
+    if (rowContext == null ||
+        listContext == null ||
+        !rowContext.mounted ||
+        !listContext.mounted) {
       return;
     }
 
@@ -360,129 +366,132 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             !state.isBusy &&
             _areSelectedTablesComplete(visibleTables, state.selectedTableCount);
         final int? gapRowIndex = state.firstGapRowIndex;
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final double keyboardHeight =
-                (constraints.maxHeight * 0.275).clamp(194.0, 246.0);
-            _scheduleEnsureActiveTableVisible(
-              state: state,
-              keyboardHeight: keyboardHeight,
-            );
+        return SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final double keyboardHeight =
+                  (constraints.maxHeight * 0.34).clamp(
+                    LotteryFormPage.minKeyboardHeight,
+                    LotteryFormPage.maxKeyboardHeight,
+                  );
+              _scheduleEnsureActiveTableVisible(
+                state: state,
+              );
 
-            return Stack(
-              children: [
-                Padding(
-                  padding: EdgeInsets.fromLTRB(10, 10, 10, keyboardHeight + 12),
-                  child: Column(
-                    children: [
-                      const _CompactTopInfoRow(),
-                      const SizedBox(height: 8),
-                      _CompactControlRow(
-                        isGroupMode: _isGroupMode,
-                        isDoubleMode: _isDoubleMode,
-                        selectedTableCount: state.selectedTableCount,
-                        isBusy: state.isBusy,
-                        onModeChanged: (value) =>
-                            setState(() => _isGroupMode = value),
-                        onPlayTypeChanged: (value) =>
-                            setState(() => _isDoubleMode = value),
-                        onTableCountChanged: _handleTableCountChanged,
-                      ),
-                      const SizedBox(height: 8),
-                      _PrimarySubmitButton(
-                        isEnabled: canPrimarySubmit,
-                        onPressed: _handlePrimarySubmit,
-                      ),
-                      const SizedBox(height: 8),
-                      _SecondaryActionRow(
-                        isBusy: state.isBusy,
-                        onClearPressed: _confirmClearForm,
-                        onLottomatAction: (action) {
-                          if (action == _LottomatAction.completeRemaining) {
-                            context
-                                .read<LotteryFormCubit>()
-                                .completeRemainingTables();
-                          } else {
-                            context
-                                .read<LotteryFormCubit>()
-                                .generateFullRandomForm();
-                          }
-                        },
-                      ),
-                      if (gapRowIndex != null) ...[
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                    child: Column(
+                      children: [
+                        const _CompactTopInfoRow(),
+                        const SizedBox(height: 8),
+                        _CompactControlRow(
+                          isGroupMode: _isGroupMode,
+                          isDoubleMode: _isDoubleMode,
+                          selectedTableCount: state.selectedTableCount,
+                          isBusy: state.isBusy,
+                          onModeChanged: (value) =>
+                              setState(() => _isGroupMode = value),
+                          onPlayTypeChanged: (value) =>
+                              setState(() => _isDoubleMode = value),
+                          onTableCountChanged: _handleTableCountChanged,
+                        ),
+                        const SizedBox(height: 8),
+                        _PrimarySubmitButton(
+                          isEnabled: canPrimarySubmit,
+                          onPressed: _handlePrimarySubmit,
+                        ),
+                        const SizedBox(height: 8),
+                        _SecondaryActionRow(
+                          isBusy: state.isBusy,
+                          onClearPressed: _confirmClearForm,
+                          onLottomatAction: (action) {
+                            if (action == _LottomatAction.completeRemaining) {
+                              context
+                                  .read<LotteryFormCubit>()
+                                  .completeRemainingTables();
+                            } else {
+                              context
+                                  .read<LotteryFormCubit>()
+                                  .generateFullRandomForm();
+                            }
+                          },
+                        ),
+                        if (gapRowIndex != null) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
+                              textAlign: TextAlign.right,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context).colorScheme.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         Align(
                           alignment: Alignment.centerRight,
                           child: Text(
-                            'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
+                            'החלק ימינה ללוטומט בטבלה אחת, שמאלה לניקוי',
                             textAlign: TextAlign.right,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                  color: Theme.of(context).colorScheme.primary,
-                                  fontWeight: FontWeight.w700,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
                                 ),
                           ),
                         ),
                       ],
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Text(
-                          'החלק ימינה ללוטומט בטבלה אחת, שמאלה לניקוי',
-                          textAlign: TextAlign.right,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                                fontWeight: FontWeight.w600,
-                              ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: ListView.separated(
-                          key: _tablesListKey,
-                          controller: _tablesScrollController,
-                          padding: EdgeInsets.zero,
-                          itemCount: visibleTables.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            return _LotteryRowCard(
-                              key: _tableRowKeyForIndex(index),
-                              table: visibleTables[index],
-                              isActive: index == state.activeRowIndex,
-                              isEnabled: state.isRowInteractable(index),
-                              isGapTarget: gapRowIndex == index,
-                              onTap: () => context
-                                  .read<LotteryFormCubit>()
-                                  .selectRow(index),
-                              onSwipeRight: () => context
-                                  .read<LotteryFormCubit>()
-                                  .randomizeSingleTable(index),
-                              onSwipeLeft: () => _confirmClearTable(index),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: ListView.separated(
+                        key: _tablesListKey,
+                        controller: _tablesScrollController,
+                        padding: const EdgeInsets.only(bottom: 8),
+                        itemCount: visibleTables.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          return _LotteryRowCard(
+                            key: _tableRowKeyForIndex(index),
+                            table: visibleTables[index],
+                            isActive: index == state.activeRowIndex,
+                            isEnabled: state.isRowInteractable(index),
+                            isGapTarget: gapRowIndex == index,
+                            onTap: () => context
+                                .read<LotteryFormCubit>()
+                                .selectRow(index),
+                            onSwipeRight: () => context
+                                .read<LotteryFormCubit>()
+                                .randomizeSingleTable(index),
+                            onSwipeLeft: () => _confirmClearTable(index),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
                     child: _LotteryKeyboardSheet(
                       height: keyboardHeight,
                       state: state,
                       visibleTableCount: state.selectedTableCount,
                     ),
                   ),
-              ],
-            );
-          },
+                ],
+              );
+            },
+          ),
         );
       },
     );
@@ -1059,7 +1068,7 @@ class _LotteryRowCard extends StatefulWidget {
 }
 
 class _LotteryRowCardState extends State<_LotteryRowCard>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _pulseController;
   late final AnimationController _shakeController;
   late final Animation<double> _pulseAnimation;
@@ -1299,13 +1308,17 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
   @override
   Widget build(BuildContext context) {
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    final double effectiveHeight = widget.height.clamp(
+      LotteryFormPage.minKeyboardHeight,
+      LotteryFormPage.maxKeyboardHeight,
+    );
 
     return Material(
       elevation: 18,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       color: Theme.of(context).colorScheme.surface,
       child: Container(
-        height: widget.height,
+        height: effectiveHeight,
         padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
@@ -1361,123 +1374,109 @@ class _LotteryKeyboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const double gap = 8;
+        final double gap = _safeClamp(constraints.maxWidth * 0.014, 3.0, 8.0);
         const double dividerHeight = 1;
-        const double horizontalInset = 6;
+        final double horizontalInset =
+            _safeClamp(constraints.maxWidth * 0.015, 4.0, 8.0);
         final double rowHeight =
-            (constraints.maxHeight - (gap * 5) - dividerHeight) / 5;
-        final double innerWidth = constraints.maxWidth - (horizontalInset * 2);
-        final double keyboardLabelWidth =
-            (innerWidth * 0.26).clamp(124.0, 158.0);
-        final double fullRowKeySize = (innerWidth - (gap * 9)) / 10;
-        final double topKeySize = rowHeight.clamp(
-          32.0,
-          (innerWidth - keyboardLabelWidth - (gap * 7)) / 7,
+            ((constraints.maxHeight - (gap * 5) - dividerHeight) / 5)
+                .clamp(36.0, 56.0);
+        final double innerWidth = math.max(
+          0,
+          constraints.maxWidth - (horizontalInset * 2),
         );
-        final double regularKeySize = rowHeight.clamp(32.0, fullRowKeySize);
-        final double strongKeySize = rowHeight.clamp(32.0, regularKeySize);
-        final double strongTrackWidth = (strongKeySize * 7) + (gap * 6);
-        final double strongLabelWidth = innerWidth - strongTrackWidth;
+        final double columnWidth = math.max(
+          0,
+          (innerWidth - (gap * 9)) / 10,
+        );
+        final double keyDiameter = math.max(
+          24,
+          math.min(rowHeight, columnWidth),
+        );
+        final double leftLabelWidth = (columnWidth * 3) + (gap * 2);
+        final double strongLabelWidth = leftLabelWidth;
 
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: horizontalInset),
-          child: Column(
-            children: [
-              SizedBox(
-                height: rowHeight,
-                child: Row(
-                  children: [
-                    _RowLabel(
-                      text: 'טבלה ${table.tableIndex}',
-                      width: keyboardLabelWidth,
-                    ),
-                    const SizedBox(width: gap),
-                    ...List.generate(
-                      7,
-                      (index) => Padding(
-                        padding: EdgeInsets.only(right: index == 6 ? 0 : gap),
-                        child: _NumberKey(
-                          label: '${index + 1}',
-                          size: topKeySize,
-                          selected: table.regularNumbers.contains(index + 1),
-                          enabled: isActive &&
-                              (table.regularNumbers.length < 6 ||
-                                  table.regularNumbers.contains(index + 1)),
-                          onPressed: () => context
-                              .read<LotteryFormCubit>()
-                              .toggleRegularNumber(index + 1),
+          padding: EdgeInsets.symmetric(horizontal: horizontalInset),
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: rowHeight,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: leftLabelWidth,
+                        child: _RowLabel(
+                          text: 'טבלה ${table.tableIndex}',
                         ),
                       ),
-                    ),
-                  ],
+                      SizedBox(width: gap),
+                      Expanded(
+                        child: _ResponsiveKeyboardRow(
+                          numbers: List<int>.generate(7, (index) => index + 1),
+                          rowHeight: rowHeight,
+                          gap: gap,
+                          keyDiameter: keyDiameter,
+                          table: table,
+                          isActive: isActive,
+                        ),
+                      )
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: gap),
-              _ResponsiveKeyboardRow(
-                numbers: List<int>.generate(10, (index) => index + 8),
-                rowHeight: rowHeight,
-                keySize: regularKeySize,
-                gap: gap,
-                table: table,
-                isActive: isActive,
-              ),
-              const SizedBox(height: gap),
-              _ResponsiveKeyboardRow(
-                numbers: List<int>.generate(10, (index) => index + 18),
-                rowHeight: rowHeight,
-                keySize: regularKeySize,
-                gap: gap,
-                table: table,
-                isActive: isActive,
-              ),
-              const SizedBox(height: gap),
-              _ResponsiveKeyboardRow(
-                numbers: List<int>.generate(10, (index) => index + 28),
-                rowHeight: rowHeight,
-                keySize: regularKeySize,
-                gap: gap,
-                table: table,
-                isActive: isActive,
-              ),
-              const SizedBox(height: gap),
-              Divider(
-                color: Theme.of(context).dividerColor,
-                height: dividerHeight,
-              ),
-              const SizedBox(height: gap),
-              SizedBox(
-                height: rowHeight,
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: strongTrackWidth,
-                      child: Row(
-                        children: List.generate(
-                          7,
-                          (index) => Padding(
-                            padding: EdgeInsets.only(
-                              right: index == 6 ? 0 : gap,
-                            ),
-                            child: _NumberKey(
-                              label: '${index + 1}',
-                              size: strongKeySize,
-                              selected: table.strongNumber == index + 1,
-                              enabled:
-                                  isActive && table.regularNumbers.length == 6,
-                              onPressed: () => context
-                                  .read<LotteryFormCubit>()
-                                  .toggleStrongNumber(index + 1),
-                            ),
-                          ),
+                SizedBox(height: gap),
+                _ResponsiveKeyboardRow(
+                  numbers: List<int>.generate(10, (index) => index + 8),
+                  rowHeight: rowHeight,
+                  gap: gap,
+                  keyDiameter: keyDiameter,
+                  table: table,
+                  isActive: isActive,
+                ),
+                SizedBox(height: gap),
+                _ResponsiveKeyboardRow(
+                  numbers: List<int>.generate(10, (index) => index + 18),
+                  rowHeight: rowHeight,
+                  gap: gap,
+                  keyDiameter: keyDiameter,
+                  table: table,
+                  isActive: isActive,
+                ),
+                SizedBox(height: gap),
+                _ResponsiveKeyboardRow(
+                  numbers: List<int>.generate(10, (index) => index + 28),
+                  rowHeight: rowHeight,
+                  gap: gap,
+                  keyDiameter: keyDiameter,
+                  table: table,
+                  isActive: isActive,
+                ),
+                SizedBox(height: gap),
+                Divider(
+                  color: Theme.of(context).dividerColor,
+                  height: dividerHeight,
+                ),
+                SizedBox(height: gap),
+                SizedBox(
+                  height: rowHeight,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: (columnWidth * 7) + (gap * 6),
+                        child: _ResponsiveStrongRow(
+                          rowHeight: rowHeight,
+                          gap: gap,
+                          keyDiameter: keyDiameter,
+                          table: table,
+                          isActive: isActive,
                         ),
                       ),
-                    ),
-                    const SizedBox(width: gap),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerRight,
+                      SizedBox(width: gap),
+                      SizedBox(
+                        width: strongLabelWidth,
                         child: Container(
-                          width: strongLabelWidth - gap,
                           height: rowHeight,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
@@ -1490,7 +1489,7 @@ class _LotteryKeyboardPage extends StatelessWidget {
                           child: const FittedBox(
                             fit: BoxFit.scaleDown,
                             child: Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 10),
+                              padding: EdgeInsets.symmetric(horizontal: 8),
                               child: Text(
                                 'המספר החזק',
                                 style: TextStyle(
@@ -1503,11 +1502,11 @@ class _LotteryKeyboardPage extends StatelessWidget {
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -1515,20 +1514,29 @@ class _LotteryKeyboardPage extends StatelessWidget {
   }
 }
 
+double _safeClamp(double value, double min, double max) {
+  final double lower = min <= max ? min : max;
+  final double upper = max >= min ? max : min;
+  if (!value.isFinite) {
+    return lower;
+  }
+  return value.clamp(lower, upper).toDouble();
+}
+
 class _ResponsiveKeyboardRow extends StatelessWidget {
   const _ResponsiveKeyboardRow({
     required this.numbers,
     required this.rowHeight,
-    required this.keySize,
     required this.gap,
+    required this.keyDiameter,
     required this.table,
     required this.isActive,
   });
 
   final List<int> numbers;
   final double rowHeight;
-  final double keySize;
   final double gap;
+  final double keyDiameter;
   final LotteryTable table;
   final bool isActive;
 
@@ -1537,27 +1545,99 @@ class _ResponsiveKeyboardRow extends StatelessWidget {
     return SizedBox(
       height: rowHeight,
       child: Row(
-        children: List.generate(
-          numbers.length,
-          (index) => Padding(
-            padding:
-                EdgeInsets.only(right: index == numbers.length - 1 ? 0 : gap),
-            child: _NumberKey(
-              label: '${numbers[index]}',
-              size: keySize,
-              selected: table.regularNumbers.contains(numbers[index]),
-              enabled: isActive &&
-                  (table.regularNumbers.length < 6 ||
-                      table.regularNumbers.contains(numbers[index])),
-              onPressed: () => context
-                  .read<LotteryFormCubit>()
-                  .toggleRegularNumber(numbers[index]),
-            ),
-          ),
+        children: _buildResponsiveKeyCells(
+          context: context,
+          numbers: numbers,
+          rowHeight: rowHeight,
+          gap: gap,
+          keyDiameter: keyDiameter,
+          selectedCheck: (number) => table.regularNumbers.contains(number),
+          enabledCheck: (number) =>
+              isActive &&
+              (table.regularNumbers.length < 6 ||
+                  table.regularNumbers.contains(number)),
+          onPressed: (number) =>
+              context.read<LotteryFormCubit>().toggleRegularNumber(number),
         ),
       ),
     );
   }
+}
+
+class _ResponsiveStrongRow extends StatelessWidget {
+  const _ResponsiveStrongRow({
+    required this.rowHeight,
+    required this.gap,
+    required this.keyDiameter,
+    required this.table,
+    required this.isActive,
+  });
+
+  final double rowHeight;
+  final double gap;
+  final double keyDiameter;
+  final LotteryTable table;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: rowHeight,
+      child: Row(
+        children: _buildResponsiveKeyCells(
+          context: context,
+          numbers: List<int>.generate(7, (index) => index + 1),
+          rowHeight: rowHeight,
+          gap: gap,
+          keyDiameter: keyDiameter,
+          selectedCheck: (number) => table.strongNumber == number,
+          enabledCheck: (number) =>
+              isActive && table.regularNumbers.length == 6,
+          onPressed: (number) =>
+              context.read<LotteryFormCubit>().toggleStrongNumber(number),
+        ),
+      ),
+    );
+  }
+}
+
+List<Widget> _buildResponsiveKeyCells({
+  required BuildContext context,
+  required List<int> numbers,
+  required double rowHeight,
+  required double gap,
+  required double keyDiameter,
+  required bool Function(int number) selectedCheck,
+  required bool Function(int number) enabledCheck,
+  required ValueChanged<int> onPressed,
+}) {
+  return List<Widget>.generate(numbers.length, (index) {
+    return Expanded(
+      child: Padding(
+        padding: EdgeInsetsDirectional.only(
+          end: index == numbers.length - 1 ? 0 : gap,
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final double slotSize = math.min(
+              keyDiameter,
+              math.min(constraints.maxWidth, rowHeight),
+            );
+            return Align(
+              alignment: Alignment.center,
+              child: _NumberKey(
+                label: '${numbers[index]}',
+                size: slotSize,
+                selected: selectedCheck(numbers[index]),
+                enabled: enabledCheck(numbers[index]),
+                onPressed: () => onPressed(numbers[index]),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  });
 }
 
 class _NumberKey extends StatelessWidget {
@@ -1621,16 +1701,14 @@ class _NumberKey extends StatelessWidget {
 class _RowLabel extends StatelessWidget {
   const _RowLabel({
     required this.text,
-    this.width,
   });
 
   final String text;
-  final double? width;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: width ?? LotteryFormPage.rowLabelWidth,
+      width: LotteryFormPage.rowLabelWidth,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: Colors.black,

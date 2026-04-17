@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "462078938105-m10ghctpsvm7cb16fmpg7vg7ca2m3qgv.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.enescerrahoglu.template_app_bloc",
+            "certificate_hash": "c38f4f5f76b10417672f8c3e11976e29708f7d1c"
+          }
+        },
+        {
           "client_id": "462078938105-hkqlj7mnhhs5ur2lc26gfjla9c5ovcnm.apps.googleusercontent.com",
           "client_type": 3
         }
