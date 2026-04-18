@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
@@ -28,13 +29,60 @@ class LotteryFormPage extends StatefulWidget {
   });
 
   static const double rowLabelWidth = 98;
-  static const double minKeyboardHeight = 236;
-  static const double maxKeyboardHeight = 300;
   final GroupInviteLinkService inviteLinkService;
   final VoidCallback onOpenMyForms;
 
   @override
   State<LotteryFormPage> createState() => _LotteryFormPageState();
+}
+
+class _FormPageLayoutMetrics {
+  const _FormPageLayoutMetrics({
+    required this.compactness,
+    required this.topPadding,
+    required this.topBottomPadding,
+    required this.sectionGap,
+    required this.listGap,
+    required this.keyboardTopGap,
+    required this.fieldShellHeight,
+    required this.toggleHeight,
+    required this.primaryButtonHeight,
+    required this.secondaryButtonHeight,
+    required this.actionHorizontalPadding,
+    required this.actionLabelSpacing,
+  });
+
+  factory _FormPageLayoutMetrics.fromAvailableHeight(double availableHeight) {
+    final double compactness =
+        ((780.0 - availableHeight) / 260.0).clamp(0.0, 1.0);
+    return _FormPageLayoutMetrics(
+      compactness: compactness,
+      topPadding: lerpDouble(8.0, 4.0, compactness) ?? 6.0,
+      topBottomPadding: lerpDouble(6.0, 2.0, compactness) ?? 4.0,
+      sectionGap: lerpDouble(6.0, 2.0, compactness) ?? 4.0,
+      listGap: lerpDouble(6.0, 2.0, compactness) ?? 4.0,
+      keyboardTopGap: lerpDouble(6.0, 1.0, compactness) ?? 3.0,
+      fieldShellHeight: lerpDouble(42.0, 34.0, compactness) ?? 38.0,
+      toggleHeight: lerpDouble(31.0, 25.0, compactness) ?? 28.0,
+      primaryButtonHeight: lerpDouble(48.0, 40.0, compactness) ?? 44.0,
+      secondaryButtonHeight: lerpDouble(42.0, 34.0, compactness) ?? 38.0,
+      actionHorizontalPadding: lerpDouble(8.0, 6.0, compactness) ?? 7.0,
+      actionLabelSpacing: lerpDouble(5.0, 2.0, compactness) ?? 3.5,
+    );
+  }
+
+  final double compactness;
+  final double topPadding;
+  final double topBottomPadding;
+  final double sectionGap;
+  final double listGap;
+  final double keyboardTopGap;
+  final double fieldShellHeight;
+  final double toggleHeight;
+  final double primaryButtonHeight;
+  final double secondaryButtonHeight;
+  final double actionHorizontalPadding;
+  final double actionLabelSpacing;
 }
 
 class _LotteryFormPageState extends State<LotteryFormPage> {
@@ -62,9 +110,14 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   }
 
   Future<void> _promptCreateGroup() async {
+    final Stopwatch stopwatch = Stopwatch()..start();
+    debugPrint('[CreateGroupFlow] prompt start +0ms');
     final LotteryFormState currentState =
         context.read<LotteryFormCubit>().state;
     if (!currentState.form.isComplete || currentState.isBusy) {
+      debugPrint(
+        '[CreateGroupFlow] blocked before dialog +${stopwatch.elapsedMilliseconds}ms complete=${currentState.form.isComplete} isBusy=${currentState.isBusy}',
+      );
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -80,17 +133,35 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       useRootNavigator: true,
       builder: (context) => const _CreateGroupDialog(),
     );
+    debugPrint(
+      '[CreateGroupFlow] dialog resolved +${stopwatch.elapsedMilliseconds}ms groupName="${groupName ?? ''}"',
+    );
 
     if (!mounted || groupName == null || groupName.trim().isEmpty) {
+      debugPrint(
+        '[CreateGroupFlow] cancelled/empty +${stopwatch.elapsedMilliseconds}ms mounted=$mounted',
+      );
       return;
     }
 
+    debugPrint(
+      '[CreateGroupFlow] cubit.createGroup start +${stopwatch.elapsedMilliseconds}ms',
+    );
     final LotteryGroup? group =
         await context.read<LotteryFormCubit>().createGroup(groupName);
+    debugPrint(
+      '[CreateGroupFlow] cubit.createGroup end +${stopwatch.elapsedMilliseconds}ms groupId=${group?.groupId ?? 'null'}',
+    );
     if (!mounted || group == null) {
+      debugPrint(
+        '[CreateGroupFlow] abort after createGroup +${stopwatch.elapsedMilliseconds}ms mounted=$mounted',
+      );
       return;
     }
 
+    debugPrint(
+      '[CreateGroupFlow] navigation push start +${stopwatch.elapsedMilliseconds}ms groupId=${group.groupId}',
+    );
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => GroupDetailsPage(
@@ -100,6 +171,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
           repository: _groupRepository,
         ),
       ),
+    );
+    debugPrint(
+      '[CreateGroupFlow] navigation pop/end +${stopwatch.elapsedMilliseconds}ms groupId=${group.groupId}',
     );
   }
 
@@ -332,6 +406,34 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
   }
 
+  double _calculateKeyboardHeight(
+    BuildContext context,
+    double availableHeight,
+  ) {
+    final double compactness =
+        ((780.0 - availableHeight) / 260.0).clamp(0.0, 1.0);
+    final double minHeight = lerpDouble(
+          228.0,
+          190.0,
+          compactness,
+        ) ??
+        206.0;
+    final double maxHeight = lerpDouble(
+          292.0,
+          248.0,
+          compactness,
+        ) ??
+        270.0;
+    final double ratio = lerpDouble(
+          0.315,
+          0.275,
+          compactness,
+        ) ??
+        0.295;
+    final double desiredHeight = availableHeight * ratio;
+    return _safeClamp(desiredHeight, minHeight, maxHeight);
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<LotteryFormCubit, LotteryFormState>(
@@ -366,14 +468,20 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             !state.isBusy &&
             _areSelectedTablesComplete(visibleTables, state.selectedTableCount);
         final int? gapRowIndex = state.firstGapRowIndex;
-        return SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final double keyboardHeight =
-                  (constraints.maxHeight * 0.34).clamp(
-                    LotteryFormPage.minKeyboardHeight,
-                    LotteryFormPage.maxKeyboardHeight,
-                  );
+        return MediaQuery.removeViewInsets(
+          removeBottom: true,
+          context: context,
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+              final _FormPageLayoutMetrics metrics =
+                  _FormPageLayoutMetrics.fromAvailableHeight(
+                constraints.maxHeight,
+              );
+              final double keyboardHeight = _calculateKeyboardHeight(
+                context,
+                constraints.maxHeight,
+              );
               _scheduleEnsureActiveTableVisible(
                 state: state,
               );
@@ -381,12 +489,18 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
               return Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                    padding: EdgeInsets.fromLTRB(
+                      10,
+                      metrics.topPadding,
+                      10,
+                      metrics.topBottomPadding,
+                    ),
                     child: Column(
                       children: [
                         const _CompactTopInfoRow(),
-                        const SizedBox(height: 8),
+                        SizedBox(height: metrics.sectionGap),
                         _CompactControlRow(
+                          metrics: metrics,
                           isGroupMode: _isGroupMode,
                           isDoubleMode: _isDoubleMode,
                           selectedTableCount: state.selectedTableCount,
@@ -397,13 +511,15 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                               setState(() => _isDoubleMode = value),
                           onTableCountChanged: _handleTableCountChanged,
                         ),
-                        const SizedBox(height: 8),
+                        SizedBox(height: metrics.sectionGap),
                         _PrimarySubmitButton(
+                          metrics: metrics,
                           isEnabled: canPrimarySubmit,
                           onPressed: _handlePrimarySubmit,
                         ),
-                        const SizedBox(height: 8),
+                        SizedBox(height: metrics.sectionGap),
                         _SecondaryActionRow(
+                          metrics: metrics,
                           isBusy: state.isBusy,
                           onClearPressed: _confirmClearForm,
                           onLottomatAction: (action) {
@@ -419,7 +535,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                           },
                         ),
                         if (gapRowIndex != null) ...[
-                          const SizedBox(height: 8),
+                          SizedBox(height: metrics.sectionGap),
                           Align(
                             alignment: Alignment.centerRight,
                             child: Text(
@@ -435,7 +551,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                             ),
                           ),
                         ],
-                        const SizedBox(height: 8),
+                        SizedBox(height: metrics.sectionGap),
                         Align(
                           alignment: Alignment.centerRight,
                           child: Text(
@@ -460,7 +576,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                         controller: _tablesScrollController,
                         padding: const EdgeInsets.only(bottom: 8),
                         itemCount: visibleTables.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        separatorBuilder: (_, __) =>
+                            SizedBox(height: metrics.listGap),
                         itemBuilder: (context, index) {
                           return _LotteryRowCard(
                             key: _tableRowKeyForIndex(index),
@@ -481,7 +598,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.only(top: 8),
+                    padding: EdgeInsets.only(top: metrics.keyboardTopGap),
                     child: _LotteryKeyboardSheet(
                       height: keyboardHeight,
                       state: state,
@@ -491,6 +608,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                 ],
               );
             },
+            ),
           ),
         );
       },
@@ -507,11 +625,14 @@ class _CreateGroupDialog extends StatefulWidget {
 
 class _CreateGroupDialogState extends State<_CreateGroupDialog> {
   late final TextEditingController _controller;
+  late final Stopwatch _dialogStopwatch;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController();
+    _dialogStopwatch = Stopwatch()..start();
+    debugPrint('[CreateGroupFlow] dialog shown +0ms');
   }
 
   @override
@@ -522,26 +643,85 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('יצירת קבוצת לוטו'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: const InputDecoration(
-          labelText: 'שם קבוצה',
-          hintText: 'למשל: קבוצת שישי',
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    final double keyboardInset = mediaQuery.viewInsets.bottom;
+    final double maxDialogHeight = math.max(
+      220,
+      mediaQuery.size.height - keyboardInset - 32,
+    );
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.fromLTRB(16, 24, 16, 16 + keyboardInset),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 420,
+            maxHeight: maxDialogHeight,
+          ),
+          child: Material(
+            color: Theme.of(context).dialogTheme.backgroundColor ??
+                Theme.of(context).colorScheme.surface,
+            elevation: 24,
+            borderRadius: BorderRadius.circular(28),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'יצירת קבוצת לוטו',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Directionality(
+                    textDirection: TextDirection.rtl,
+                    child: TextField(
+                      controller: _controller,
+                      autofocus: true,
+                      textAlign: TextAlign.right,
+                      decoration: const InputDecoration(
+                        labelText: 'שם קבוצה',
+                        hintText: 'למשל: קבוצת שישי',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    textDirection: TextDirection.rtl,
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () {
+                            debugPrint(
+                              '[CreateGroupFlow] dialog confirm click +${_dialogStopwatch.elapsedMilliseconds}ms value="${_controller.text.trim()}"',
+                            );
+                            Navigator.of(context).pop(_controller.text.trim());
+                          },
+                          child: const Text('יצירה'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('ביטול'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('ביטול'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
-          child: const Text('יצירה'),
-        ),
-      ],
     );
   }
 }
@@ -690,7 +870,7 @@ class _CompactTopInfoRowState extends State<_CompactTopInfoRow> {
               tooltip: 'התראות',
               visualDensity: VisualDensity.compact,
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             Expanded(
               child: ClipRect(
                 child: Directionality(
@@ -700,13 +880,14 @@ class _CompactTopInfoRowState extends State<_CompactTopInfoRow> {
                     scrollDirection: Axis.horizontal,
                     physics: const NeverScrollableScrollPhysics(),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
                       child: Text(
                         tickerText,
                         maxLines: 1,
                         textAlign: TextAlign.right,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.w800,
+                              fontSize: 13,
                             ),
                       ),
                     ),
@@ -723,6 +904,7 @@ class _CompactTopInfoRowState extends State<_CompactTopInfoRow> {
 
 class _CompactControlRow extends StatelessWidget {
   const _CompactControlRow({
+    required this.metrics,
     required this.isGroupMode,
     required this.isDoubleMode,
     required this.selectedTableCount,
@@ -732,6 +914,7 @@ class _CompactControlRow extends StatelessWidget {
     required this.onTableCountChanged,
   });
 
+  final _FormPageLayoutMetrics metrics;
   final bool isGroupMode;
   final bool isDoubleMode;
   final int selectedTableCount;
@@ -748,7 +931,9 @@ class _CompactControlRow extends StatelessWidget {
         children: [
           Expanded(
             child: _CompactFieldShell(
+              metrics: metrics,
               child: _TwoOptionToggle(
+                metrics: metrics,
                 isBusy: isBusy,
                 leftLabel: 'אישי',
                 rightLabel: 'קבוצתי',
@@ -757,10 +942,12 @@ class _CompactControlRow extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: metrics.sectionGap),
           Expanded(
             child: _CompactFieldShell(
+              metrics: metrics,
               child: _TwoOptionToggle(
+                metrics: metrics,
                 isBusy: isBusy,
                 leftLabel: 'רגיל',
                 rightLabel: 'דאבל',
@@ -769,9 +956,10 @@ class _CompactControlRow extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: metrics.sectionGap),
           Expanded(
             child: _CompactFieldShell(
+              metrics: metrics,
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<int>(
                   isExpanded: true,
@@ -801,6 +989,7 @@ class _CompactControlRow extends StatelessWidget {
 
 class _TwoOptionToggle extends StatelessWidget {
   const _TwoOptionToggle({
+    required this.metrics,
     required this.isBusy,
     required this.leftLabel,
     required this.rightLabel,
@@ -808,6 +997,7 @@ class _TwoOptionToggle extends StatelessWidget {
     required this.onChanged,
   });
 
+  final _FormPageLayoutMetrics metrics;
   final bool isBusy;
   final String leftLabel;
   final String rightLabel;
@@ -832,7 +1022,7 @@ class _TwoOptionToggle extends StatelessWidget {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
-            height: 34,
+            height: metrics.toggleHeight,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: selected ? selectedColor : unselectedColor,
@@ -872,7 +1062,7 @@ class _TwoOptionToggle extends StatelessWidget {
           selected: !selectedRight,
           onTap: () => onChanged(false),
         ),
-        const SizedBox(width: 6),
+        SizedBox(width: math.max(4, metrics.sectionGap - 1)),
         option(
           label: rightLabel,
           selected: selectedRight,
@@ -885,16 +1075,20 @@ class _TwoOptionToggle extends StatelessWidget {
 
 class _CompactFieldShell extends StatelessWidget {
   const _CompactFieldShell({
+    required this.metrics,
     required this.child,
   });
 
+  final _FormPageLayoutMetrics metrics;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 46,
-      padding: const EdgeInsets.symmetric(horizontal: 6),
+      height: metrics.fieldShellHeight,
+      padding: EdgeInsets.symmetric(
+        horizontal: lerpDouble(6.0, 4.0, metrics.compactness) ?? 5.0,
+      ),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(16),
@@ -907,10 +1101,12 @@ class _CompactFieldShell extends StatelessWidget {
 
 class _PrimarySubmitButton extends StatelessWidget {
   const _PrimarySubmitButton({
+    required this.metrics,
     required this.isEnabled,
     required this.onPressed,
   });
 
+  final _FormPageLayoutMetrics metrics;
   final bool isEnabled;
   final VoidCallback onPressed;
 
@@ -924,7 +1120,7 @@ class _PrimarySubmitButton extends StatelessWidget {
           onTap: onPressed,
           borderRadius: BorderRadius.circular(18),
           child: Ink(
-            height: 52,
+            height: metrics.primaryButtonHeight,
             decoration: BoxDecoration(
               color: isEnabled
                   ? Theme.of(context).colorScheme.primary
@@ -952,11 +1148,13 @@ class _PrimarySubmitButton extends StatelessWidget {
 
 class _SecondaryActionRow extends StatelessWidget {
   const _SecondaryActionRow({
+    required this.metrics,
     required this.isBusy,
     required this.onClearPressed,
     required this.onLottomatAction,
   });
 
+  final _FormPageLayoutMetrics metrics;
   final bool isBusy;
   final VoidCallback onClearPressed;
   final ValueChanged<_LottomatAction> onLottomatAction;
@@ -967,12 +1165,13 @@ class _SecondaryActionRow extends StatelessWidget {
       children: [
         Expanded(
           child: _ActionChip(
+            metrics: metrics,
             label: 'נקה טופס',
             icon: Icons.delete_outline,
             onTap: isBusy ? null : onClearPressed,
           ),
         ),
-        const SizedBox(width: 10),
+        SizedBox(width: metrics.sectionGap + 2),
         Expanded(
           child: PopupMenuButton<_LottomatAction>(
             enabled: !isBusy,
@@ -987,7 +1186,8 @@ class _SecondaryActionRow extends StatelessWidget {
                 child: Text('לוטומט מלא'),
               ),
             ],
-            child: const _ActionChip(
+            child: _ActionChip(
+              metrics: metrics,
               label: 'לוטומט',
               icon: Icons.auto_awesome,
             ),
@@ -1000,11 +1200,13 @@ class _SecondaryActionRow extends StatelessWidget {
 
 class _ActionChip extends StatelessWidget {
   const _ActionChip({
+    required this.metrics,
     required this.label,
     required this.icon,
     this.onTap,
   });
 
+  final _FormPageLayoutMetrics metrics;
   final String label;
   final IconData icon;
   final VoidCallback? onTap;
@@ -1018,13 +1220,13 @@ class _ActionChip extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          height: 46,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          height: metrics.secondaryButtonHeight,
+          padding: EdgeInsets.symmetric(horizontal: metrics.actionHorizontalPadding),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(icon, size: 20),
-              const SizedBox(width: 6),
+              SizedBox(width: metrics.actionLabelSpacing),
               Flexible(
                 child: Text(
                   label,
@@ -1206,59 +1408,98 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
                 child: InkWell(
                   onTap: widget.isEnabled ? widget.onTap : null,
                   borderRadius: BorderRadius.circular(14),
-                  child: Container(
-                    height: 56,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: rowBackground,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: widget.isActive
-                            ? activeBorderColor
-                            : widget.isGapTarget
-                                ? gapHighlightColor.withValues(alpha: 0.7)
-                                : Colors.transparent,
-                        width: widget.isActive ? 1.5 : (widget.isGapTarget ? 1.1 : 1.4),
-                      ),
-                      boxShadow: widget.isActive
-                          ? activeGlow
-                          : widget.isGapTarget
-                              ? [
-                                  BoxShadow(
-                                    color: gapHighlightColor.withValues(alpha: 0.12),
-                                    blurRadius: 10,
-                                    spreadRadius: 1,
-                                  ),
-                                ]
-                              : null,
-                    ),
-                    child: Row(
-                      children: [
-                        _RowLabel(text: 'טבלה ${widget.table.tableIndex}'),
-                        const SizedBox(width: 8),
-                        ...List.generate(
-                          6,
-                          (index) => Expanded(
-                            child: Padding(
-                              padding: EdgeInsets.only(right: index == 5 ? 8 : 6),
-                              child: _LotteryCell(
-                                value: index < widget.table.regularNumbers.length
-                                    ? widget.table.regularNumbers[index]
-                                    : null,
-                                isStrong: false,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final bool isNarrow = constraints.maxWidth < 380;
+                      final double rowHeight = isNarrow ? 40 : 46;
+                      final double labelWidth = isNarrow
+                          ? _safeClamp(
+                              constraints.maxWidth * 0.17,
+                              52,
+                              64,
+                            )
+                          : 68;
+                      final double strongWidth = isNarrow
+                          ? _safeClamp(
+                              constraints.maxWidth * 0.095,
+                              28,
+                              34,
+                            )
+                          : 36;
+                      final double cellGap = isNarrow ? 2 : 3;
+                      return Container(
+                        height: rowHeight,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isNarrow ? 5 : 6,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: rowBackground,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: widget.isActive
+                                ? activeBorderColor
+                                : widget.isGapTarget
+                                    ? gapHighlightColor.withValues(alpha: 0.7)
+                                    : Colors.transparent,
+                            width: widget.isActive
+                                ? 1.5
+                                : (widget.isGapTarget ? 1.1 : 1.4),
+                          ),
+                          boxShadow: widget.isActive
+                              ? activeGlow
+                              : widget.isGapTarget
+                                  ? [
+                                      BoxShadow(
+                                        color:
+                                            gapHighlightColor.withValues(alpha: 0.12),
+                                        blurRadius: 10,
+                                        spreadRadius: 1,
+                                      ),
+                                    ]
+                                  : null,
+                        ),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: labelWidth,
+                              child: _RowLabel(
+                                text: 'טבלה ${widget.table.tableIndex}',
+                                width: labelWidth,
+                                fontSize: isNarrow ? 13.5 : 15,
                               ),
                             ),
-                          ),
+                            SizedBox(width: cellGap + 1),
+                            ...List.generate(
+                              6,
+                              (index) => Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.only(
+                                    right: index == 5 ? cellGap : 0,
+                                    left: index == 0 ? 0 : cellGap,
+                                  ),
+                                  child: _LotteryCell(
+                                    value:
+                                        index < widget.table.regularNumbers.length
+                                            ? widget.table.regularNumbers[index]
+                                            : null,
+                                    isStrong: false,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: cellGap + 1),
+                            SizedBox(
+                              width: strongWidth,
+                              child: _LotteryCell(
+                                value: widget.table.strongNumber,
+                                isStrong: true,
+                              ),
+                            ),
+                          ],
                         ),
-                        Expanded(
-                          child: _LotteryCell(
-                            value: widget.table.strongNumber,
-                            isStrong: true,
-                          ),
-                        ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -1308,10 +1549,9 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
   @override
   Widget build(BuildContext context) {
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
-    final double effectiveHeight = widget.height.clamp(
-      LotteryFormPage.minKeyboardHeight,
-      LotteryFormPage.maxKeyboardHeight,
-    );
+    final double effectiveHeight = widget.height;
+    final double verticalPadding =
+        _safeClamp(effectiveHeight * 0.016, 2.0, 6.0);
 
     return Material(
       elevation: 18,
@@ -1319,7 +1559,7 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
       color: Theme.of(context).colorScheme.surface,
       child: Container(
         height: effectiveHeight,
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+        padding: EdgeInsets.fromLTRB(0, verticalPadding, 0, verticalPadding),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -1374,26 +1614,35 @@ class _LotteryKeyboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final double gap = _safeClamp(constraints.maxWidth * 0.014, 3.0, 8.0);
+        final double verticalGap = _safeClamp(
+          constraints.maxHeight * 0.022,
+          2.0,
+          8.0,
+        );
+        final double horizontalGap = _safeClamp(
+          constraints.maxWidth * 0.014,
+          3.0,
+          8.0,
+        );
         const double dividerHeight = 1;
         final double horizontalInset =
-            _safeClamp(constraints.maxWidth * 0.015, 4.0, 8.0);
+            _safeClamp(constraints.maxWidth * 0.012, 3.0, 8.0);
         final double rowHeight =
-            ((constraints.maxHeight - (gap * 5) - dividerHeight) / 5)
-                .clamp(36.0, 56.0);
+            ((constraints.maxHeight - (verticalGap * 5) - dividerHeight) / 5)
+                .clamp(32.0, 56.0);
         final double innerWidth = math.max(
           0,
           constraints.maxWidth - (horizontalInset * 2),
         );
         final double columnWidth = math.max(
           0,
-          (innerWidth - (gap * 9)) / 10,
+          (innerWidth - (horizontalGap * 9)) / 10,
         );
         final double keyDiameter = math.max(
-          24,
+          22,
           math.min(rowHeight, columnWidth),
         );
-        final double leftLabelWidth = (columnWidth * 3) + (gap * 2);
+        final double leftLabelWidth = (columnWidth * 3) + (horizontalGap * 2);
         final double strongLabelWidth = leftLabelWidth;
 
         return Padding(
@@ -1412,12 +1661,12 @@ class _LotteryKeyboardPage extends StatelessWidget {
                           text: 'טבלה ${table.tableIndex}',
                         ),
                       ),
-                      SizedBox(width: gap),
+                      SizedBox(width: horizontalGap),
                       Expanded(
                         child: _ResponsiveKeyboardRow(
                           numbers: List<int>.generate(7, (index) => index + 1),
                           rowHeight: rowHeight,
-                          gap: gap,
+                          gap: horizontalGap,
                           keyDiameter: keyDiameter,
                           table: table,
                           isActive: isActive,
@@ -1426,54 +1675,54 @@ class _LotteryKeyboardPage extends StatelessWidget {
                     ],
                   ),
                 ),
-                SizedBox(height: gap),
+                SizedBox(height: verticalGap),
                 _ResponsiveKeyboardRow(
                   numbers: List<int>.generate(10, (index) => index + 8),
                   rowHeight: rowHeight,
-                  gap: gap,
+                  gap: horizontalGap,
                   keyDiameter: keyDiameter,
                   table: table,
                   isActive: isActive,
                 ),
-                SizedBox(height: gap),
+                SizedBox(height: verticalGap),
                 _ResponsiveKeyboardRow(
                   numbers: List<int>.generate(10, (index) => index + 18),
                   rowHeight: rowHeight,
-                  gap: gap,
+                  gap: horizontalGap,
                   keyDiameter: keyDiameter,
                   table: table,
                   isActive: isActive,
                 ),
-                SizedBox(height: gap),
+                SizedBox(height: verticalGap),
                 _ResponsiveKeyboardRow(
                   numbers: List<int>.generate(10, (index) => index + 28),
                   rowHeight: rowHeight,
-                  gap: gap,
+                  gap: horizontalGap,
                   keyDiameter: keyDiameter,
                   table: table,
                   isActive: isActive,
                 ),
-                SizedBox(height: gap),
+                SizedBox(height: verticalGap),
                 Divider(
                   color: Theme.of(context).dividerColor,
                   height: dividerHeight,
                 ),
-                SizedBox(height: gap),
+                SizedBox(height: verticalGap),
                 SizedBox(
                   height: rowHeight,
                   child: Row(
                     children: [
                       SizedBox(
-                        width: (columnWidth * 7) + (gap * 6),
+                        width: (columnWidth * 7) + (horizontalGap * 6),
                         child: _ResponsiveStrongRow(
                           rowHeight: rowHeight,
-                          gap: gap,
+                          gap: horizontalGap,
                           keyDiameter: keyDiameter,
                           table: table,
                           isActive: isActive,
                         ),
                       ),
-                      SizedBox(width: gap),
+                      SizedBox(width: horizontalGap),
                       SizedBox(
                         width: strongLabelWidth,
                         child: Container(
@@ -1701,14 +1950,18 @@ class _NumberKey extends StatelessWidget {
 class _RowLabel extends StatelessWidget {
   const _RowLabel({
     required this.text,
+    this.width = LotteryFormPage.rowLabelWidth,
+    this.fontSize = 16,
   });
 
   final String text;
+  final double width;
+  final double fontSize;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: LotteryFormPage.rowLabelWidth,
+      width: width,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: Colors.black,
@@ -1716,10 +1969,13 @@ class _RowLabel extends StatelessWidget {
       ),
       child: Text(
         text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(
           color: Colors.white,
           fontWeight: FontWeight.w900,
-          fontSize: 16,
+        ).copyWith(
+          fontSize: fontSize,
         ),
       ),
     );
@@ -1737,20 +1993,37 @@ class _LotteryCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: isStrong ? const Color(0xFFDCCB59) : const Color(0xFFE91E63),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        value?.toString() ?? '',
-        style: TextStyle(
-          color: isStrong ? Colors.black : Colors.white,
-          fontWeight: FontWeight.w900,
-          fontSize: 18,
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double width = constraints.maxWidth;
+        final double height = constraints.maxHeight;
+        final double fontSize = _safeClamp(
+          math.min(width, height) * 0.45,
+          10,
+          17,
+        );
+        return Container(
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: isStrong ? const Color(0xFFDCCB59) : const Color(0xFFE91E63),
+            borderRadius: BorderRadius.circular(width < 28 ? 8 : 10),
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+              child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1.5),
+              child: Text(
+                value?.toString() ?? '',
+                style: TextStyle(
+                  color: isStrong ? Colors.black : Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: fontSize,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

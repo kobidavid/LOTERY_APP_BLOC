@@ -1620,7 +1620,7 @@ SPEC CHECKSUMS:
   gRPC-Core: 860978b7db482de8b4f5e10677216309b5ff6330
   GTMSessionFetcher: 904bdd2a82c635bcd6f44edf94cc8775c5d1d6e6
   image_cropper: e405d3e44183f8e8edbec2e49b01ff9c819c7ac8
-  image_picker_ios: a768de0d44b0925de635738f5030f9f2727eb996
+  image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
   leveldb-library: cc8b8f8e013647a295ad3f8cd2ddf49a6f19be19
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   path_provider_foundation: 608fcb11be570ce83519b076ab6a1fffe2474f05

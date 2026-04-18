@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -111,9 +113,15 @@ class LotteryGroupRepository {
   final FirebaseAuth _auth;
   final FirebaseFunctions _functions;
   final PrintReadyArtifactService _printReadyArtifactService;
+  String? _lastStabilizedUserId;
+  DateTime? _lastStabilizedAt;
+  Future<void>? _stabilizeAuthInFlight;
+  String? _stabilizeAuthInFlightUserId;
   static const String _submitFunctionName = 'submitLotteryForm';
   static const String _cancelGroupDraftFunctionName = 'cancelGroupDraft';
   static const String _chargeWalletFunctionName = 'chargeUserWallet';
+  static const Duration _authStabilizationTimeout = Duration(seconds: 4);
+  static const Duration _authStabilizationCacheTtl = Duration(minutes: 2);
 
   DocumentReference<Map<String, dynamic>> _groupRef(String groupId) {
     return _firestore.collection('lottery_groups').doc(groupId);
@@ -1236,21 +1244,81 @@ class LotteryGroupRepository {
   Future<void> _stabilizeAuthForInviteRead({
     required String expectedUserId,
   }) async {
+    final Stopwatch stopwatch = Stopwatch()..start();
+    debugPrint(
+      '[CreateGroupFlow] stabilizeAuth start +0ms expectedUserId=$expectedUserId currentUser=${_auth.currentUser?.uid}',
+    );
+    final DateTime now = DateTime.now();
+    if (_lastStabilizedUserId == expectedUserId &&
+        _lastStabilizedAt != null &&
+        now.difference(_lastStabilizedAt!) <= _authStabilizationCacheTtl) {
+      debugPrint(
+        '[CreateGroupFlow] stabilizeAuth cache hit +${stopwatch.elapsedMilliseconds}ms expectedUserId=$expectedUserId',
+      );
+      return;
+    }
+    if (_stabilizeAuthInFlight != null &&
+        _stabilizeAuthInFlightUserId == expectedUserId) {
+      debugPrint(
+        '[CreateGroupFlow] stabilizeAuth awaiting in-flight refresh +${stopwatch.elapsedMilliseconds}ms expectedUserId=$expectedUserId',
+      );
+      await _stabilizeAuthInFlight;
+      return;
+    }
+    final Completer<void> completer = Completer<void>();
+    _stabilizeAuthInFlight = completer.future;
+    _stabilizeAuthInFlightUserId = expectedUserId;
     if (_auth.currentUser?.uid == expectedUserId) {
-      await _auth.currentUser?.getIdToken();
+      try {
+        debugPrint('[CreateGroupFlow] stabilizeAuth fast-path token start +${stopwatch.elapsedMilliseconds}ms');
+        await _auth.currentUser
+            ?.getIdToken()
+            .timeout(_authStabilizationTimeout);
+        _lastStabilizedUserId = expectedUserId;
+        _lastStabilizedAt = DateTime.now();
+        debugPrint(
+          '[CreateGroupFlow] stabilizeAuth fast-path end +${stopwatch.elapsedMilliseconds}ms',
+        );
+      } catch (error) {
+        debugPrint(
+          '[CreateGroupFlow] stabilizeAuth fast-path timeout/fail +${stopwatch.elapsedMilliseconds}ms error=$error',
+        );
+      } finally {
+        completer.complete();
+        _stabilizeAuthInFlight = null;
+        _stabilizeAuthInFlightUserId = null;
+      }
       return;
     }
 
     try {
+      debugPrint(
+        '[CreateGroupFlow] stabilizeAuth authState wait start +${stopwatch.elapsedMilliseconds}ms',
+      );
       final User user = await _auth
           .authStateChanges()
           .firstWhere(
             (user) => user?.uid == expectedUserId,
           )
-          .timeout(const Duration(seconds: 3)) as User;
-      await user.getIdToken();
-    } catch (_) {
+          .timeout(_authStabilizationTimeout) as User;
+      debugPrint(
+        '[CreateGroupFlow] stabilizeAuth token refresh start +${stopwatch.elapsedMilliseconds}ms resolvedUser=${user.uid}',
+      );
+      await user.getIdToken().timeout(_authStabilizationTimeout);
+      _lastStabilizedUserId = expectedUserId;
+      _lastStabilizedAt = DateTime.now();
+      debugPrint(
+        '[CreateGroupFlow] stabilizeAuth waited authState end +${stopwatch.elapsedMilliseconds}ms resolvedUser=${user.uid}',
+      );
+    } catch (error) {
+      debugPrint(
+        '[CreateGroupFlow] stabilizeAuth fallback/fail +${stopwatch.elapsedMilliseconds}ms error=$error',
+      );
       // Let the Firestore call fail normally if auth still isn't ready.
+    } finally {
+      completer.complete();
+      _stabilizeAuthInFlight = null;
+      _stabilizeAuthInFlightUserId = null;
     }
   }
 

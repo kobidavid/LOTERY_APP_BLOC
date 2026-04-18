@@ -345,6 +345,10 @@ class LotteryFormRepository {
     required LotteryForm form,
     required String groupName,
   }) async {
+    final Stopwatch stopwatch = Stopwatch()..start();
+    debugPrint(
+      '[CreateGroupFlow] repository.createGroupFromForm prepare refs start +0ms userId=${form.userId}',
+    );
     final DateTime now = DateTime.now();
     final DocumentReference<Map<String, dynamic>> sourceFormRef =
         form.formId == null
@@ -377,6 +381,9 @@ class LotteryFormRepository {
       'tables': lockedForm.tables.map((table) => table.toMap()).toList(),
       'isComplete': lockedForm.isComplete,
     };
+    debugPrint(
+      '[CreateGroupFlow] repository.createGroupFromForm refs ready +${stopwatch.elapsedMilliseconds}ms sourceFormId=${sourceFormRef.id} groupId=${groupRef.id}',
+    );
 
     final WriteBatch batch = _firestore.batch();
     batch.set(
@@ -435,7 +442,13 @@ class LotteryFormRepository {
       'respondedAt': now,
     });
 
+    debugPrint(
+      '[CreateGroupFlow] repository.createGroupFromForm batch.commit start +${stopwatch.elapsedMilliseconds}ms',
+    );
     await batch.commit();
+    debugPrint(
+      '[CreateGroupFlow] repository.createGroupFromForm batch.commit end +${stopwatch.elapsedMilliseconds}ms',
+    );
 
     return LotteryGroup.fromFirestore(groupRef.id, <String, dynamic>{
       'groupId': groupRef.id,

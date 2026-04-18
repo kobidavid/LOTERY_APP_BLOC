@@ -84,6 +84,7 @@ class _MainShellPageState extends State<MainShellPage> {
         BlocProvider<HistoryCubit>.value(value: _historyCubit),
       ],
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         appBar: _selectedTabIndex == 0
             ? null
             : AppBar(

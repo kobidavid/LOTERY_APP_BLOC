@@ -32,6 +32,7 @@ class GroupDetailsPage extends StatefulWidget {
 
 class _GroupDetailsPageState extends State<GroupDetailsPage> {
   final TextEditingController _minimumController = TextEditingController();
+  late final Stopwatch _openStopwatch;
   LotteryGroupResponseStatus _selectedStatus =
       LotteryGroupResponseStatus.undecided;
   String? _editingMembershipUserId;
@@ -44,6 +45,20 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _showDebug = false;
   String? _receiptLookupCacheKey;
   Future<_ResolvedReceiptOpenTarget?>? _receiptLookupFuture;
+  String? _formDataCacheKey;
+  Future<Map<String, dynamic>>? _formDataFuture;
+  bool _didLogFirstGroupData = false;
+  bool _didLogFirstMembershipsData = false;
+  bool _didLogFirstFormData = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _openStopwatch = Stopwatch()..start();
+    debugPrint(
+      '[CreateGroupFlow] GroupDetailsPage init +0ms groupId=${widget.groupId}',
+    );
+  }
 
   @override
   void dispose() {
@@ -74,10 +89,19 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         ),
         builder: (context, groupSnapshot) {
           if (groupSnapshot.hasError) {
+            debugPrint(
+              '[CreateGroupFlow] GroupDetailsPage group stream error +${_openStopwatch.elapsedMilliseconds}ms error=${groupSnapshot.error}',
+            );
             return _CenteredMessage(message: '${groupSnapshot.error}');
           }
           if (!groupSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
+          }
+          if (!_didLogFirstGroupData) {
+            _didLogFirstGroupData = true;
+            debugPrint(
+              '[CreateGroupFlow] GroupDetailsPage group stream first data +${_openStopwatch.elapsedMilliseconds}ms',
+            );
           }
 
           final LotteryGroup group = groupSnapshot.data!;
@@ -88,17 +112,25 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               groupId: group.groupId,
               userId: widget.currentUserId,
             ),
+            initialData: const <LotteryGroupMembership>[],
             builder: (context, membershipsSnapshot) {
               if (membershipsSnapshot.hasError) {
-                return _CenteredMessage(
-                    message: '${membershipsSnapshot.error}');
+                debugPrint(
+                  '[CreateGroupFlow] GroupDetailsPage memberships stream error +${_openStopwatch.elapsedMilliseconds}ms error=${membershipsSnapshot.error}',
+                );
               }
-              if (!membershipsSnapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
+              if (membershipsSnapshot.connectionState != ConnectionState.waiting &&
+                  membershipsSnapshot.hasData &&
+                  !_didLogFirstMembershipsData &&
+                  membershipsSnapshot.data != null) {
+                _didLogFirstMembershipsData = true;
+                debugPrint(
+                  '[CreateGroupFlow] GroupDetailsPage memberships stream first data +${_openStopwatch.elapsedMilliseconds}ms count=${membershipsSnapshot.data?.length ?? 0}',
+                );
               }
 
               final List<LotteryGroupMembership> memberships =
-                  membershipsSnapshot.data!;
+                  membershipsSnapshot.data ?? const <LotteryGroupMembership>[];
               final String currentUserDisplayName = _currentUserDisplayName();
               final LotteryGroupMembership? myMembership =
                   _findMyMembership(memberships);
@@ -676,6 +708,94 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       );
     }
 
+    if (group.status != LotteryGroupStatus.submitted) {
+      return FutureBuilder<Map<String, dynamic>>(
+        future: _loadFormData(
+          ownerUserId: group.creatorUserId,
+          formId: formDocumentId,
+        ),
+        builder: (context, snapshot) {
+          final Map<String, dynamic> rawData =
+              snapshot.data ?? const <String, dynamic>{};
+          if (snapshot.hasData && !_didLogFirstFormData) {
+            _didLogFirstFormData = true;
+            debugPrint(
+              '[CreateGroupFlow] GroupDetailsPage source form read ready +${_openStopwatch.elapsedMilliseconds}ms formId=$formDocumentId',
+            );
+          }
+          final _ResolvedReceiptOpenTarget? directReceiptTarget =
+              _resolvedReceiptTargetFromRawData(rawData);
+          final bool requiresReceiptLookup =
+              _hasMatchedReceipt(rawData) && directReceiptTarget == null;
+
+          if (!requiresReceiptLookup) {
+            return _buildDetailsContent(
+              group: group,
+              creatorDisplayName: creatorDisplayName,
+              paidParticipantSetIsValid: paidParticipantSetIsValid,
+              currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+              trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
+              formData: rawData,
+              receiptTarget: directReceiptTarget,
+              showInviteButton: showInviteButton,
+              showFinalizeButton: showFinalizeButton,
+              canFinalize: canFinalize,
+              showSubmitButton: showSubmitButton,
+              canSubmit: canSubmit,
+              showCancelButton: showCancelButton,
+              currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+              myMembership: myMembership,
+              memberships: memberships,
+              canEditResponse: canEditResponse,
+              interestedCount: interestedCount,
+              finalizableCount: finalizableCount,
+              estimatedPerParticipantCost: estimatedPerParticipantCost,
+              paymentReadinessMessage: paymentReadinessMessage,
+              yourShareLabel: yourShareLabel,
+              paidCount: paidCount,
+              currentUserDisplayName: currentUserDisplayName,
+            );
+          }
+
+          return FutureBuilder<_ResolvedReceiptOpenTarget?>(
+            future: _lookupReceiptOpenTarget(
+              ownerUserId: group.creatorUserId,
+              formId: formDocumentId,
+              formData: rawData,
+            ),
+            builder: (context, receiptSnapshot) {
+              return _buildDetailsContent(
+                group: group,
+                creatorDisplayName: creatorDisplayName,
+                paidParticipantSetIsValid: paidParticipantSetIsValid,
+                currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+                trackerFormState: _GroupTrackerSubmittedFormState.fromRawData(rawData),
+                formData: rawData,
+                receiptTarget: receiptSnapshot.data,
+                showInviteButton: showInviteButton,
+                showFinalizeButton: showFinalizeButton,
+                canFinalize: canFinalize,
+                showSubmitButton: showSubmitButton,
+                canSubmit: canSubmit,
+                showCancelButton: showCancelButton,
+                currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+                myMembership: myMembership,
+                memberships: memberships,
+                canEditResponse: canEditResponse,
+                interestedCount: interestedCount,
+                finalizableCount: finalizableCount,
+                estimatedPerParticipantCost: estimatedPerParticipantCost,
+                paymentReadinessMessage: paymentReadinessMessage,
+                yourShareLabel: yourShareLabel,
+                paidCount: paidCount,
+                currentUserDisplayName: currentUserDisplayName,
+              );
+            },
+          );
+        },
+      );
+    }
+
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('users')
@@ -1119,6 +1239,42 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     } catch (error) {
       debugPrint('[GroupDetails] receipt target lookup failed: $error');
       return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadFormData({
+    required String ownerUserId,
+    required String formId,
+  }) {
+    final String cacheKey = '$ownerUserId|$formId';
+    if (_formDataCacheKey == cacheKey && _formDataFuture != null) {
+      return _formDataFuture!;
+    }
+    _formDataCacheKey = cacheKey;
+    _formDataFuture = _fetchFormData(
+      ownerUserId: ownerUserId,
+      formId: formId,
+    );
+    return _formDataFuture!;
+  }
+
+  Future<Map<String, dynamic>> _fetchFormData({
+    required String ownerUserId,
+    required String formId,
+  }) async {
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken();
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(ownerUserId)
+              .collection('forms')
+              .doc(formId)
+              .get();
+      return snapshot.data() ?? const <String, dynamic>{};
+    } catch (error) {
+      debugPrint('[GroupDetails] form data lookup failed: $error');
+      return const <String, dynamic>{};
     }
   }
 
@@ -1706,134 +1862,174 @@ class _GroupInfoPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                if (showDeleteButton)
-                  IconButton.filledTonal(
-                    onPressed: isCancelling ? null : onDelete,
-                    icon: isCancelling
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.delete_outline_rounded, size: 18),
-                    tooltip: 'מחק טופס',
-                  ),
-                if (showFinalizeButton)
-                  IconButton.filledTonal(
-                    onPressed: canFinalize && !isFinalizing ? onFinalize : null,
-                    icon: isFinalizing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.how_to_reg_rounded, size: 18),
-                    tooltip: 'סיום בחירת משתתפים',
-                  ),
-                if (showInviteButton && onInvite != null)
-                  Builder(
-                    builder: (buttonContext) => IconButton.filledTonal(
-                      onPressed: () => onInvite!(buttonContext),
-                      icon: const Icon(Icons.share_outlined, size: 18),
-                      tooltip: 'שלח לינק להצטרפות',
-                    ),
-                  ),
-              ],
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool isNarrow = constraints.maxWidth < 390;
+        return Container(
+          padding: EdgeInsets.fromLTRB(
+            isNarrow ? 12 : 14,
+            isNarrow ? 10 : 12,
+            isNarrow ? 12 : 14,
+            isNarrow ? 12 : 14,
           ),
-          const SizedBox(height: 8),
-          Directionality(
-            textDirection: TextDirection.rtl,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    'שם הקבוצה: $groupName',
-                    textAlign: TextAlign.right,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    crossAxisAlignment: CrossAxisAlignment.center,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    if (showDeleteButton)
+                      IconButton.filledTonal(
+                        onPressed: isCancelling ? null : onDelete,
+                        icon: isCancelling
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.delete_outline_rounded, size: 18),
+                        tooltip: 'מחק טופס',
+                      ),
+                    if (showFinalizeButton)
+                      IconButton.filledTonal(
+                        onPressed:
+                            canFinalize && !isFinalizing ? onFinalize : null,
+                        icon: isFinalizing
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.how_to_reg_rounded, size: 18),
+                        tooltip: 'סיום בחירת משתתפים',
+                      ),
+                    if (showInviteButton && onInvite != null)
+                      Builder(
+                        builder: (buttonContext) => IconButton.filledTonal(
+                          onPressed: () => onInvite!(buttonContext),
+                          icon: const Icon(Icons.share_outlined, size: 18),
+                          tooltip: 'שלח לינק להצטרפות',
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        'סטאטוס: $statusLabel',
+                        'שם הקבוצה: $groupName',
                         textAlign: TextAlign.right,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: theme.colorScheme.primary,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          fontSize: isNarrow ? 22 : null,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'הגרלה מס׳: ${lotteryNumber?.isNotEmpty == true ? lotteryNumber : '—'}',
-                        textAlign: TextAlign.right,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w700,
+                      const SizedBox(height: 4),
+                      if (isNarrow)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              'סטאטוס: $statusLabel',
+                              textAlign: TextAlign.right,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'הגרלה מס׳: ${lotteryNumber?.isNotEmpty == true ? lotteryNumber : '—'}',
+                              textAlign: TextAlign.right,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 4,
+                          alignment: WrapAlignment.end,
+                          children: [
+                            Text(
+                              'סטאטוס: $statusLabel',
+                              textAlign: TextAlign.right,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                            Text(
+                              'הגרלה מס׳: ${lotteryNumber?.isNotEmpty == true ? lotteryNumber : '—'}',
+                              textAlign: TextAlign.right,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
                     ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _InfoPillsGrid(
+                children: [
+                  _MetaPill(label: 'יוצר הקבוצה', value: creatorDisplayName),
+                  _MetaPill(label: 'סוג טופס', value: ticketTypeLabel),
+                  _MetaPill(label: 'מספר טבלאות', value: '$tablesCount'),
+                  _MetaPill(label: 'עלות כוללת', value: '$totalCost ש״ח'),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 10,
+                runSpacing: 6,
+                alignment: WrapAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: onOpenForm,
+                    icon: const Icon(Icons.confirmation_num_outlined),
+                    label: const Text('צפה בטופס'),
+                  ),
+                  Tooltip(
+                    message: onOpenReceipt == null
+                        ? 'הקבלה הותאמה אך עדיין אין קישור לפתיחה'
+                        : 'צפה בקבלה',
+                    child: TextButton.icon(
+                      onPressed: onOpenReceipt,
+                      icon: const Icon(Icons.receipt_long_outlined),
+                      label: const Text('צפה בקבלה'),
+                    ),
                   ),
                 ],
               ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          _InfoPillsGrid(
-            children: [
-              _MetaPill(label: 'יוצר הקבוצה', value: creatorDisplayName),
-              _MetaPill(label: 'סוג טופס', value: ticketTypeLabel),
-              _MetaPill(label: 'מספר טבלאות', value: '$tablesCount'),
-              _MetaPill(label: 'עלות כוללת', value: '$totalCost ש״ח'),
             ],
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 10,
-            runSpacing: 6,
-            alignment: WrapAlignment.end,
-            children: [
-              TextButton.icon(
-                onPressed: onOpenForm,
-                icon: const Icon(Icons.confirmation_num_outlined),
-                label: const Text('צפה בטופס'),
-              ),
-              Tooltip(
-                message: onOpenReceipt == null
-                    ? 'הקבלה הותאמה אך עדיין אין קישור לפתיחה'
-                    : 'צפה בקבלה',
-                child: TextButton.icon(
-                  onPressed: onOpenReceipt,
-                  icon: const Icon(Icons.receipt_long_outlined),
-                  label: const Text('צפה בקבלה'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

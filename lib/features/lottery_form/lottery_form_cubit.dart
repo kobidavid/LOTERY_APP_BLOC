@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
@@ -399,8 +400,15 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
   }
 
   Future<LotteryGroup?> createGroup(String groupName) async {
+    final Stopwatch stopwatch = Stopwatch()..start();
     final String trimmedName = groupName.trim();
+    debugPrint(
+      '[CreateGroupFlow] cubit.createGroup validation start +0ms rawName="$groupName"',
+    );
     if (trimmedName.isEmpty) {
+      debugPrint(
+        '[CreateGroupFlow] cubit.createGroup validation failed empty +${stopwatch.elapsedMilliseconds}ms',
+      );
       emit(
         state.copyWith(
           errorMessage: 'יש להזין שם לקבוצה',
@@ -414,6 +422,9 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
       state.form,
       selectedTableCount: state.selectedTableCount,
     )) {
+      debugPrint(
+        '[CreateGroupFlow] cubit.createGroup validation failed incomplete +${stopwatch.elapsedMilliseconds}ms',
+      );
       emit(
         state.copyWith(
           errorMessage: 'ניתן ליצור קבוצה רק מטופס מלא',
@@ -422,16 +433,25 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
       );
       return null;
     }
+    debugPrint(
+      '[CreateGroupFlow] cubit.createGroup validation success +${stopwatch.elapsedMilliseconds}ms selectedTableCount=${state.selectedTableCount}',
+    );
 
     emit(state.copyWith(isBusy: true, clearError: true, clearSuccess: true));
 
     try {
+      debugPrint(
+        '[CreateGroupFlow] repository.createGroupFromForm start +${stopwatch.elapsedMilliseconds}ms',
+      );
       final LotteryGroup group = await _formRepository.createGroupFromForm(
         form: state.form.copyWith(
           tables: state.form.tables.take(state.selectedTableCount).toList(),
           isComplete: true,
         ),
         groupName: trimmedName,
+      );
+      debugPrint(
+        '[CreateGroupFlow] repository.createGroupFromForm end +${stopwatch.elapsedMilliseconds}ms groupId=${group.groupId}',
       );
 
       emit(
@@ -443,6 +463,9 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
 
       return group;
     } catch (error) {
+      debugPrint(
+        '[CreateGroupFlow] cubit.createGroup error +${stopwatch.elapsedMilliseconds}ms error=$error',
+      );
       emit(
         state.copyWith(
           isBusy: false,

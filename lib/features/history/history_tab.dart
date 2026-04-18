@@ -785,24 +785,11 @@ class _GroupSummaryDetails extends StatelessWidget {
             creatorUserId.isNotEmpty &&
             submittedFormId != null &&
             submittedFormId.isNotEmpty) {
-          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('users')
-                .doc(creatorUserId)
-                .collection('forms')
-                .doc(submittedFormId)
-                .snapshots(),
-            builder: (context, formSnapshot) {
-              final Map<String, dynamic> formData =
-                  formSnapshot.data?.data() ?? const <String, dynamic>{};
-              return Text(
-                _submittedText(
-                  submittedAt: submittedAt,
-                  formData: formData,
-                ),
-                textAlign: TextAlign.right,
-              );
-            },
+          return Text(
+            _submittedText(
+              submittedAt: submittedAt,
+            ),
+            textAlign: TextAlign.right,
           );
         }
 
@@ -811,24 +798,11 @@ class _GroupSummaryDetails extends StatelessWidget {
             creatorUserId.isNotEmpty &&
             sourceFormId != null &&
             sourceFormId.isNotEmpty) {
-          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('users')
-                .doc(creatorUserId)
-                .collection('forms')
-                .doc(sourceFormId)
-                .snapshots(),
-            builder: (context, formSnapshot) {
-              final Map<String, dynamic> formData =
-                  formSnapshot.data?.data() ?? const <String, dynamic>{};
-              return Text(
-                _draftText(
-                  createdAt: createdAt,
-                  formData: formData,
-                ),
-                textAlign: TextAlign.right,
-              );
-            },
+          return Text(
+            _draftText(
+              createdAt: createdAt,
+            ),
+            textAlign: TextAlign.right,
           );
         }
 
@@ -849,37 +823,29 @@ class _GroupSummaryDetails extends StatelessWidget {
 
   String _submittedText({
     required DateTime? submittedAt,
-    required Map<String, dynamic> formData,
   }) {
     final SubmittedGroupHistoryItem group = item.submittedGroup!;
-    final _SubmittedGroupPresentationState presentationState =
-        _SubmittedGroupPresentationState.fromRawData(formData);
-    final num? myWin = extractMyWinningShare(
-      winAllocations: formData['winAllocations'],
-      userId: viewerUserId,
-    );
 
     final List<String> lines = <String>[
       'נוצר על ידי: ${group.creatorName}',
-      'סטטוס: ${presentationState.statusLabel}',
-      'מס׳ הגרלה: ${_lotteryNumberLabel(formData)}',
+      'סטטוס: ${_submittedStatusLabel(group.dispatchStatus)}',
+      'מס׳ הגרלה: —',
       'העלות שלי: ${group.myEffectiveShare} ש״ח',
       'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
-      'הזכייה שלי: ${myWin != null ? '$myWin ש״ח' : 'טרם פורסם'}',
+      'הזכייה שלי: טרם פורסם',
     ];
     return lines.join('\n');
   }
 
   String _draftText({
     required DateTime? createdAt,
-    Map<String, dynamic> formData = const <String, dynamic>{},
   }) {
     if (item.kind == _FormsItemKind.groupDraft) {
       final UserGroupListItem group = item.activeGroup!;
       return [
         'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
         'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-        'מס׳ הגרלה: ${_lotteryNumberLabel(formData)}',
+        'מס׳ הגרלה: —',
         'עלות שלי: ${_draftGroupCostLabel(group)}',
         'נוצר: ${formatPresentationDateTime(createdAt ?? group.updatedAt)}',
         'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
@@ -898,6 +864,18 @@ class _GroupSummaryDetails extends StatelessWidget {
       'מועד ביטול: ${formatPresentationDateTime(group.cancelledAt)}',
       'זיכוי לארנק: ${group.myRefundAmount} ש״ח',
     ].join('\n');
+  }
+
+  String _submittedStatusLabel(String rawDispatchStatus) {
+    switch (rawDispatchStatus) {
+      case LotteryGroupRepository.dispatchStatusSubmittedToStation:
+        return 'נמסר לתחנה';
+      case LotteryGroupRepository.dispatchStatusPrinted:
+        return 'הודפס';
+      case LotteryGroupRepository.dispatchStatusQueuedForPrint:
+      default:
+        return 'ממתין להדפסה';
+    }
   }
 
   String _fallbackText() {
@@ -967,76 +945,5 @@ class _GroupSummaryDetails extends StatelessWidget {
       return 'ממתין לתשלום';
     }
     return 'ייקבע בהמשך';
-  }
-
-  String _lotteryNumberLabel(Map<String, dynamic> formData) {
-    final dynamic lotteryId = formData['lotteryId'];
-    if (lotteryId == null) {
-      return '—';
-    }
-    return '$lotteryId';
-  }
-}
-
-class _SubmittedGroupPresentationState {
-  const _SubmittedGroupPresentationState({
-    required this.dispatchStatus,
-    required this.printReadyUrl,
-    required this.printedAt,
-    required this.submittedToStationAt,
-    required this.hasReceipt,
-  });
-
-  factory _SubmittedGroupPresentationState.fromRawData(
-    Map<String, dynamic> rawData,
-  ) {
-    return _SubmittedGroupPresentationState(
-      dispatchStatus: rawData['dispatchStatus'] as String?,
-      printReadyUrl: rawData['printReadyUrl'] as String?,
-      printedAt: presentationAsDateTime(rawData['printedAt']),
-      submittedToStationAt:
-          presentationAsDateTime(rawData['submittedToStationAt']),
-      hasReceipt: extractReceiptUrl(rawData) != null,
-    );
-  }
-
-  final String? dispatchStatus;
-  final String? printReadyUrl;
-  final DateTime? printedAt;
-  final DateTime? submittedToStationAt;
-  final bool hasReceipt;
-
-  String get effectiveDispatchStatus {
-    if (submittedToStationAt != null ||
-        dispatchStatus ==
-            LotteryGroupRepository.dispatchStatusSubmittedToStation) {
-      return LotteryGroupRepository.dispatchStatusSubmittedToStation;
-    }
-    if (printedAt != null ||
-        dispatchStatus == LotteryGroupRepository.dispatchStatusPrinted) {
-      return LotteryGroupRepository.dispatchStatusPrinted;
-    }
-    if ((printReadyUrl?.isNotEmpty ?? false) ||
-        dispatchStatus ==
-            LotteryGroupRepository.dispatchStatusQueuedForPrint) {
-      return LotteryGroupRepository.dispatchStatusQueuedForPrint;
-    }
-    return LotteryGroupRepository.dispatchStatusQueuedForPrint;
-  }
-
-  String get statusLabel {
-    if (hasReceipt) {
-      return 'קבלה הועלתה';
-    }
-
-    switch (effectiveDispatchStatus) {
-      case LotteryGroupRepository.dispatchStatusPrinted:
-        return 'הודפס';
-      case LotteryGroupRepository.dispatchStatusSubmittedToStation:
-        return 'נמסר לתחנה';
-      case LotteryGroupRepository.dispatchStatusQueuedForPrint:
-      default:
-        return 'ממתין להדפסה';
-    }
   }
 }
