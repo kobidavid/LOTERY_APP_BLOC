@@ -4,6 +4,7 @@ import 'dart:ui' show lerpDouble;
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../models/lottery_group.dart';
@@ -1273,9 +1274,14 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
     with TickerProviderStateMixin {
   late final AnimationController _pulseController;
   late final AnimationController _shakeController;
+  late final AnimationController _completionController;
   late final Animation<double> _pulseAnimation;
   late final Animation<double> _scaleAnimation;
   late final Animation<double> _shakeOffsetAnimation;
+  late final Animation<double> _completionAnimation;
+  double _dragOffset = 0;
+  bool _thresholdReached = false;
+  _SwipeActionVisual _completionAction = _SwipeActionVisual.none;
 
   @override
   void initState() {
@@ -1318,6 +1324,14 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
         weight: 1,
       ),
     ]).animate(_shakeController);
+    _completionController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+    );
+    _completionAnimation = CurvedAnimation(
+      parent: _completionController,
+      curve: Curves.easeOutCubic,
+    );
     _syncAnimationWithActiveState();
   }
 
@@ -1351,7 +1365,73 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
   void dispose() {
     _pulseController.dispose();
     _shakeController.dispose();
+    _completionController.dispose();
     super.dispose();
+  }
+
+  double _previewThresholdForWidth(double width) {
+    return _safeClamp(width * 0.22, 56, 88);
+  }
+
+  double _commitThresholdForWidth(double width) {
+    return _safeClamp(width * 0.34, 92, 132);
+  }
+
+  void _updateDragOffset(double delta, double maxExtent) {
+    final double nextOffset = (_dragOffset + delta).clamp(-maxExtent, maxExtent);
+    final double threshold = _previewThresholdForWidth(maxExtent);
+    final bool nextThresholdReached = nextOffset.abs() >= threshold;
+    if (nextThresholdReached && !_thresholdReached) {
+      HapticFeedback.lightImpact();
+    }
+    setState(() {
+      _dragOffset = nextOffset;
+      _thresholdReached = nextThresholdReached;
+    });
+  }
+
+  Future<void> _triggerSwipeAction(
+    _SwipeActionVisual action,
+    VoidCallback callback,
+  ) async {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _completionAction = action;
+      _dragOffset = 0;
+      _thresholdReached = false;
+    });
+    await _completionController.forward(from: 0);
+    callback();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _completionAction = _SwipeActionVisual.none);
+  }
+
+  Future<void> _handleHorizontalDragEnd(
+    DragEndDetails details,
+    double width,
+  ) async {
+    final double velocity = details.primaryVelocity ?? 0;
+    final double commitThreshold = _commitThresholdForWidth(width);
+    final bool triggerRight =
+        _dragOffset >= commitThreshold || (velocity > 900 && _dragOffset > 24);
+    final bool triggerLeft =
+        _dragOffset <= -commitThreshold || (velocity < -900 && _dragOffset < -24);
+
+    if (triggerRight) {
+      await _triggerSwipeAction(_SwipeActionVisual.lottomat, widget.onSwipeRight);
+      return;
+    }
+    if (triggerLeft) {
+      await _triggerSwipeAction(_SwipeActionVisual.clear, widget.onSwipeLeft);
+      return;
+    }
+
+    setState(() {
+      _dragOffset = 0;
+      _thresholdReached = false;
+    });
   }
 
   @override
@@ -1366,6 +1446,7 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
       animation: Listenable.merge(<Listenable>[
         _pulseController,
         _shakeController,
+        _completionController,
       ]),
       builder: (context, child) {
         final double pulseValue = _pulseAnimation.value;
@@ -1383,9 +1464,20 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
                 ),
               ]
             : null;
+        final double completionValue = _completionAnimation.value;
+        final Color completionOverlayColor = switch (_completionAction) {
+          _SwipeActionVisual.lottomat => const Color(0xFFFFE94C)
+              .withValues(alpha: 0.24 * (1 - completionValue)),
+          _SwipeActionVisual.clear => theme.colorScheme.errorContainer
+              .withValues(alpha: 0.22 * (1 - completionValue)),
+          _SwipeActionVisual.none => Colors.transparent,
+        };
 
         return Transform.scale(
-          scale: widget.isActive ? _scaleAnimation.value : 1,
+          scale: (widget.isActive ? _scaleAnimation.value : 1) +
+              (_completionAction == _SwipeActionVisual.none
+                  ? 0
+                  : (0.008 * (1 - completionValue))),
           child: Transform.translate(
             offset: Offset(
               widget.isActive ? _shakeOffsetAnimation.value : 0,
@@ -1393,120 +1485,266 @@ class _LotteryRowCardState extends State<_LotteryRowCard>
             ),
             child: Opacity(
               opacity: widget.isEnabled ? 1 : 0.45,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragEnd: widget.isEnabled
-                    ? (details) {
-                        final double velocity = details.primaryVelocity ?? 0;
-                        if (velocity > 250) {
-                          widget.onSwipeRight();
-                        } else if (velocity < -250) {
-                          widget.onSwipeLeft();
-                        }
-                      }
-                    : null,
-                child: InkWell(
-                  onTap: widget.isEnabled ? widget.onTap : null,
-                  borderRadius: BorderRadius.circular(14),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final bool isNarrow = constraints.maxWidth < 380;
-                      final double rowHeight = isNarrow ? 40 : 46;
-                      final double labelWidth = isNarrow
-                          ? _safeClamp(
-                              constraints.maxWidth * 0.17,
-                              52,
-                              64,
-                            )
-                          : 68;
-                      final double strongWidth = isNarrow
-                          ? _safeClamp(
-                              constraints.maxWidth * 0.095,
-                              28,
-                              34,
-                            )
-                          : 36;
-                      final double cellGap = isNarrow ? 2 : 3;
-                      return Container(
-                        height: rowHeight,
-                        padding: EdgeInsets.symmetric(
-                          horizontal: isNarrow ? 5 : 6,
-                          vertical: 4,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final bool isNarrow = constraints.maxWidth < 380;
+                  final double rowHeight = isNarrow ? 40 : 46;
+                  final double labelWidth = isNarrow
+                      ? _safeClamp(
+                          constraints.maxWidth * 0.17,
+                          52,
+                          64,
+                        )
+                      : 68;
+                  final double strongWidth = isNarrow
+                      ? _safeClamp(
+                          constraints.maxWidth * 0.095,
+                          28,
+                          34,
+                        )
+                      : 36;
+                  final double cellGap = isNarrow ? 2 : 3;
+                  final double maxSwipeExtent = constraints.maxWidth * 0.38;
+                  final double previewThreshold =
+                      _previewThresholdForWidth(constraints.maxWidth);
+                  final double commitThreshold =
+                      _commitThresholdForWidth(constraints.maxWidth);
+                  final _SwipeActionVisual swipeVisual = _dragOffset > 0
+                      ? _SwipeActionVisual.lottomat
+                      : _dragOffset < 0
+                          ? _SwipeActionVisual.clear
+                          : _SwipeActionVisual.none;
+                  final double swipeProgress = _dragOffset == 0
+                      ? 0
+                      : (_dragOffset.abs() / maxSwipeExtent).clamp(0, 1);
+                  final bool armed = _dragOffset.abs() >= previewThreshold;
+                  final bool readyToCommit =
+                      _dragOffset.abs() >= commitThreshold;
+
+                  return Stack(
+                    children: [
+                      Positioned.fill(
+                        child: _SwipeActionBackground(
+                          action: swipeVisual,
+                          progress: swipeProgress,
+                          armed: armed,
+                          readyToCommit: readyToCommit,
+                          completionAction: _completionAction,
                         ),
-                        decoration: BoxDecoration(
-                          color: rowBackground,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: widget.isActive
-                                ? activeBorderColor
-                                : widget.isGapTarget
-                                    ? gapHighlightColor.withValues(alpha: 0.7)
-                                    : Colors.transparent,
-                            width: widget.isActive
-                                ? 1.5
-                                : (widget.isGapTarget ? 1.1 : 1.4),
-                          ),
-                          boxShadow: widget.isActive
-                              ? activeGlow
-                              : widget.isGapTarget
-                                  ? [
-                                      BoxShadow(
-                                        color:
-                                            gapHighlightColor.withValues(alpha: 0.12),
-                                        blurRadius: 10,
-                                        spreadRadius: 1,
-                                      ),
-                                    ]
-                                  : null,
-                        ),
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: labelWidth,
-                              child: _RowLabel(
-                                text: 'טבלה ${widget.table.tableIndex}',
-                                width: labelWidth,
-                                fontSize: isNarrow ? 13.5 : 15,
+                      ),
+                      Transform.translate(
+                        offset: Offset(_dragOffset, 0),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onHorizontalDragStart: widget.isEnabled
+                              ? (_) {
+                                  setState(() {
+                                    _dragOffset = 0;
+                                    _thresholdReached = false;
+                                  });
+                                }
+                              : null,
+                          onHorizontalDragUpdate: widget.isEnabled
+                              ? (details) => _updateDragOffset(
+                                    details.primaryDelta ?? 0,
+                                    maxSwipeExtent,
+                                  )
+                              : null,
+                          onHorizontalDragEnd: widget.isEnabled
+                              ? (details) => _handleHorizontalDragEnd(
+                                    details,
+                                    constraints.maxWidth,
+                                  )
+                              : null,
+                          onHorizontalDragCancel: widget.isEnabled
+                              ? () {
+                                  setState(() {
+                                    _dragOffset = 0;
+                                    _thresholdReached = false;
+                                  });
+                                }
+                              : null,
+                          child: InkWell(
+                            onTap: widget.isEnabled ? widget.onTap : null,
+                            borderRadius: BorderRadius.circular(14),
+                            child: Container(
+                              height: rowHeight,
+                              padding: EdgeInsets.symmetric(
+                                horizontal: isNarrow ? 5 : 6,
+                                vertical: 4,
                               ),
-                            ),
-                            SizedBox(width: cellGap + 1),
-                            ...List.generate(
-                              6,
-                              (index) => Expanded(
-                                child: Padding(
-                                  padding: EdgeInsets.only(
-                                    right: index == 5 ? cellGap : 0,
-                                    left: index == 0 ? 0 : cellGap,
-                                  ),
-                                  child: _LotteryCell(
-                                    value:
-                                        index < widget.table.regularNumbers.length
-                                            ? widget.table.regularNumbers[index]
-                                            : null,
-                                    isStrong: false,
-                                  ),
+                              decoration: BoxDecoration(
+                                color: Color.alphaBlend(
+                                  completionOverlayColor,
+                                  rowBackground,
                                 ),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: widget.isActive
+                                      ? activeBorderColor
+                                      : widget.isGapTarget
+                                          ? gapHighlightColor.withValues(alpha: 0.7)
+                                          : Colors.transparent,
+                                  width: widget.isActive
+                                      ? 1.5
+                                      : (widget.isGapTarget ? 1.1 : 1.4),
+                                ),
+                                boxShadow: widget.isActive
+                                    ? activeGlow
+                                    : widget.isGapTarget
+                                        ? [
+                                            BoxShadow(
+                                              color: gapHighlightColor.withValues(alpha: 0.12),
+                                              blurRadius: 10,
+                                              spreadRadius: 1,
+                                            ),
+                                          ]
+                                        : null,
+                              ),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: labelWidth,
+                                    child: _RowLabel(
+                                      text: 'טבלה ${widget.table.tableIndex}',
+                                      width: labelWidth,
+                                      fontSize: isNarrow ? 13.5 : 15,
+                                    ),
+                                  ),
+                                  SizedBox(width: cellGap + 1),
+                                  ...List.generate(
+                                    6,
+                                    (index) => Expanded(
+                                      child: Padding(
+                                        padding: EdgeInsets.only(
+                                          right: index == 5 ? cellGap : 0,
+                                          left: index == 0 ? 0 : cellGap,
+                                        ),
+                                        child: _LotteryCell(
+                                          value: index < widget.table.regularNumbers.length
+                                              ? widget.table.regularNumbers[index]
+                                              : null,
+                                          isStrong: false,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: cellGap + 1),
+                                  SizedBox(
+                                    width: strongWidth,
+                                    child: _LotteryCell(
+                                      value: widget.table.strongNumber,
+                                      isStrong: true,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            SizedBox(width: cellGap + 1),
-                            SizedBox(
-                              width: strongWidth,
-                              child: _LotteryCell(
-                                value: widget.table.strongNumber,
-                                isStrong: true,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
-                      );
-                    },
-                  ),
-                ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
         );
       },
+    );
+  }
+}
+
+enum _SwipeActionVisual {
+  none,
+  lottomat,
+  clear,
+}
+
+class _SwipeActionBackground extends StatelessWidget {
+  const _SwipeActionBackground({
+    required this.action,
+    required this.progress,
+    required this.armed,
+    required this.readyToCommit,
+    required this.completionAction,
+  });
+
+  final _SwipeActionVisual action;
+  final double progress;
+  final bool armed;
+  final bool readyToCommit;
+  final _SwipeActionVisual completionAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final _SwipeActionVisual effectiveAction =
+        action == _SwipeActionVisual.none ? completionAction : action;
+    if (effectiveAction == _SwipeActionVisual.none) {
+      return const SizedBox.shrink();
+    }
+    final bool isLottomat = effectiveAction == _SwipeActionVisual.lottomat;
+    final Alignment alignment =
+        isLottomat ? Alignment.centerLeft : Alignment.centerRight;
+    final EdgeInsetsGeometry padding = isLottomat
+        ? const EdgeInsetsDirectional.only(start: 14)
+        : const EdgeInsetsDirectional.only(end: 14);
+    final Color baseColor = isLottomat
+        ? const Color(0xFFFFF5A8)
+        : theme.colorScheme.errorContainer;
+    final Color iconColor = isLottomat
+        ? const Color(0xFF574400)
+        : theme.colorScheme.onErrorContainer;
+    final IconData icon = isLottomat ? Icons.auto_awesome : Icons.delete_outline;
+    final String label = isLottomat
+        ? (readyToCommit
+            ? 'שחרר ללוטומט'
+            : (armed ? 'המשך ללוטומט' : 'לוטומט'))
+        : (readyToCommit
+            ? 'שחרר לניקוי'
+            : (armed ? 'המשך לניקוי' : 'נקה טבלה'));
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          begin: isLottomat ? Alignment.centerLeft : Alignment.centerRight,
+          end: isLottomat ? Alignment.centerRight : Alignment.centerLeft,
+          colors: <Color>[
+            baseColor.withValues(alpha: 0.82 * math.max(progress, 0.18)),
+            baseColor.withValues(alpha: 0.16 * math.max(progress, 0.12)),
+          ],
+        ),
+      ),
+      child: Align(
+        alignment: alignment,
+        child: Padding(
+          padding: padding,
+          child: Opacity(
+            opacity: _safeClamp(progress * 1.35, 0, 1),
+            child: Transform.scale(
+              scale: 0.94 + (math.min(progress, 1) * 0.08),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                textDirection:
+                    isLottomat ? TextDirection.ltr : TextDirection.rtl,
+                children: [
+                  Icon(icon, color: iconColor, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: iconColor,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1529,6 +1767,10 @@ class _LotteryKeyboardSheet extends StatefulWidget {
 class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
   late final PageController _pageController;
   bool _ignoreNextPageChange = false;
+  double _dragOffset = 0;
+  bool _isDragging = false;
+  bool _previewThresholdReached = false;
+  bool _commitThresholdReached = false;
 
   @override
   void initState() {
@@ -1543,7 +1785,77 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
         _pageController.hasClients) {
       _ignoreNextPageChange = true;
       _pageController.jumpToPage(widget.state.activeRowIndex);
+      if (_dragOffset != 0 || _isDragging) {
+        setState(() {
+          _dragOffset = 0;
+          _isDragging = false;
+          _previewThresholdReached = false;
+          _commitThresholdReached = false;
+        });
+      }
     }
+  }
+
+  double _maxPullForWidth(double width) {
+    return _safeClamp(width * 0.24, 40, 72);
+  }
+
+  double _previewThresholdForWidth(double width) {
+    return _safeClamp(width * 0.12, 18, 28);
+  }
+
+  double _commitThresholdForWidth(double width) {
+    return _safeClamp(width * 0.16, 28, 46);
+  }
+
+  void _updateKeyboardPull(double delta, double width) {
+    final double maxPull = _maxPullForWidth(width);
+    final double nextOffset = (_dragOffset + delta).clamp(-maxPull, maxPull);
+    final double previewThreshold = _previewThresholdForWidth(width);
+    final double commitThreshold = _commitThresholdForWidth(width);
+    final bool nextPreviewReached = nextOffset.abs() >= previewThreshold;
+    final bool nextCommitReached = nextOffset.abs() >= commitThreshold;
+    if (nextPreviewReached && !_previewThresholdReached) {
+      HapticFeedback.selectionClick();
+    }
+    if (nextCommitReached && !_commitThresholdReached) {
+      HapticFeedback.lightImpact();
+    }
+    setState(() {
+      _dragOffset = nextOffset;
+      _previewThresholdReached = nextPreviewReached;
+      _commitThresholdReached = nextCommitReached;
+    });
+  }
+
+  Future<void> _handleKeyboardPullEnd(
+    LotteryFormCubit cubit,
+    DragEndDetails details,
+    double width,
+  ) async {
+    final double velocity = details.primaryVelocity ?? 0;
+    final bool wantsNext = _dragOffset < 0;
+    final bool canTransition =
+        wantsNext ? cubit.canSwipeToNextRow() : cubit.canSwipeToPreviousRow();
+    final double commitThreshold = _commitThresholdForWidth(width);
+    final bool shouldCommit = _dragOffset.abs() >= commitThreshold ||
+        (velocity.abs() > 520 && _dragOffset.abs() > 10);
+
+    if (shouldCommit && canTransition) {
+      HapticFeedback.selectionClick();
+      if (wantsNext) {
+        cubit.swipeToNextRow();
+      } else {
+        cubit.swipeToPreviousRow();
+      }
+    }
+
+    setState(() {
+      _dragOffset = 0;
+      _isDragging = false;
+      _previewThresholdReached = false;
+      _commitThresholdReached = false;
+    });
   }
 
   @override
@@ -1564,35 +1876,86 @@ class _LotteryKeyboardSheetState extends State<_LotteryKeyboardSheet> {
           color: Theme.of(context).colorScheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragEnd: (details) {
-            final double velocity = details.primaryVelocity ?? 0;
-            if (velocity < -250) {
-              cubit.swipeToNextRow();
-            } else if (velocity > 250) {
-              cubit.swipeToPreviousRow();
-            }
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final double maxPull = _maxPullForWidth(constraints.maxWidth);
+            final double pullProgress = (_dragOffset.abs() / maxPull).clamp(0, 1);
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (_) {
+                setState(() {
+                  _isDragging = true;
+                  _dragOffset = 0;
+                  _previewThresholdReached = false;
+                  _commitThresholdReached = false;
+                });
+              },
+              onHorizontalDragUpdate: (details) {
+                _updateKeyboardPull(
+                  details.primaryDelta ?? 0,
+                  constraints.maxWidth,
+                );
+              },
+              onHorizontalDragEnd: (details) =>
+                  _handleKeyboardPullEnd(cubit, details, constraints.maxWidth),
+              onHorizontalDragCancel: () {
+                setState(() {
+                  _dragOffset = 0;
+                  _isDragging = false;
+                  _previewThresholdReached = false;
+                  _commitThresholdReached = false;
+                });
+              },
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0, end: _dragOffset),
+                duration: _isDragging
+                    ? Duration.zero
+                    : const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                builder: (context, animatedOffset, child) {
+                  return Transform.translate(
+                    offset: Offset(animatedOffset, 0),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        boxShadow: pullProgress > 0
+                            ? <BoxShadow>[
+                                BoxShadow(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary
+                                      .withValues(alpha: 0.06 + (pullProgress * 0.06)),
+                                  blurRadius: 8 + (pullProgress * 6),
+                                  spreadRadius: pullProgress * 0.5,
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: child,
+                    ),
+                  );
+                },
+                child: PageView.builder(
+                  controller: _pageController,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: widget.visibleTableCount,
+                  onPageChanged: (index) {
+                    if (_ignoreNextPageChange) {
+                      _ignoreNextPageChange = false;
+                      return;
+                    }
+                    cubit.handleKeyboardPageChanged(index);
+                  },
+                  itemBuilder: (context, index) {
+                    return _LotteryKeyboardPage(
+                      table: widget.state.form.tables[index],
+                      isActive: index == widget.state.activeRowIndex,
+                      rowLabelWidth: LotteryFormPage.rowLabelWidth,
+                    );
+                  },
+                ),
+              ),
+            );
           },
-          child: PageView.builder(
-            controller: _pageController,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: widget.visibleTableCount,
-            onPageChanged: (index) {
-              if (_ignoreNextPageChange) {
-                _ignoreNextPageChange = false;
-                return;
-              }
-              cubit.handleKeyboardPageChanged(index);
-            },
-            itemBuilder: (context, index) {
-              return _LotteryKeyboardPage(
-                table: widget.state.form.tables[index],
-                isActive: index == widget.state.activeRowIndex,
-                rowLabelWidth: LotteryFormPage.rowLabelWidth,
-              );
-            },
-          ),
         ),
       ),
     );

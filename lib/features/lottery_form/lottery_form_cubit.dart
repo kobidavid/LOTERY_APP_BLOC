@@ -119,6 +119,24 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     selectRow(previousIndex);
   }
 
+  bool canSwipeToNextRow() {
+    return _nextAccessibleRowIndexFromForm(
+          state.form,
+          state.activeRowIndex,
+          state.selectedTableCount,
+        ) !=
+        null;
+  }
+
+  bool canSwipeToPreviousRow() {
+    return _previousAccessibleRowIndexFromForm(
+          state.form,
+          state.activeRowIndex,
+          state.selectedTableCount,
+        ) !=
+        null;
+  }
+
   void toggleRegularNumber(int number) {
     final LotteryTable table = state.form.tables[state.activeRowIndex];
     final LotteryTable updated =
