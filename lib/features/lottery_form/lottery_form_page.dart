@@ -252,6 +252,28 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
   }
 
+  num _calculateDraftCost(_LocalDraftForm draft) {
+    final List<LotteryTable> selectedTables = draft.formState.form.tables
+        .take(draft.formState.selectedTableCount)
+        .toList();
+    return _paymentRepository.calculateTicketCost(selectedTables);
+  }
+
+  num _calculateDraftsTotalCost(List<_LocalDraftForm> drafts) {
+    return drafts.fold<num>(
+      0,
+      (num total, _LocalDraftForm draft) => total + _calculateDraftCost(draft),
+    );
+  }
+
+  String _formatNisAmount(num amount) {
+    final double normalized = amount.toDouble();
+    if ((normalized - normalized.roundToDouble()).abs() < 0.0001) {
+      return normalized.round().toString();
+    }
+    return normalized.toStringAsFixed(1);
+  }
+
   int? _firstIncompleteDraftNumber(LotteryFormState state) {
     final List<_LocalDraftForm> drafts = _effectiveLocalDrafts(state);
     for (final _LocalDraftForm draft in drafts) {
@@ -384,6 +406,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                         final List<_LocalDraftForm> drafts =
                             _effectiveLocalDrafts(cubit.state);
                         final bool canDeleteDrafts = drafts.length > 1;
+                        final num totalDraftsCost =
+                            _calculateDraftsTotalCost(drafts);
                         return SingleChildScrollView(
                           padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
                           child: Column(
@@ -403,6 +427,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                 final _LocalDraftForm draft = drafts[index];
                                 final bool isActive = index == _activeDraftIndex;
                                 final bool isDraftComplete = _isDraftComplete(draft);
+                                final num draftCost = _calculateDraftCost(draft);
                                 return Padding(
                                   padding: EdgeInsets.only(
                                     bottom: index == drafts.length - 1 ? 0 : 10,
@@ -535,6 +560,10 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                                                 .colorScheme
                                                                 .onSurfaceVariant,
                                                       ),
+                                                      _DraftMetaText(
+                                                        value:
+                                                            'עלות: ${_formatNisAmount(draftCost)} ש״ח',
+                                                      ),
                                                     ],
                                                   ),
                                                 ],
@@ -547,6 +576,28 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                   ),
                                 );
                               }),
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest
+                                      .withValues(alpha: 0.8),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Text(
+                                  'סה״כ: ${_formatNisAmount(totalDraftsCost)} ש״ח',
+                                  textAlign: TextAlign.right,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w900),
+                                ),
+                              ),
                               const SizedBox(height: 16),
                               OutlinedButton.icon(
                                 onPressed: () {
