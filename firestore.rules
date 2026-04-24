@@ -73,6 +73,14 @@ service cloud.firestore {
         allow write: if isOwner(userId) || isOperator();
       }
 
+      match /submissions/{submissionId} {
+        allow read, write: if isOwner(userId);
+
+        match /forms/{formId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+
       match /active_groups/{groupId} {
         allow read, write: if isOwner(userId);
       }

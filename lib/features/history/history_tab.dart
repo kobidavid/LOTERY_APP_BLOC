@@ -7,6 +7,7 @@ import '../../repositories/lottery_group_repository.dart';
 import '../../services/group_invite_link_service.dart';
 import '../form_presentation_utils.dart';
 import 'personal_form_details_page.dart';
+import 'personal_submission_bundle_details_page.dart';
 import '../lottery_form/group_details_page.dart';
 
 class HistoryTab extends StatefulWidget {
@@ -41,21 +42,24 @@ class _HistoryTabState extends State<HistoryTab> {
     return StreamBuilder<List<LotteryForm>>(
       stream: widget.repository.watchSubmittedForms(widget.userId),
       builder: (context, submittedFormsSnapshot) {
-        return StreamBuilder<List<SubmittedGroupHistoryItem>>(
-          stream:
-              widget.groupRepository.watchSubmittedGroupsForUser(widget.userId),
-          builder: (context, submittedGroupsSnapshot) {
-            return StreamBuilder<List<LotteryForm>>(
-              stream: widget.repository.watchSavedForms(widget.userId),
-              builder: (context, savedFormsSnapshot) {
-                return StreamBuilder<List<UserGroupListItem>>(
-                  stream:
-                      widget.groupRepository.watchGroupsForUser(widget.userId),
-                  builder: (context, activeGroupsSnapshot) {
-                    return StreamBuilder<List<CancelledGroupHistoryItem>>(
-                      stream: widget.groupRepository
-                          .watchCancelledGroupsForUser(widget.userId),
-                      builder: (context, cancelledGroupsSnapshot) {
+        return StreamBuilder<List<PersonalSubmittedBundle>>(
+          stream: widget.repository.watchPersonalSubmissionBundles(widget.userId),
+          builder: (context, personalBundlesSnapshot) {
+            return StreamBuilder<List<SubmittedGroupHistoryItem>>(
+              stream:
+                  widget.groupRepository.watchSubmittedGroupsForUser(widget.userId),
+              builder: (context, submittedGroupsSnapshot) {
+                return StreamBuilder<List<LotteryForm>>(
+                  stream: widget.repository.watchSavedForms(widget.userId),
+                  builder: (context, savedFormsSnapshot) {
+                    return StreamBuilder<List<UserGroupListItem>>(
+                      stream:
+                          widget.groupRepository.watchGroupsForUser(widget.userId),
+                      builder: (context, activeGroupsSnapshot) {
+                        return StreamBuilder<List<CancelledGroupHistoryItem>>(
+                          stream: widget.groupRepository
+                              .watchCancelledGroupsForUser(widget.userId),
+                          builder: (context, cancelledGroupsSnapshot) {
                         final List<SubmittedGroupHistoryItem> submittedGroups =
                             submittedGroupsSnapshot.data ??
                                 const <SubmittedGroupHistoryItem>[];
@@ -77,6 +81,12 @@ class _HistoryTabState extends State<HistoryTab> {
                               .map(
                                 (form) =>
                                     _FormsListItem.personalSubmitted(form),
+                              ),
+                          ...(personalBundlesSnapshot.data ??
+                                  const <PersonalSubmittedBundle>[])
+                              .map(
+                                (bundle) =>
+                                    _FormsListItem.personalSubmissionBundle(bundle),
                               ),
                           ...submittedGroups.map(
                             (item) => _FormsListItem.groupSubmitted(item),
@@ -230,6 +240,8 @@ class _HistoryTabState extends State<HistoryTab> {
                             ),
                           ],
                         );
+                          },
+                        );
                       },
                     );
                   },
@@ -266,6 +278,20 @@ class _HistoryTabState extends State<HistoryTab> {
           );
         }
         return;
+      case _FormsItemKind.personalSubmissionBundle:
+        if (item.personalSubmissionBundle == null) {
+          return;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PersonalSubmissionBundleDetailsPage(
+              ownerUserId: widget.userId,
+              bundle: item.personalSubmissionBundle!,
+              repository: widget.repository,
+            ),
+          ),
+        );
+        return;
       case _FormsItemKind.groupSubmitted:
       case _FormsItemKind.groupDraft:
       case _FormsItemKind.groupCancelled:
@@ -289,6 +315,7 @@ class _HistoryTabState extends State<HistoryTab> {
 enum _FormsItemKind {
   personalSubmitted,
   personalDraft,
+  personalSubmissionBundle,
   groupSubmitted,
   groupDraft,
   groupCancelled,
@@ -299,6 +326,7 @@ class _FormsListItem {
     required this.kind,
     required this.sortDate,
     this.personalForm,
+    this.personalSubmissionBundle,
     this.submittedGroup,
     this.activeGroup,
     this.cancelledGroup,
@@ -317,6 +345,16 @@ class _FormsListItem {
       kind: _FormsItemKind.personalDraft,
       sortDate: form.savedAt ?? form.updatedAt ?? DateTime(0),
       personalForm: form,
+    );
+  }
+
+  factory _FormsListItem.personalSubmissionBundle(
+    PersonalSubmittedBundle bundle,
+  ) {
+    return _FormsListItem._(
+      kind: _FormsItemKind.personalSubmissionBundle,
+      sortDate: bundle.submittedAt ?? DateTime(0),
+      personalSubmissionBundle: bundle,
     );
   }
 
@@ -347,6 +385,7 @@ class _FormsListItem {
   final _FormsItemKind kind;
   final DateTime sortDate;
   final LotteryForm? personalForm;
+  final PersonalSubmittedBundle? personalSubmissionBundle;
   final SubmittedGroupHistoryItem? submittedGroup;
   final UserGroupListItem? activeGroup;
   final CancelledGroupHistoryItem? cancelledGroup;
@@ -361,6 +400,8 @@ class _FormsListItem {
       case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
         return 'personal-${personalForm?.formId ?? sortDate.toIso8601String()}';
+      case _FormsItemKind.personalSubmissionBundle:
+        return 'personal-bundle-${personalSubmissionBundle?.submissionId ?? sortDate.toIso8601String()}';
       case _FormsItemKind.groupSubmitted:
         return 'group-submitted-${submittedGroup?.groupId ?? sortDate.toIso8601String()}';
       case _FormsItemKind.groupDraft:
@@ -618,6 +659,8 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
         return 'טופס אישי';
+      case _FormsItemKind.personalSubmissionBundle:
+        return 'שליחת טפסים אישיים';
       case _FormsItemKind.groupSubmitted:
         return widget.item.submittedGroup!.groupName;
       case _FormsItemKind.groupDraft:
@@ -634,19 +677,28 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
         final List<String> lines = [
           'סטטוס: ${_personalStatusLabel(form)}',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
+          'זכייה: ${_personalWinningStatusLabel(form)}',
           'תאריך הגרלה: ${_formatDate(form.salesCloseAt ?? form.submittedAt)}',
           'נשלח: ${_formatDate(form.submittedAt ?? form.updatedAt)}',
         ];
-        if (form.resultStatus != null || form.winAmount > 0) {
-          lines.add('זכייה: ${form.winAmount} ש״ח');
-        }
         return lines.join('\n');
       case _FormsItemKind.personalDraft:
         final LotteryForm form = widget.item.personalForm!;
         return [
           'סטטוס: טיוטה',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
+          'זכייה: ממתין לתוצאות',
           'נוצר: ${_formatDate(form.createdAt ?? form.savedAt ?? form.updatedAt)}',
+        ].join('\n');
+      case _FormsItemKind.personalSubmissionBundle:
+        final PersonalSubmittedBundle bundle = widget.item.personalSubmissionBundle!;
+        return [
+          'סטטוס: נשלחו כמה טפסים אישיים',
+          'מספר טפסים: ${bundle.formCount}',
+          'סה״כ טבלאות: ${bundle.totalTableCount}',
+          'עלות כוללת: ${bundle.totalCost} ש״ח',
+          'זכייה: ${_bundleWinningStatusLabel(bundle)}',
+          'נשלח: ${_formatDate(bundle.submittedAt)}',
         ].join('\n');
       case _FormsItemKind.groupSubmitted:
         final SubmittedGroupHistoryItem group = widget.item.submittedGroup!;
@@ -688,6 +740,32 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case null:
         return form.status == LotteryFormStatus.submitted ? 'נשלח' : 'טיוטה';
     }
+  }
+
+  String _personalWinningStatusLabel(LotteryForm form) {
+    if (form.resultStatus == null && form.winAmount <= 0) {
+      return 'ממתין לתוצאות';
+    }
+    return '${form.winAmount} ש״ח';
+  }
+
+  String _bundleWinningStatusLabel(PersonalSubmittedBundle bundle) {
+    if (bundle.forms.isEmpty) {
+      return 'ממתין לתוצאות';
+    }
+
+    final bool hasAnyResolvedResult = bundle.forms.any(
+      (form) => form.resultStatus != null || form.winAmount > 0,
+    );
+    if (!hasAnyResolvedResult) {
+      return 'ממתין לתוצאות';
+    }
+
+    final num totalWinAmount = bundle.forms.fold<num>(
+      0,
+      (num total, PersonalSubmittedBundleForm form) => total + form.winAmount,
+    );
+    return '$totalWinAmount ש״ח';
   }
 
   String _groupStatusLabel(String rawStatus) {

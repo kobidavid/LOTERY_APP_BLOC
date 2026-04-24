@@ -62,10 +62,7 @@ class PersonalFormDetailsPage extends StatelessWidget {
                   rawSnapshot.data?.data() ?? const <String, dynamic>{};
               final num ticketCost = _ticketCost(form);
               final String statusLabel = _statusLabel(form);
-              final String winningsLabel =
-                  form.resultStatus != null || form.winAmount > 0
-                      ? '${form.winAmount} ש״ח'
-                      : 'טרם פורסם';
+              final String winningsLabel = _winningStatusLabel(form);
               final String drawDateLabel = _formatDate(
                 form.salesCloseAt ??
                     form.submittedAt ??
@@ -76,7 +73,7 @@ class PersonalFormDetailsPage extends StatelessWidget {
                 rawData['stationReceiptUploadedAt'],
               );
               final String? receiptUrl = extractReceiptUrl(rawData);
-              final bool hasReceipt = receiptUrl != null;
+              final bool hasReceipt = _hasOpenableReceiptTarget(receiptUrl);
               return ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
@@ -105,6 +102,10 @@ class PersonalFormDetailsPage extends StatelessWidget {
                             )
                         : null,
                     secondaryActionLabel: hasReceipt ? 'צפה בקבלה' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  _PersonalFormTracker(
+                    form: form,
                   ),
                   const SizedBox(height: 12),
                   _InfoCard(
@@ -205,19 +206,36 @@ class PersonalFormDetailsPage extends StatelessWidget {
     }
   }
 
+  String _winningStatusLabel(LotteryForm form) {
+    if (form.resultStatus == null && form.winAmount <= 0) {
+      return 'ממתין לתוצאות';
+    }
+    return '${_formatAmount(form.winAmount)} ש״ח';
+  }
+
   String _formatDate(DateTime? date) {
     return formatPresentationDateTime(date);
+  }
+
+  bool _hasOpenableReceiptTarget(String? receiptUrl) {
+    if (receiptUrl == null || receiptUrl.isEmpty) {
+      return false;
+    }
+    final Uri? uri = Uri.tryParse(receiptUrl);
+    return uri != null &&
+        uri.hasScheme &&
+        (uri.host.isNotEmpty || uri.scheme == 'file');
   }
 
   Future<void> _openReceipt({
     required BuildContext context,
     required String? receiptUrl,
   }) async {
-    if (receiptUrl == null || receiptUrl.isEmpty) {
+    if (!_hasOpenableReceiptTarget(receiptUrl)) {
       return;
     }
 
-    final Uri uri = Uri.parse(receiptUrl);
+    final Uri uri = Uri.parse(receiptUrl!);
     final bool launched = await launchUrl(
       uri,
       mode: LaunchMode.externalApplication,
@@ -228,6 +246,280 @@ class PersonalFormDetailsPage extends StatelessWidget {
       );
     }
   }
+}
+
+class _PersonalFormTracker extends StatefulWidget {
+  const _PersonalFormTracker({
+    required this.form,
+  });
+
+  final LotteryForm form;
+
+  @override
+  State<_PersonalFormTracker> createState() => _PersonalFormTrackerState();
+}
+
+class _PersonalFormTrackerState extends State<_PersonalFormTracker>
+    with SingleTickerProviderStateMixin {
+  static const List<_TrackerStepData> _steps = <_TrackerStepData>[
+    _TrackerStepData(label: 'הגשת הטופס', icon: Icons.send_rounded),
+    _TrackerStepData(label: 'הדפסת הטופס', icon: Icons.print_rounded),
+    _TrackerStepData(label: 'מסירה בתחנה', icon: Icons.storefront_rounded),
+    _TrackerStepData(label: 'בדיקת תוצאות', icon: Icons.verified_outlined),
+  ];
+
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int completedCount = _deriveCompletedStepCount();
+    final int? currentIndex =
+        completedCount >= _steps.length ? null : completedCount;
+    final ThemeData theme = Theme.of(context);
+    final Color trackerColor = theme.colorScheme.primary;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'מעקב התקדמות הטופס',
+            textAlign: TextAlign.right,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Directionality(
+            textDirection: TextDirection.rtl,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List<Widget>.generate(_steps.length, (stepIndex) {
+                final _TrackerStepData step = _steps[stepIndex];
+                return Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: AnimatedBuilder(
+                          animation: _pulseController,
+                          builder: (context, child) {
+                            return _TrackerStep(
+                              step: step,
+                              isCompleted: stepIndex < completedCount,
+                              isCurrent: currentIndex != null &&
+                                  stepIndex == currentIndex,
+                              pulseValue: _pulseController.value,
+                              color: trackerColor,
+                            );
+                          },
+                        ),
+                      ),
+                      if (stepIndex < _steps.length - 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: _TrackerConnector(
+                            filled: completedCount > stepIndex,
+                            glow: currentIndex != null &&
+                                currentIndex == stepIndex + 1,
+                            color: trackerColor,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  int _deriveCompletedStepCount() {
+    if (_areResultsChecked) {
+      return 4;
+    }
+    if (_isSubmittedToStationCompleted) {
+      return 3;
+    }
+    if (_isPrintedCompleted) {
+      return 2;
+    }
+    if (_isSubmitted) {
+      return 1;
+    }
+    return 0;
+  }
+
+  bool get _isSubmitted => widget.form.submittedAt != null;
+
+  bool get _isPrintedCompleted => widget.form.printedAt != null;
+
+  bool get _isSubmittedToStationCompleted =>
+      widget.form.submittedToStationAt != null;
+
+  bool get _areResultsChecked =>
+      widget.form.resultStatus == LotteryResultStatus.checked ||
+      widget.form.resultStatus == LotteryResultStatus.winner ||
+      widget.form.resultStatus == LotteryResultStatus.loser;
+}
+
+class _TrackerStepData {
+  const _TrackerStepData({
+    required this.label,
+    required this.icon,
+  });
+
+  final String label;
+  final IconData icon;
+}
+
+class _TrackerConnector extends StatelessWidget {
+  const _TrackerConnector({
+    required this.filled,
+    required this.glow,
+    required this.color,
+  });
+
+  final bool filled;
+  final bool glow;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color baseColor = Theme.of(context)
+        .colorScheme
+        .outlineVariant
+        .withValues(alpha: 0.45);
+    return Container(
+      width: 10,
+      height: 4,
+      decoration: BoxDecoration(
+        color: filled ? color.withValues(alpha: glow ? 0.8 : 0.65) : baseColor,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: glow
+            ? [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.18),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
+      ),
+    );
+  }
+}
+
+class _TrackerStep extends StatelessWidget {
+  const _TrackerStep({
+    required this.step,
+    required this.isCompleted,
+    required this.isCurrent,
+    required this.pulseValue,
+    required this.color,
+  });
+
+  final _TrackerStepData step;
+  final bool isCompleted;
+  final bool isCurrent;
+  final double pulseValue;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Color futureColor = theme.colorScheme.outlineVariant;
+    final Color effectiveColor = isCompleted || isCurrent ? color : futureColor;
+    final double scale = isCurrent ? 1 + (pulseValue * 0.04) : 1;
+
+    return Column(
+      children: [
+        Transform.scale(
+          scale: scale,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 240),
+            width: isCurrent ? 28 : 24,
+            height: isCurrent ? 28 : 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isCompleted
+                  ? effectiveColor
+                  : isCurrent
+                      ? effectiveColor.withValues(alpha: 0.14)
+                      : theme.colorScheme.surface,
+              border: Border.all(
+                color: effectiveColor.withValues(
+                  alpha: isCompleted ? 1 : (isCurrent ? 0.9 : 0.4),
+                ),
+                width: isCurrent ? 2.2 : 1.4,
+              ),
+              boxShadow: isCurrent
+                  ? [
+                      BoxShadow(
+                        color: effectiveColor.withValues(alpha: 0.18),
+                        blurRadius: 10 + (pulseValue * 6),
+                        spreadRadius: 0.8 + (pulseValue * 1.2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              isCompleted ? Icons.check_rounded : step.icon,
+              size: isCurrent ? 14 : 12,
+              color: isCompleted
+                  ? theme.colorScheme.onPrimary
+                  : isCurrent
+                      ? effectiveColor
+                      : futureColor.withValues(alpha: 0.9),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          step.label,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: isCompleted || isCurrent
+                ? theme.colorScheme.onSurface
+                : futureColor,
+            fontWeight: isCurrent ? FontWeight.w900 : FontWeight.w700,
+            height: 1.1,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatAmount(num value) {
+  if (value == value.roundToDouble()) {
+    return value.toInt().toString();
+  }
+  return value.toStringAsFixed(1);
 }
 
 class _InfoCard extends StatelessWidget {
@@ -289,7 +581,26 @@ class _InfoRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
+        textDirection: TextDirection.rtl,
         children: [
+          Text(
+            '$label:',
+            textAlign: TextAlign.right,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontFamily: isMonospace ? 'monospace' : null,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
           if (canCopy)
             IconButton(
               onPressed: () {
@@ -301,24 +612,6 @@ class _InfoRow extends StatelessWidget {
               icon: const Icon(Icons.copy_outlined, size: 18),
               tooltip: 'העתק',
             ),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontFamily: isMonospace ? 'monospace' : null,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            '$label:',
-            textAlign: TextAlign.right,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
-          ),
         ],
       ),
     );

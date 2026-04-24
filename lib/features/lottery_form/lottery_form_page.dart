@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../models/lottery_form.dart';
 import '../../models/lottery_group.dart';
 import '../../repositories/lottery_form_repository.dart';
 import '../../repositories/lottery_group_repository.dart';
@@ -136,14 +137,65 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
   }
 
+  void _showDraftMixingMessage() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('לא ניתן לשלב טפסים אישיים וקבוצתיים באותה שליחה'),
+        ),
+      );
+  }
+
+  bool _canChangeDraftGroupMode({
+    required bool nextIsGroupMode,
+    required LotteryFormState state,
+  }) {
+    final List<_LocalDraftForm> drafts = _effectiveLocalDrafts(state);
+    if (drafts.length <= 1) {
+      return true;
+    }
+    return drafts
+        .asMap()
+        .entries
+        .where((entry) => entry.key != _activeDraftIndex)
+        .every((entry) => entry.value.isGroupMode == nextIsGroupMode);
+  }
+
+  void _handleDraftModeChanged(bool nextIsGroupMode) {
+    final LotteryFormState state = context.read<LotteryFormCubit>().state;
+    if (!_canChangeDraftGroupMode(
+      nextIsGroupMode: nextIsGroupMode,
+      state: state,
+    )) {
+      _showDraftMixingMessage();
+      return;
+    }
+
+    setState(() {
+      _isGroupMode = nextIsGroupMode;
+      _syncActiveDraftSnapshot(state);
+    });
+  }
+
   Future<void> _createAdditionalLocalDraft() async {
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
     final LotteryFormState currentState = cubit.state;
     _syncActiveDraftSnapshot(currentState);
+    final bool targetGroupMode = _effectiveLocalDrafts(currentState).first.isGroupMode;
+    final LotteryFormState draftState = LotteryFormState.initial(
+      currentState.form.userId,
+    ).copyWith(
+      form: LotteryFormState.initial(currentState.form.userId).form.copyWith(
+        mode: targetGroupMode
+            ? LotteryFormMode.group
+            : LotteryFormMode.personal,
+      ),
+    );
     final _LocalDraftForm draft = _LocalDraftForm(
       number: _nextDraftNumber,
-      formState: LotteryFormState.initial(currentState.form.userId),
-      isGroupMode: false,
+      formState: draftState,
+      isGroupMode: targetGroupMode,
       isDoubleMode: false,
     );
     setState(() {
@@ -264,6 +316,53 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       0,
       (num total, _LocalDraftForm draft) => total + _calculateDraftCost(draft),
     );
+  }
+
+  List<PersonalSubmissionDraftPayload> _buildPersonalSubmissionDraftPayloads(
+    List<_LocalDraftForm> drafts,
+  ) {
+    return List<PersonalSubmissionDraftPayload>.generate(drafts.length, (index) {
+      final _LocalDraftForm draft = drafts[index];
+      final int selectedTableCount = draft.formState.selectedTableCount;
+      final List<LotteryTable> selectedTables =
+          draft.formState.form.tables.take(selectedTableCount).toList();
+      final LotteryForm submittedForm = draft.formState.form.copyWith(
+        clearId: true,
+        tables: selectedTables,
+        status: LotteryFormStatus.submitted,
+        mode: LotteryFormMode.personal,
+        isComplete: true,
+        clearSavedAt: true,
+        clearGroupId: true,
+        isEditable: false,
+      );
+      return PersonalSubmissionDraftPayload(
+        form: submittedForm,
+        cost: _calculateDraftCost(draft),
+        tableCount: selectedTableCount,
+        isDoubleMode: draft.isDoubleMode,
+        displayOrder: index + 1,
+      );
+    });
+  }
+
+  void _resetLocalDraftsAfterSubmit(String userId) {
+    final LotteryFormState initialState = LotteryFormState.initial(userId);
+    _localDrafts
+      ..clear()
+      ..add(
+        _LocalDraftForm(
+          number: 1,
+          formState: initialState,
+          isGroupMode: false,
+          isDoubleMode: false,
+        ),
+      );
+    _activeDraftIndex = 0;
+    _nextDraftNumber = 2;
+    _isGroupMode = false;
+    _isDoubleMode = false;
+    context.read<LotteryFormCubit>().loadLocalDraftState(initialState);
   }
 
   String _formatNisAmount(num amount) {
@@ -682,6 +781,42 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     }
   }
 
+  Future<void> _startPersonalMultiDraftSubmitFlow(
+    List<_LocalDraftForm> drafts,
+  ) async {
+    final LotteryFormState currentState = context.read<LotteryFormCubit>().state;
+    final List<PersonalSubmissionDraftPayload> payloads =
+        _buildPersonalSubmissionDraftPayloads(drafts);
+    final num totalCost = _calculateDraftsTotalCost(drafts);
+
+    final bool? paymentConfirmed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => PaymentOptionsPage(
+          userId: currentState.form.userId,
+          amount: totalCost,
+          onWalletPayment: () async {
+            await _paymentRepository.chargeUserWallet(
+              userId: currentState.form.userId,
+              amount: totalCost,
+            );
+            await _submitPersonalDraftBundleAndOpenHistory(
+              userId: currentState.form.userId,
+              payloads: payloads,
+            );
+          },
+          onExternalPayment: () => _submitPersonalDraftBundleAndOpenHistory(
+            userId: currentState.form.userId,
+            payloads: payloads,
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || paymentConfirmed != true) {
+      return;
+    }
+  }
+
   Future<void> _submitPersonalFormAndOpenHistory() async {
     await context.read<LotteryFormCubit>().submitForm();
     if (!mounted) {
@@ -694,6 +829,39 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       return;
     }
     throw StateError(latestState.errorMessage ?? 'שליחת הטופס נכשלה');
+  }
+
+  Future<void> _submitPersonalDraftBundleAndOpenHistory({
+    required String userId,
+    required List<PersonalSubmissionDraftPayload> payloads,
+  }) async {
+    await _paymentRepository.submitPersonalSubmissionBundle(
+      userId: userId,
+      drafts: payloads,
+      totalCost: payloads.fold<num>(
+        0,
+        (num total, PersonalSubmissionDraftPayload draft) =>
+            total + draft.cost,
+      ),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _resetLocalDraftsAfterSubmit(userId);
+    });
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('הטפסים האישיים נשלחו בהצלחה'),
+        ),
+      );
+
+    widget.onOpenMyForms();
   }
 
   void _handleTableCountChanged(int? count) {
@@ -715,6 +883,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   Future<void> _handlePrimarySubmit() async {
     final LotteryFormState formState = context.read<LotteryFormCubit>().state;
+    final List<_LocalDraftForm> effectiveDrafts = _effectiveLocalDrafts(formState);
     final int? firstIncompleteDraftNumber = _firstIncompleteDraftNumber(formState);
     if (firstIncompleteDraftNumber != null) {
       ScaffoldMessenger.of(context)
@@ -724,6 +893,22 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             content: Text('יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה'),
           ),
         );
+      return;
+    }
+    if (effectiveDrafts.length > 1) {
+      final bool hasAnyGroupDraft =
+          effectiveDrafts.any((draft) => draft.isGroupMode);
+      if (hasAnyGroupDraft) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('שליחת כמה טפסים קבוצתיים עדיין לא נתמכת'),
+            ),
+          );
+        return;
+      }
+      await _startPersonalMultiDraftSubmitFlow(effectiveDrafts);
       return;
     }
     final List<LotteryTable> visibleTables = context
@@ -938,13 +1123,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                           isDoubleMode: _isDoubleMode,
                           selectedTableCount: state.selectedTableCount,
                           isBusy: state.isBusy,
-                          onModeChanged: (value) =>
-                              setState(() {
-                                _isGroupMode = value;
-                                _syncActiveDraftSnapshot(
-                                  context.read<LotteryFormCubit>().state,
-                                );
-                              }),
+                          onModeChanged: _handleDraftModeChanged,
                           onPlayTypeChanged: (value) =>
                               setState(() {
                                 _isDoubleMode = value;

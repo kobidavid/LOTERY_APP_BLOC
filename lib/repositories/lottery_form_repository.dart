@@ -8,6 +8,123 @@ import '../models/lottery_form.dart';
 import '../models/lottery_group.dart';
 import '../models/lottery_table.dart';
 
+DateTime? _repositoryAsDateTime(dynamic value) {
+  if (value is Timestamp) {
+    return value.toDate();
+  }
+  if (value is DateTime) {
+    return value;
+  }
+  return null;
+}
+
+LotteryResultStatus? _repositoryResultStatusFromString(String? value) {
+  switch (value) {
+    case 'waiting_for_results':
+      return LotteryResultStatus.waitingForResults;
+    case 'checked':
+      return LotteryResultStatus.checked;
+    case 'winner':
+      return LotteryResultStatus.winner;
+    case 'loser':
+      return LotteryResultStatus.loser;
+    default:
+      return null;
+  }
+}
+
+class PersonalSubmissionDraftPayload {
+  const PersonalSubmissionDraftPayload({
+    required this.form,
+    required this.cost,
+    required this.tableCount,
+    required this.isDoubleMode,
+    required this.displayOrder,
+  });
+
+  final LotteryForm form;
+  final num cost;
+  final int tableCount;
+  final bool isDoubleMode;
+  final int displayOrder;
+}
+
+class PersonalSubmittedBundleForm {
+  const PersonalSubmittedBundleForm({
+    required this.formId,
+    required this.displayOrder,
+    required this.tableCount,
+    required this.cost,
+    required this.isDoubleMode,
+    required this.tables,
+    required this.submittedAt,
+    required this.printedAt,
+    required this.submittedToStationAt,
+    required this.resultStatus,
+    required this.winAmount,
+    required this.receiptUrl,
+  });
+
+  final String formId;
+  final int displayOrder;
+  final int tableCount;
+  final num cost;
+  final bool isDoubleMode;
+  final List<LotteryTable> tables;
+  final DateTime? submittedAt;
+  final DateTime? printedAt;
+  final DateTime? submittedToStationAt;
+  final LotteryResultStatus? resultStatus;
+  final num winAmount;
+  final String? receiptUrl;
+
+  factory PersonalSubmittedBundleForm.fromFirestore(
+    String formId,
+    Map<String, dynamic> data,
+  ) {
+    final List<dynamic> rawTables = data['tables'] as List<dynamic>? ?? <dynamic>[];
+    return PersonalSubmittedBundleForm(
+      formId: formId,
+      displayOrder: (data['displayOrder'] as num?)?.toInt() ?? 0,
+      tableCount: (data['tableCount'] as num?)?.toInt() ?? rawTables.length,
+      cost: (data['cost'] as num?) ?? 0,
+      isDoubleMode: data['isDoubleMode'] as bool? ?? false,
+      tables: rawTables
+          .map((item) => LotteryTable.fromMap(item as Map<String, dynamic>))
+          .toList(),
+      submittedAt: _repositoryAsDateTime(data['submittedAt']),
+      printedAt: _repositoryAsDateTime(data['printedAt']),
+      submittedToStationAt: _repositoryAsDateTime(data['submittedToStationAt']),
+      resultStatus: _repositoryResultStatusFromString(
+        data['resultStatus'] as String?,
+      ),
+      winAmount: (data['winAmount'] as num?) ?? 0,
+      receiptUrl: _extractSubmissionReceiptUrl(data),
+    );
+  }
+}
+
+class PersonalSubmittedBundle {
+  const PersonalSubmittedBundle({
+    required this.submissionId,
+    required this.userId,
+    required this.formCount,
+    required this.totalCost,
+    required this.submittedAt,
+    required this.forms,
+  });
+
+  final String submissionId;
+  final String userId;
+  final int formCount;
+  final num totalCost;
+  final DateTime? submittedAt;
+  final List<PersonalSubmittedBundleForm> forms;
+
+  int get totalTableCount =>
+      forms.fold<int>(0, (int total, form) => total + form.tableCount);
+}
+
 class LotteryFormRepository {
   LotteryFormRepository({
     FirebaseFirestore? firestore,
@@ -34,6 +151,10 @@ class LotteryFormRepository {
     return _firestore.collection('lottery_groups');
   }
 
+  CollectionReference<Map<String, dynamic>> _submissionsRef(String userId) {
+    return _firestore.collection('users').doc(userId).collection('submissions');
+  }
+
   Stream<List<LotteryForm>> watchSubmittedForms(String userId) {
     return _formsRef(userId).snapshots().map(
           (snapshot) => _mapForms(snapshot)
@@ -46,6 +167,65 @@ class LotteryFormRepository {
                   a.submittedAt ?? DateTime(0),
                 )),
         );
+  }
+
+  Stream<List<PersonalSubmittedBundle>> watchPersonalSubmissionBundles(
+    String userId,
+  ) {
+    return _submissionsRef(userId)
+        .where('type', isEqualTo: 'personal')
+        .where('status', isEqualTo: 'submitted')
+        .snapshots()
+        .asyncMap((snapshot) async {
+      final List<PersonalSubmittedBundle> bundles =
+          await Future.wait<PersonalSubmittedBundle>(
+        snapshot.docs.map((doc) async {
+          final QuerySnapshot<Map<String, dynamic>> formsSnapshot =
+              await doc.reference.collection('forms').get();
+          final List<PersonalSubmittedBundleForm> forms = formsSnapshot.docs
+              .map(
+                (formDoc) => PersonalSubmittedBundleForm.fromFirestore(
+                  formDoc.id,
+                  formDoc.data(),
+                ),
+              )
+              .toList()
+            ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+          final Map<String, dynamic> data = doc.data();
+          return PersonalSubmittedBundle(
+            submissionId: doc.id,
+            userId: data['userId'] as String? ?? userId,
+            formCount: (data['formCount'] as num?)?.toInt() ?? forms.length,
+            totalCost: (data['totalCost'] as num?) ??
+                forms.fold<num>(0, (num total, form) => total + form.cost),
+            submittedAt: _repositoryAsDateTime(data['submittedAt']),
+            forms: forms,
+          );
+        }),
+      );
+      bundles.sort((a, b) => (b.submittedAt ?? DateTime(0))
+          .compareTo(a.submittedAt ?? DateTime(0)));
+      return bundles;
+    });
+  }
+
+  Stream<List<PersonalSubmittedBundleForm>> watchPersonalSubmissionBundleForms({
+    required String userId,
+    required String submissionId,
+  }) {
+    return _submissionsRef(userId)
+        .doc(submissionId)
+        .collection('forms')
+        .snapshots()
+        .map((snapshot) {
+      final List<PersonalSubmittedBundleForm> forms = snapshot.docs
+          .map(
+            (doc) => PersonalSubmittedBundleForm.fromFirestore(doc.id, doc.data()),
+          )
+          .toList()
+        ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+      return forms;
+    });
   }
 
   Stream<List<LotteryForm>> watchSavedForms(String userId) {
@@ -239,6 +419,69 @@ class LotteryFormRepository {
       'amount': amount,
       if (formId != null && formId.isNotEmpty) 'formId': formId,
     });
+  }
+
+  Future<String> submitPersonalSubmissionBundle({
+    required String userId,
+    required List<PersonalSubmissionDraftPayload> drafts,
+    required num totalCost,
+  }) async {
+    if (drafts.isEmpty) {
+      throw StateError('לא נמצאו טפסים לשליחה.');
+    }
+
+    final DateTime now = DateTime.now();
+    final DocumentReference<Map<String, dynamic>> submissionRef =
+        _submissionsRef(userId).doc();
+    final WriteBatch batch = _firestore.batch();
+
+    batch.set(
+      submissionRef,
+      <String, dynamic>{
+        'submissionId': submissionRef.id,
+        'userId': userId,
+        'type': 'personal',
+        'status': 'submitted',
+        'formCount': drafts.length,
+        'totalCost': totalCost,
+        'createdAt': now,
+        'updatedAt': now,
+        'submittedAt': now,
+      },
+    );
+
+    for (final PersonalSubmissionDraftPayload draft in drafts) {
+      final DocumentReference<Map<String, dynamic>> formRef =
+          submissionRef.collection('forms').doc();
+      batch.set(
+        formRef,
+        <String, dynamic>{
+          'formId': formRef.id,
+          'submissionId': submissionRef.id,
+          'userId': userId,
+          'displayOrder': draft.displayOrder,
+          'status': LotteryFormStatus.submitted.value,
+          'mode': LotteryFormMode.personal.value,
+          'isDoubleMode': draft.isDoubleMode,
+          'tableCount': draft.tableCount,
+          'cost': draft.cost,
+          'tables': draft.form.tables.map((table) => table.toMap()).toList(),
+          'isComplete': draft.form.isComplete,
+          'createdAt': now,
+          'updatedAt': now,
+          'submittedAt': now,
+          'savedAt': draft.form.savedAt,
+          'source': draft.form.source,
+          'version': draft.form.version,
+          'lotteryId': draft.form.lotteryId,
+          'salesCloseAt': draft.form.salesCloseAt,
+          'balanceApplied': draft.form.balanceApplied,
+        },
+      );
+    }
+
+    await batch.commit();
+    return submissionRef.id;
   }
 
   num calculateTicketCost(List<LotteryTable> tables) {
@@ -503,4 +746,19 @@ class LotteryFormRepository {
     }
     return 0;
   }
+}
+
+String? _extractSubmissionReceiptUrl(Map<String, dynamic> data) {
+  const List<String> candidateKeys = <String>[
+    'stationReceiptUrl',
+    'receiptUrl',
+    'uploadedReceiptUrl',
+  ];
+  for (final String key in candidateKeys) {
+    final dynamic value = data[key];
+    if (value is String && value.trim().isNotEmpty) {
+      return value.trim();
+    }
+  }
+  return null;
 }
