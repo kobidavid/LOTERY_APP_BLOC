@@ -94,6 +94,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   final Map<int, GlobalKey> _tableRowKeys = <int, GlobalKey>{};
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
+  final List<_LocalDraftForm> _localDrafts = <_LocalDraftForm>[];
+  int _activeDraftIndex = 0;
+  int _nextDraftNumber = 2;
   int? _lastAutoScrolledActiveRowIndex;
   int? _lastAutoScrolledSelectedTableCount;
 
@@ -108,6 +111,155 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   void dispose() {
     _tablesScrollController.dispose();
     super.dispose();
+  }
+
+  void _ensureInitialDraftRegistered(LotteryFormState state) {
+    if (_localDrafts.isNotEmpty) {
+      return;
+    }
+    _localDrafts.add(
+      _LocalDraftForm(
+        number: 1,
+        formState: state.copyWith(clearError: true, clearSuccess: true),
+        isGroupMode: _isGroupMode,
+        isDoubleMode: _isDoubleMode,
+      ),
+    );
+  }
+
+  void _syncActiveDraftSnapshot(LotteryFormState state) {
+    _ensureInitialDraftRegistered(state);
+    _localDrafts[_activeDraftIndex] = _localDrafts[_activeDraftIndex].copyWith(
+      formState: state.copyWith(clearError: true, clearSuccess: true),
+      isGroupMode: _isGroupMode,
+      isDoubleMode: _isDoubleMode,
+    );
+  }
+
+  Future<void> _createAdditionalLocalDraft() async {
+    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    final LotteryFormState currentState = cubit.state;
+    _syncActiveDraftSnapshot(currentState);
+    final _LocalDraftForm draft = _LocalDraftForm(
+      number: _nextDraftNumber,
+      formState: LotteryFormState.initial(currentState.form.userId),
+      isGroupMode: false,
+      isDoubleMode: false,
+    );
+    setState(() {
+      _localDrafts.add(draft);
+      _activeDraftIndex = _localDrafts.length - 1;
+      _nextDraftNumber += 1;
+      _isGroupMode = draft.isGroupMode;
+      _isDoubleMode = draft.isDoubleMode;
+    });
+    cubit.loadLocalDraftState(draft.formState);
+  }
+
+  void _switchToLocalDraft(int index) {
+    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    final LotteryFormState currentState = cubit.state;
+    _syncActiveDraftSnapshot(currentState);
+    final _LocalDraftForm draft = _localDrafts[index];
+    setState(() {
+      _activeDraftIndex = index;
+      _isGroupMode = draft.isGroupMode;
+      _isDoubleMode = draft.isDoubleMode;
+    });
+    cubit.loadLocalDraftState(draft.formState);
+  }
+
+  Future<bool> _deleteLocalDraft(int index) async {
+    if (_localDrafts.length <= 1) {
+      return false;
+    }
+    final _LocalDraftForm draft = _localDrafts[index];
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('מחיקת טופס'),
+            content: Text('האם למחוק את טופס ${draft.number}?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('ביטול'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('מחיקה'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) {
+      return false;
+    }
+
+    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    _syncActiveDraftSnapshot(cubit.state);
+    final List<_LocalDraftForm> updatedDrafts =
+        List<_LocalDraftForm>.from(_localDrafts)..removeAt(index);
+    final List<_LocalDraftForm> renumberedDrafts =
+        List<_LocalDraftForm>.generate(
+      updatedDrafts.length,
+      (draftIndex) => updatedDrafts[draftIndex].copyWith(number: draftIndex + 1),
+    );
+
+    final bool deletedActiveDraft = index == _activeDraftIndex;
+    int nextActiveDraftIndex = _activeDraftIndex;
+    if (_activeDraftIndex > index) {
+      nextActiveDraftIndex -= 1;
+    } else if (deletedActiveDraft) {
+      nextActiveDraftIndex = math.min(index, renumberedDrafts.length - 1);
+    }
+
+    final _LocalDraftForm nextActiveDraft = renumberedDrafts[nextActiveDraftIndex];
+    setState(() {
+      _localDrafts
+        ..clear()
+        ..addAll(renumberedDrafts);
+      _activeDraftIndex = nextActiveDraftIndex;
+      _nextDraftNumber = renumberedDrafts.length + 1;
+      _isGroupMode = nextActiveDraft.isGroupMode;
+      _isDoubleMode = nextActiveDraft.isDoubleMode;
+    });
+
+    if (deletedActiveDraft) {
+      cubit.loadLocalDraftState(nextActiveDraft.formState);
+    }
+    return true;
+  }
+
+  List<_LocalDraftForm> _effectiveLocalDrafts(LotteryFormState state) {
+    _ensureInitialDraftRegistered(state);
+    return List<_LocalDraftForm>.generate(_localDrafts.length, (index) {
+      if (index != _activeDraftIndex) {
+        return _localDrafts[index];
+      }
+      return _localDrafts[index].copyWith(
+        formState: state.copyWith(clearError: true, clearSuccess: true),
+        isGroupMode: _isGroupMode,
+        isDoubleMode: _isDoubleMode,
+      );
+    });
+  }
+
+  bool _isDraftComplete(_LocalDraftForm draft) {
+    return _areSelectedTablesComplete(
+      draft.formState.visibleTables,
+      draft.formState.selectedTableCount,
+    );
+  }
+
+  int? _firstIncompleteDraftNumber(LotteryFormState state) {
+    final List<_LocalDraftForm> drafts = _effectiveLocalDrafts(state);
+    for (final _LocalDraftForm draft in drafts) {
+      if (!_isDraftComplete(draft)) {
+        return draft.number;
+      }
+    }
+    return null;
   }
 
   Future<void> _promptCreateGroup() async {
@@ -205,6 +357,225 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     context.read<LotteryFormCubit>().clearForm();
   }
 
+  Future<void> _showDraftFormsSheet(LotteryFormState state) async {
+    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    _syncActiveDraftSnapshot(state);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  child: Material(
+                    color: Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(28),
+                    elevation: 16,
+                    child: StatefulBuilder(
+                      builder: (context, sheetSetState) {
+                        final List<_LocalDraftForm> drafts =
+                            _effectiveLocalDrafts(cubit.state);
+                        final bool canDeleteDrafts = drafts.length > 1;
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                'הטפסים שלי',
+                                textAlign: TextAlign.right,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(fontWeight: FontWeight.w900),
+                              ),
+                              const SizedBox(height: 16),
+                              ...List.generate(drafts.length, (index) {
+                                final _LocalDraftForm draft = drafts[index];
+                                final bool isActive = index == _activeDraftIndex;
+                                final bool isDraftComplete = _isDraftComplete(draft);
+                                return Padding(
+                                  padding: EdgeInsets.only(
+                                    bottom: index == drafts.length - 1 ? 0 : 10,
+                                  ),
+                                  child: Material(
+                                    color: isActive
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .primaryContainer
+                                            .withValues(alpha: 0.7)
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(18),
+                                    child: InkWell(
+                                      onTap: () {
+                                        Navigator.of(context).pop();
+                                        _switchToLocalDraft(index);
+                                      },
+                                      borderRadius: BorderRadius.circular(18),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 14,
+                                          vertical: 12,
+                                        ),
+                                        child: Row(
+                                          textDirection: TextDirection.rtl,
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            IconButton(
+                                              onPressed: canDeleteDrafts
+                                                  ? () async {
+                                                      final bool deleted =
+                                                          await _deleteLocalDraft(index);
+                                                      if (deleted && context.mounted) {
+                                                        sheetSetState(() {});
+                                                      }
+                                                    }
+                                                  : null,
+                                              tooltip: canDeleteDrafts
+                                                  ? 'מחק טופס'
+                                                  : 'לא ניתן למחוק את הטופס האחרון',
+                                              icon: const Icon(Icons.delete_outline),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.end,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment.end,
+                                                    textDirection: TextDirection.rtl,
+                                                    children: [
+                                                      if (isActive) ...[
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                            horizontal: 8,
+                                                            vertical: 3,
+                                                          ),
+                                                          decoration: BoxDecoration(
+                                                            color: Theme.of(context)
+                                                                .colorScheme
+                                                                .primary
+                                                                .withValues(alpha: 0.14),
+                                                            borderRadius:
+                                                                BorderRadius.circular(999),
+                                                          ),
+                                                          child: Text(
+                                                            'פעיל',
+                                                            style: Theme.of(context)
+                                                                .textTheme
+                                                                .labelMedium
+                                                                ?.copyWith(
+                                                                  color: Theme.of(context)
+                                                                      .colorScheme
+                                                                      .primary,
+                                                                  fontWeight:
+                                                                      FontWeight.w800,
+                                                                ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                      ],
+                                                      Text(
+                                                        'טופס ${draft.number}',
+                                                        textAlign: TextAlign.right,
+                                                        style: Theme.of(context)
+                                                            .textTheme
+                                                            .titleMedium
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight.w800,
+                                                            ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  const SizedBox(height: 6),
+                                                  Wrap(
+                                                    alignment: WrapAlignment.end,
+                                                    spacing: 8,
+                                                    runSpacing: 4,
+                                                    children: [
+                                                      _DraftMetaText(
+                                                        value: draft.isGroupMode
+                                                            ? 'קבוצתי'
+                                                            : 'אישי',
+                                                      ),
+                                                      _DraftMetaText(
+                                                        value: draft.isDoubleMode
+                                                            ? 'דאבל'
+                                                            : 'רגיל',
+                                                      ),
+                                                      _DraftMetaText(
+                                                        value:
+                                                            '${draft.formState.selectedTableCount} טבלאות',
+                                                      ),
+                                                      _DraftMetaText(
+                                                        value: isDraftComplete
+                                                            ? 'מלא'
+                                                            : 'לא מלא',
+                                                        accent: isDraftComplete
+                                                            ? Theme.of(context)
+                                                                .colorScheme
+                                                                .primary
+                                                            : Theme.of(context)
+                                                                .colorScheme
+                                                                .onSurfaceVariant,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }),
+                              const SizedBox(height: 16),
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  Navigator.of(context).pop();
+                                  _createAdditionalLocalDraft();
+                                },
+                                icon: const Icon(Icons.add_rounded),
+                                label: const Text('+ טופס נוסף'),
+                              ),
+                              const SizedBox(height: 10),
+                              FilledButton.tonal(
+                                onPressed: () => Navigator.of(context).pop(),
+                                child: const Text('סגירה'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _confirmClearTable(int rowIndex) async {
     final bool confirmed = await showDialog<bool>(
           context: context,
@@ -293,6 +664,17 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   Future<void> _handlePrimarySubmit() async {
     final LotteryFormState formState = context.read<LotteryFormCubit>().state;
+    final int? firstIncompleteDraftNumber = _firstIncompleteDraftNumber(formState);
+    if (firstIncompleteDraftNumber != null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה'),
+          ),
+        );
+      return;
+    }
     final List<LotteryTable> visibleTables = context
         .read<LotteryFormCubit>()
         .state
@@ -438,10 +820,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<LotteryFormCubit, LotteryFormState>(
-      listenWhen: (previous, current) =>
-          previous.errorMessage != current.errorMessage ||
-          previous.successMessage != current.successMessage,
+      listenWhen: (_, __) => true,
       listener: (context, state) {
+        _syncActiveDraftSnapshot(state);
         final String? message = state.errorMessage ?? state.successMessage;
         if (message == null) {
           return;
@@ -463,11 +844,11 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         context.read<LotteryFormCubit>().clearMessages();
       },
       builder: (context, state) {
-        final List<LotteryTable> visibleTables =
-            state.visibleTables;
+        _ensureInitialDraftRegistered(state);
+        final List<LotteryTable> visibleTables = state.visibleTables;
+        final int? firstIncompleteDraftNumber = _firstIncompleteDraftNumber(state);
         final bool canPrimarySubmit =
-            !state.isBusy &&
-            _areSelectedTablesComplete(visibleTables, state.selectedTableCount);
+            !state.isBusy && firstIncompleteDraftNumber == null;
         final int? gapRowIndex = state.firstGapRowIndex;
         return MediaQuery.removeViewInsets(
           removeBottom: true,
@@ -507,9 +888,19 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                           selectedTableCount: state.selectedTableCount,
                           isBusy: state.isBusy,
                           onModeChanged: (value) =>
-                              setState(() => _isGroupMode = value),
+                              setState(() {
+                                _isGroupMode = value;
+                                _syncActiveDraftSnapshot(
+                                  context.read<LotteryFormCubit>().state,
+                                );
+                              }),
                           onPlayTypeChanged: (value) =>
-                              setState(() => _isDoubleMode = value),
+                              setState(() {
+                                _isDoubleMode = value;
+                                _syncActiveDraftSnapshot(
+                                  context.read<LotteryFormCubit>().state,
+                                );
+                              }),
                           onTableCountChanged: _handleTableCountChanged,
                         ),
                         SizedBox(height: metrics.sectionGap),
@@ -523,6 +914,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                           metrics: metrics,
                           isBusy: state.isBusy,
                           onClearPressed: _confirmClearForm,
+                          onManageDraftsPressed: () => _showDraftFormsSheet(state),
                           onLottomatAction: (action) {
                             if (action == _LottomatAction.completeRemaining) {
                               context
@@ -541,6 +933,23 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                             alignment: Alignment.centerRight,
                             child: Text(
                               'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
+                              textAlign: TextAlign.right,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context).colorScheme.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ),
+                        ],
+                        if (firstIncompleteDraftNumber != null) ...[
+                          SizedBox(height: metrics.sectionGap),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              'יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה',
                               textAlign: TextAlign.right,
                               style: Theme.of(context)
                                   .textTheme
@@ -1152,27 +1561,20 @@ class _SecondaryActionRow extends StatelessWidget {
     required this.metrics,
     required this.isBusy,
     required this.onClearPressed,
+    required this.onManageDraftsPressed,
     required this.onLottomatAction,
   });
 
   final _FormPageLayoutMetrics metrics;
   final bool isBusy;
   final VoidCallback onClearPressed;
+  final VoidCallback onManageDraftsPressed;
   final ValueChanged<_LottomatAction> onLottomatAction;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Expanded(
-          child: _ActionChip(
-            metrics: metrics,
-            label: 'נקה טופס',
-            icon: Icons.delete_outline,
-            onTap: isBusy ? null : onClearPressed,
-          ),
-        ),
-        SizedBox(width: metrics.sectionGap + 2),
         Expanded(
           child: PopupMenuButton<_LottomatAction>(
             enabled: !isBusy,
@@ -1194,7 +1596,77 @@ class _SecondaryActionRow extends StatelessWidget {
             ),
           ),
         ),
+        SizedBox(width: metrics.sectionGap + 2),
+        Expanded(
+          child: _ActionChip(
+            metrics: metrics,
+            label: 'ניהול טפסים',
+            icon: Icons.layers_outlined,
+            onTap: onManageDraftsPressed,
+          ),
+        ),
+        SizedBox(width: metrics.sectionGap + 2),
+        Expanded(
+          child: _ActionChip(
+            metrics: metrics,
+            label: 'נקה טופס',
+            icon: Icons.delete_outline,
+            onTap: isBusy ? null : onClearPressed,
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _DraftMetaText extends StatelessWidget {
+  const _DraftMetaText({
+    required this.value,
+    this.accent,
+  });
+
+  final String value;
+  final Color? accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color effectiveAccent =
+        accent ?? Theme.of(context).colorScheme.onSurfaceVariant;
+    return Text(
+      value,
+      textAlign: TextAlign.right,
+      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: effectiveAccent,
+            fontWeight: FontWeight.w700,
+          ),
+    );
+  }
+}
+
+class _LocalDraftForm {
+  const _LocalDraftForm({
+    required this.number,
+    required this.formState,
+    required this.isGroupMode,
+    required this.isDoubleMode,
+  });
+
+  final int number;
+  final LotteryFormState formState;
+  final bool isGroupMode;
+  final bool isDoubleMode;
+
+  _LocalDraftForm copyWith({
+    int? number,
+    LotteryFormState? formState,
+    bool? isGroupMode,
+    bool? isDoubleMode,
+  }) {
+    return _LocalDraftForm(
+      number: number ?? this.number,
+      formState: formState ?? this.formState,
+      isGroupMode: isGroupMode ?? this.isGroupMode,
+      isDoubleMode: isDoubleMode ?? this.isDoubleMode,
     );
   }
 }

@@ -243,6 +243,15 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
     );
   }
 
+  void loadLocalDraftState(LotteryFormState draftState) {
+    emit(
+      draftState.copyWith(
+        clearError: true,
+        clearSuccess: true,
+      ),
+    );
+  }
+
   Future<void> saveForm() async {
     if (!_formService.canSave(state.form)) {
       emit(
