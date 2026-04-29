@@ -41,6 +41,12 @@ const PRIZE_CATEGORIES = [
   "4",
   "3",
 ];
+const DEBUG_GROUP_RESULT_GROUP_IDS = new Set([
+  "pK4GpdLHXvVBpbNusbwj",
+  "cgx55IjGvs68IoiqP1He",
+]);
+const DEFAULT_REPAIR_STAGE_LIMIT = 100;
+const DEFAULT_RESULT_FORM_LIMIT = 100;
 
 exports.sendMail = functions.https.onCall((data) => {
   const {to, subject, text, html} = data;
@@ -150,7 +156,9 @@ exports.submitLotteryForm = functions.https.onCall(async (data, context) => {
       source: typeof data.source === "string" ? data.source : "manual",
       version: typeof data.version === "number" ? data.version : 1,
       lotteryId: nextLottery.lotteryId,
+      drawNumber: nextLottery.lotteryId,
       salesCloseAt: nextLottery.salesCloseAt,
+      drawDate: nextLottery.salesCloseAt,
       resultStatus: RESULT_STATUS.waiting,
       resultPublishedAt: null,
       winAmount: 0,
@@ -818,6 +826,321 @@ exports.checkLotteryResultsNow = functions.https.onCall(async (_, context) => {
   }
 });
 
+function normalizeRunLimit(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), fallback);
+}
+
+function buildProcessingOptions(rawOptions = {}) {
+  return {
+    uid: asTrimmedString(rawOptions.uid) || null,
+    submissionId: asTrimmedString(rawOptions.submissionId) || null,
+    groupId: asTrimmedString(rawOptions.groupId) || null,
+    stageLimit: normalizeRunLimit(
+        rawOptions.stageLimit ?? rawOptions.limit,
+        DEFAULT_REPAIR_STAGE_LIMIT,
+    ),
+    resultFormLimit: normalizeRunLimit(
+        rawOptions.resultFormLimit ?? rawOptions.limit,
+        DEFAULT_RESULT_FORM_LIMIT,
+    ),
+  };
+}
+
+function isTargetedPersonalSubmissionMode(options = {}) {
+  return Boolean(options.uid && options.submissionId && !options.groupId);
+}
+
+function isTargetedGroupMode(options = {}) {
+  return Boolean(options.groupId && !options.submissionId);
+}
+
+async function runProcessingStage(summary, stageName, runner) {
+  const startedAt = Date.now();
+  console.log(`${stageName} stage start`, {
+    options: summary.options,
+  });
+  try {
+    const counts = await runner();
+    summary.stages[stageName] = {
+      success: true,
+      durationMs: Date.now() - startedAt,
+      ...(counts || {}),
+    };
+    console.log(`${stageName} stage end`, summary.stages[stageName]);
+  } catch (error) {
+    summary.partialSuccess = true;
+    summary.errors.push({
+      stage: stageName,
+      message: error && error.message ? error.message : String(error),
+    });
+    summary.stages[stageName] = {
+      success: false,
+      durationMs: Date.now() - startedAt,
+      message: error && error.message ? error.message : String(error),
+    };
+    console.error(`${stageName} stage failed`, {
+      message: error && error.message ? error.message : String(error),
+      stack: error && error.stack ? error.stack : null,
+    });
+  }
+}
+
+function logFirestoreQueryFailure({
+  scope,
+  queryLabel,
+  collectionPath,
+  whereClauses = [],
+  orderByClauses = [],
+  error,
+  extra = {},
+}) {
+  console.error(`${scope} Firestore query failed`, {
+    queryLabel,
+    collectionPath,
+    whereClauses,
+    orderByClauses,
+    code: error && error.code ? error.code : null,
+    message: error && error.message ? error.message : String(error),
+    stack: error && error.stack ? error.stack : null,
+    ...extra,
+  });
+}
+
+async function loadTargetGroupDocs(options) {
+  if (options.groupId) {
+    const snapshot = await firestore.collection("lottery_groups").doc(options.groupId).get();
+    return snapshot.exists ? [snapshot] : [];
+  }
+
+  let query = firestore.collection("lottery_groups");
+  if (options.uid) {
+    query = query.where("creatorUserId", "==", options.uid);
+  }
+  const snapshot = await query.limit(options.stageLimit).get();
+  return snapshot.docs;
+}
+
+async function loadTargetPersonalSubmissionDocs(options) {
+  if (options.submissionId && options.uid) {
+    const queryLabel = "targeted personal submission doc";
+    try {
+      const snapshot = await firestore
+          .collection("users")
+          .doc(options.uid)
+          .collection("submissions")
+          .doc(options.submissionId)
+          .get();
+      return snapshot.exists ? [snapshot] : [];
+    } catch (error) {
+      logFirestoreQueryFailure({
+        scope: "loadTargetPersonalSubmissionDocs",
+        queryLabel,
+        collectionPath: `users/${options.uid}/submissions/${options.submissionId}`,
+        whereClauses: [],
+        orderByClauses: [],
+        error,
+        extra: {options},
+      });
+      throw error;
+    }
+  }
+
+  let query = firestore.collectionGroup("submissions");
+  const whereClauses = [];
+  if (options.submissionId) {
+    query = query.where("submissionId", "==", options.submissionId);
+    whereClauses.push(`submissionId == ${options.submissionId}`);
+  } else if (options.uid) {
+    query = query.where("userId", "==", options.uid);
+    whereClauses.push(`userId == ${options.uid}`);
+  }
+  let snapshot;
+  try {
+    snapshot = await query.limit(options.stageLimit).get();
+  } catch (error) {
+    logFirestoreQueryFailure({
+      scope: "loadTargetPersonalSubmissionDocs",
+      queryLabel: "collectionGroup(submissions).limit(stageLimit)",
+      collectionPath: "collectionGroup(submissions)",
+      whereClauses,
+      orderByClauses: [],
+      error,
+      extra: {options},
+    });
+    throw error;
+  }
+  return snapshot.docs.filter((doc) => {
+    const data = doc.data() || {};
+    return asTrimmedString(data.type) === "personal" &&
+      asTrimmedString(data.status) === "submitted";
+  });
+}
+
+async function loadCanonicalWaitingResultDocs(options) {
+  if (options.groupId) {
+    let snapshot;
+    try {
+      snapshot = await firestore
+          .collection("lottery_groups")
+          .doc(options.groupId)
+          .collection("forms")
+          .limit(options.resultFormLimit)
+          .get();
+    } catch (error) {
+      logFirestoreQueryFailure({
+        scope: "loadCanonicalWaitingResultDocs",
+        queryLabel: "targeted group canonical forms",
+        collectionPath: `lottery_groups/${options.groupId}/forms`,
+        whereClauses: [],
+        orderByClauses: [],
+        error,
+        extra: {options},
+      });
+      throw error;
+    }
+    return snapshot.docs.filter((doc) => shouldProcessCanonicalResultDoc(doc.data() || {}));
+  }
+
+  if (options.submissionId && options.uid) {
+    let snapshot;
+    try {
+      snapshot = await firestore
+          .collection("users")
+          .doc(options.uid)
+          .collection("forms")
+          .where("submissionId", "==", options.submissionId)
+          .limit(options.resultFormLimit)
+          .get();
+    } catch (error) {
+      logFirestoreQueryFailure({
+        scope: "loadCanonicalWaitingResultDocs",
+        queryLabel: "targeted personal canonical forms",
+        collectionPath: `users/${options.uid}/forms`,
+        whereClauses: [`submissionId == ${options.submissionId}`],
+        orderByClauses: [],
+        error,
+        extra: {options},
+      });
+      throw error;
+    }
+    return snapshot.docs.filter((doc) => shouldProcessCanonicalResultDoc(doc.data() || {}));
+  }
+
+  if (options.uid) {
+    let snapshot;
+    try {
+      snapshot = await firestore
+          .collection("users")
+          .doc(options.uid)
+          .collection("forms")
+          .limit(options.resultFormLimit)
+          .get();
+    } catch (error) {
+      logFirestoreQueryFailure({
+        scope: "loadCanonicalWaitingResultDocs",
+        queryLabel: "targeted user canonical forms",
+        collectionPath: `users/${options.uid}/forms`,
+        whereClauses: [],
+        orderByClauses: [],
+        error,
+        extra: {options},
+      });
+      throw error;
+    }
+    return snapshot.docs.filter((doc) => shouldProcessCanonicalResultDoc(doc.data() || {}));
+  }
+
+  if (options.submissionId) {
+    let snapshot;
+    try {
+      snapshot = await firestore
+          .collectionGroup("forms")
+          .where("submissionId", "==", options.submissionId)
+          .limit(options.resultFormLimit)
+          .get();
+    } catch (error) {
+      logFirestoreQueryFailure({
+        scope: "loadCanonicalWaitingResultDocs",
+        queryLabel: "submissionId scoped canonical forms",
+        collectionPath: "collectionGroup(forms)",
+        whereClauses: [`submissionId == ${options.submissionId}`],
+        orderByClauses: [],
+        error,
+        extra: {options},
+      });
+      throw error;
+    }
+    return snapshot.docs.filter((doc) => shouldProcessCanonicalResultDoc(doc.data() || {}));
+  }
+
+  if (!options.uid && !options.submissionId && !options.groupId) {
+    let snapshot;
+    try {
+      snapshot = await firestore
+          .collectionGroup("forms")
+          .limit(options.resultFormLimit)
+          .get();
+    } catch (error) {
+      logFirestoreQueryFailure({
+        scope: "loadCanonicalWaitingResultDocs",
+        queryLabel: "global canonical forms scan",
+        collectionPath: "collectionGroup(forms)",
+        whereClauses: [],
+        orderByClauses: [],
+        error,
+        extra: {options},
+      });
+      throw error;
+    }
+    return snapshot.docs.filter((doc) =>
+      shouldProcessCanonicalResultDoc(doc.data() || {}));
+  }
+
+  let snapshot;
+  try {
+    snapshot = await firestore
+        .collectionGroup("forms")
+        .where("status", "==", "submitted")
+        .limit(options.resultFormLimit)
+        .get();
+  } catch (error) {
+    logFirestoreQueryFailure({
+      scope: "loadCanonicalWaitingResultDocs",
+      queryLabel: "fallback submitted canonical forms",
+      collectionPath: "collectionGroup(forms)",
+      whereClauses: ["status == submitted"],
+      orderByClauses: [],
+      error,
+      extra: {options},
+    });
+    throw error;
+  }
+  return snapshot.docs.filter((doc) => shouldProcessCanonicalResultDoc(doc.data() || {}));
+}
+
+function matchesProcessingTarget(doc, data, options) {
+  if (options.groupId) {
+    if (!isGroupFormDocument(doc.ref)) {
+      return false;
+    }
+    return doc.ref.parent.parent && doc.ref.parent.parent.id === options.groupId;
+  }
+
+  if (options.submissionId) {
+    return asTrimmedString(data.submissionId) === options.submissionId;
+  }
+
+  if (options.uid) {
+    return asTrimmedString(data.userId, data.creatorUserId) === options.uid;
+  }
+
+  return true;
+}
+
 exports.checkLotteryResultsAdmin = functions
     .runWith({secrets: ["LOTTO_ADMIN_SECRET"]})
     .https.onRequest(async (req, res) => {
@@ -855,11 +1178,20 @@ exports.checkLotteryResultsAdmin = functions
           });
         }
 
+        const options = buildProcessingOptions({
+          ...((req.query && typeof req.query === "object") ? req.query : {}),
+          ...((req.body && typeof req.body === "object") ? req.body : {}),
+        });
         failureStage = "process-waiting-results";
-        await processWaitingLotteryResults();
+        const summary = await processWaitingLotteryResults(options);
         return res.status(200).json({
-          success: true,
-          message: "Lottery results processed.",
+          success: !summary.partialSuccess,
+          partialSuccess: summary.partialSuccess,
+          message: summary.partialSuccess ?
+            "Lottery results processed with partial completion." :
+            "Lottery results processed.",
+          options,
+          summary,
         });
       } catch (error) {
         console.error("checkLotteryResultsAdmin failed", {
@@ -877,81 +1209,211 @@ exports.checkLotteryResultsAdmin = functions
       }
     });
 
-async function processWaitingLotteryResults() {
+async function processWaitingLotteryResults(rawOptions = {}) {
+  const options = buildProcessingOptions(rawOptions);
+  const summary = {
+    options,
+    partialSuccess: false,
+    stages: {},
+    errors: [],
+  };
   try {
-    const snapshot = await firestore
-        .collectionGroup("forms")
-        .where("status", "==", "submitted")
-        .where("resultStatus", "==", RESULT_STATUS.waiting)
-        .get();
-
-    console.log("processWaitingLotteryResults found forms", snapshot.size);
-
-    if (snapshot.empty) {
-      return;
+    if (isTargetedPersonalSubmissionMode(options)) {
+      await runProcessingStage(
+          summary,
+          "repairCanonicalPersonalSubmissionForms",
+          () => repairCanonicalPersonalSubmissionForms(options),
+      );
+      await runProcessingStage(
+          summary,
+          "repairMissingPersonalSubmissionLotteryMetadata",
+          () => repairMissingPersonalSubmissionLotteryMetadata(options),
+      );
+      await runProcessingStage(
+          summary,
+          "rebuildPersonalSummaries",
+          () => repairPersonalSubmissionSummaries(options),
+      );
+    } else if (isTargetedGroupMode(options)) {
+      await runProcessingStage(
+          summary,
+          "repairCanonicalGroupForms",
+          () => repairCanonicalGroupForms(options),
+      );
+      await runProcessingStage(
+          summary,
+          "repairMissingGroupLotteryMetadata",
+          () => repairMissingGroupLotteryMetadata(options),
+      );
+      await runProcessingStage(
+          summary,
+          "rebuildGroupSummaries",
+          () => repairMissingGroupResultSummaries(options),
+      );
+    } else {
+      await runProcessingStage(
+          summary,
+          "repairCanonicalGroupForms",
+          () => repairCanonicalGroupForms(options),
+      );
+      await runProcessingStage(
+          summary,
+          "repairCanonicalPersonalSubmissionForms",
+          () => repairCanonicalPersonalSubmissionForms(options),
+      );
+      await runProcessingStage(
+          summary,
+          "repairMissingPersonalSubmissionLotteryMetadata",
+          () => repairMissingPersonalSubmissionLotteryMetadata(options),
+      );
+      await runProcessingStage(
+          summary,
+          "repairMissingGroupLotteryMetadata",
+          () => repairMissingGroupLotteryMetadata(options),
+      );
+      await runProcessingStage(
+          summary,
+          "rebuildGroupSummaries",
+          () => repairMissingGroupResultSummaries(options),
+      );
+      await runProcessingStage(
+          summary,
+          "rebuildPersonalSummaries",
+          () => repairPersonalSubmissionSummaries(options),
+      );
     }
-
-    const formsByLotteryId = new Map();
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-      const lotteryId = Number(data.lotteryId);
-      if (!Number.isFinite(lotteryId)) {
-        console.error("Skipping form with invalid lotteryId", doc.id, data.lotteryId);
-        continue;
-      }
-
-      if (!formsByLotteryId.has(lotteryId)) {
-        formsByLotteryId.set(lotteryId, []);
-      }
-
-      formsByLotteryId.get(lotteryId).push(doc);
-    }
-
-    console.log(
-        "processWaitingLotteryResults lotteryIds",
-        Array.from(formsByLotteryId.keys()).join(","),
-    );
-
-    for (const [lotteryId, docs] of formsByLotteryId.entries()) {
+    await runProcessingStage(summary, "processCanonicalForms", async () => {
+      console.log("processCanonicalForms query start", {
+        query: "targeted canonical waiting forms",
+        options,
+      });
+      let candidateDocs = [];
       try {
-        console.log(
-            "processWaitingLotteryResults fetching lottery result",
-            lotteryId,
-            "forms=",
-            docs.length,
-        );
-        const result = await fetchLotteryResult(lotteryId);
-        if (!result) {
-          console.log("No published results yet for lotteryId", lotteryId);
+        candidateDocs = await loadCanonicalWaitingResultDocs(options);
+      } catch (error) {
+        logFirestoreQueryFailure({
+          scope: "processCanonicalForms",
+          queryLabel: "loadCanonicalWaitingResultDocs",
+          collectionPath: "multiple canonical forms sources",
+          whereClauses: [],
+          orderByClauses: [],
+          error,
+          extra: {options},
+        });
+        throw error;
+      }
+
+      let matched = 0;
+      let skipped = 0;
+      let processed = 0;
+      let publishedLotteries = 0;
+      const formsByLotteryId = new Map();
+
+      for (const doc of candidateDocs) {
+        const data = doc.data() || {};
+        if (!isCanonicalSubmittedResultDoc(doc.ref, data)) {
+          skipped += 1;
+          continue;
+        }
+        if (!matchesProcessingTarget(doc, data, options)) {
+          skipped += 1;
           continue;
         }
 
-        for (const doc of docs) {
-          try {
-            console.log(
-                "processWaitingLotteryResults processing form",
-                doc.id,
-                "lotteryId=",
-                lotteryId,
-            );
-            await applyLotteryResultToForm(doc.ref, doc.data(), result);
-          } catch (error) {
-            console.error("applyLotteryResultToForm failed", {
-              formId: doc.id,
-              lotteryId,
-              message: error && error.message ? error.message : String(error),
-              stack: error && error.stack ? error.stack : null,
-            });
-          }
+        matched += 1;
+        let metadata;
+        try {
+          metadata = await resolveAndRepairLotteryMetadataForFormDoc(doc, options);
+        } catch (error) {
+          summary.partialSuccess = true;
+          summary.errors.push({
+            stage: "processCanonicalForms",
+            formId: doc.id,
+            path: doc.ref.path,
+            message: error && error.message ? error.message : String(error),
+          });
+          console.error("processCanonicalForms metadata resolution failed", {
+            formId: doc.id,
+            path: doc.ref.path,
+            message: error && error.message ? error.message : String(error),
+            stack: error && error.stack ? error.stack : null,
+          });
+          skipped += 1;
+          continue;
         }
-      } catch (error) {
-        console.error("fetchLotteryResult group failed", {
-          lotteryId,
-          message: error && error.message ? error.message : String(error),
-          stack: error && error.stack ? error.stack : null,
-        });
+        const lotteryId = Number(metadata.lotteryId);
+        if (!Number.isFinite(lotteryId)) {
+          skipped += 1;
+          continue;
+        }
+
+        if (!formsByLotteryId.has(lotteryId)) {
+          formsByLotteryId.set(lotteryId, []);
+        }
+
+        formsByLotteryId.get(lotteryId).push(doc);
       }
-    }
+
+      console.log(
+          "processCanonicalForms lotteryIds",
+          Array.from(formsByLotteryId.keys()).join(","),
+      );
+
+      for (const [lotteryId, docs] of formsByLotteryId.entries()) {
+        try {
+          console.log("processCanonicalForms fetching lottery result", {
+            lotteryId,
+            forms: docs.length,
+          });
+          const result = await fetchLotteryResult(lotteryId);
+          if (!result) {
+            continue;
+          }
+
+          publishedLotteries += 1;
+          for (const doc of docs) {
+            try {
+              await applyLotteryResultToForm(doc.ref, doc.data(), result);
+              processed += 1;
+            } catch (error) {
+              summary.partialSuccess = true;
+              summary.errors.push({
+                stage: "processCanonicalForms",
+                formId: doc.id,
+                lotteryId,
+                message: error && error.message ? error.message : String(error),
+              });
+              console.error("applyLotteryResultToForm failed", {
+                formId: doc.id,
+                lotteryId,
+                message: error && error.message ? error.message : String(error),
+                stack: error && error.stack ? error.stack : null,
+              });
+            }
+          }
+        } catch (error) {
+          summary.partialSuccess = true;
+          summary.errors.push({
+            stage: "processCanonicalForms",
+            lotteryId,
+            message: error && error.message ? error.message : String(error),
+          });
+          console.error("fetchLotteryResult group failed", {
+            lotteryId,
+            message: error && error.message ? error.message : String(error),
+            stack: error && error.stack ? error.stack : null,
+          });
+        }
+      }
+
+      return {
+        queriedDocs: candidateDocs.length,
+        matchedDocs: matched,
+        skippedDocs: skipped,
+        processedDocs: processed,
+        publishedLotteries,
+      };
+    });
   } catch (error) {
     console.error("processWaitingLotteryResults failed", {
       message: error && error.message ? error.message : String(error),
@@ -959,6 +1421,2165 @@ async function processWaitingLotteryResults() {
     });
     throw error;
   }
+  return summary;
+}
+
+async function repairCanonicalGroupForms(options = {}) {
+  console.log("repairCanonicalGroupForms query start", {
+    query: options.groupId ?
+      `lottery_groups/${options.groupId}` :
+      "collection(lottery_groups).limit(stageLimit)",
+    options,
+  });
+  const groupDocs = await loadTargetGroupDocs(options);
+  console.log("repairCanonicalGroupForms scan", groupDocs.length);
+
+  let batch = firestore.batch();
+  let operations = 0;
+  let updatedDocs = 0;
+  let matchedGroups = 0;
+
+  const commitBatchIfNeeded = async (force = false) => {
+    if (operations === 0) {
+      return;
+    }
+    if (!force && operations < 350) {
+      return;
+    }
+    await batch.commit();
+    batch = firestore.batch();
+    operations = 0;
+  };
+
+  for (const groupDoc of groupDocs) {
+    const groupData = groupDoc.data() || {};
+    if (asTrimmedString(groupData.status) !== "submitted") {
+      continue;
+    }
+    matchedGroups += 1;
+
+    const bundleType = asTrimmedString(groupData.bundleType, "single_form");
+    if (bundleType === "multi_form") {
+      console.log("repairCanonicalGroupForms query start", {
+        groupId: groupDoc.id,
+        query: `lottery_groups/${groupDoc.id}/forms.get()`,
+      });
+      const groupFormsSnapshot = await groupDoc.ref.collection("forms").get();
+      for (const groupFormDoc of groupFormsSnapshot.docs) {
+        const groupFormData = groupFormDoc.data() || {};
+        batch.set(groupFormDoc.ref, {
+          formId: groupFormDoc.id,
+          groupId: groupDoc.id,
+          submissionType: "group",
+          mode: "group",
+          userId: asTrimmedString(
+              groupFormData.userId,
+              asTrimmedString(groupData.creatorUserId),
+          ),
+          creatorUserId: asTrimmedString(groupData.creatorUserId),
+          creatorDisplayName: asTrimmedString(
+              groupFormData.creatorDisplayName,
+              asTrimmedString(groupData.creatorName, groupData.creatorUserId),
+          ),
+          groupName: asTrimmedString(groupData.groupName),
+          status: "submitted",
+          resultStatus: asTrimmedString(
+              groupFormData.resultStatus,
+              RESULT_STATUS.waiting,
+          ),
+          baseTicketCost: firstFiniteNumber([
+            groupFormData.baseTicketCost,
+            groupData.baseTicketCost,
+          ]) || 0,
+          effectiveParticipantCount: firstFiniteNumber([
+            groupFormData.effectiveParticipantCount,
+            groupData.effectiveParticipantCount,
+            groupData.finalizedParticipantCount,
+          ]) || 1,
+          effectiveCostPerPaidParticipant: firstFiniteNumber([
+            groupFormData.effectiveCostPerPaidParticipant,
+            groupData.currentPerParticipantCost,
+          ]) || 0,
+          lotteryId: firstFiniteNumber([
+            groupFormData.lotteryId,
+            groupFormData.drawNumber,
+            groupData.lotteryId,
+            groupData.drawNumber,
+          ]),
+          drawNumber: firstFiniteNumber([
+            groupFormData.drawNumber,
+            groupFormData.lotteryId,
+            groupData.drawNumber,
+            groupData.lotteryId,
+          ]),
+          salesCloseAt:
+            groupFormData.salesCloseAt ||
+            groupFormData.drawDate ||
+            groupData.salesCloseAt ||
+            groupData.drawDate ||
+            null,
+          drawDate:
+            groupFormData.drawDate ||
+            groupFormData.salesCloseAt ||
+            groupData.drawDate ||
+            groupData.salesCloseAt ||
+            null,
+          updatedAt:
+            groupFormData.updatedAt ||
+            admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        if (DEBUG_GROUP_RESULT_GROUP_IDS.has(groupDoc.id)) {
+          console.log("repairCanonicalGroupForms normalized child status", {
+            groupId: groupDoc.id,
+            formId: groupFormDoc.id,
+            previousStatus: asTrimmedString(groupFormData.status),
+            nextStatus: "submitted",
+          });
+        }
+        operations += 1;
+        updatedDocs += 1;
+        await commitBatchIfNeeded();
+      }
+      continue;
+    }
+
+    const creatorUserId = asTrimmedString(groupData.creatorUserId);
+    const sourceFormId =
+      asTrimmedString(groupData.submittedFormId) ||
+      asTrimmedString(groupData.sourceFormId);
+    if (!creatorUserId || !sourceFormId) {
+      continue;
+    }
+
+    console.log("repairCanonicalGroupForms query start", {
+      groupId: groupDoc.id,
+      query: `users/${creatorUserId}/forms/${sourceFormId}`,
+    });
+    const sourceFormSnapshot = await firestore
+        .collection("users")
+        .doc(creatorUserId)
+        .collection("forms")
+        .doc(sourceFormId)
+        .get();
+    if (!sourceFormSnapshot.exists) {
+      continue;
+    }
+
+    const sourceFormData = sourceFormSnapshot.data() || {};
+    const rawTables = Array.isArray(sourceFormData.tables) ? sourceFormData.tables : [];
+    const tableCount = typeof sourceFormData.tableCount === "number" ?
+      sourceFormData.tableCount :
+      rawTables.filter((table) => normalizeTable(table).regularNumbers.length > 0).length;
+    const canonicalGroupFormRef = groupDoc.ref.collection("forms").doc(sourceFormId);
+    batch.set(canonicalGroupFormRef, {
+      formId: sourceFormId,
+      groupId: groupDoc.id,
+      displayOrder: 1,
+      sourceUserId: creatorUserId,
+      sourceDraftNumber: 1,
+      status: "submitted",
+      submissionType: "group",
+      mode: "group",
+      userId: creatorUserId,
+      creatorUserId,
+      creatorDisplayName: asTrimmedString(
+          sourceFormData.creatorDisplayName,
+          asTrimmedString(groupData.creatorName, creatorUserId),
+      ),
+      groupName: asTrimmedString(groupData.groupName),
+      dispatchStatus: asTrimmedString(
+          sourceFormData.dispatchStatus,
+          asTrimmedString(groupData.dispatchStatus),
+      ),
+      baseTicketCost: firstFiniteNumber([
+        sourceFormData.baseTicketCost,
+        groupData.baseTicketCost,
+      ]) || 0,
+      effectiveParticipantCount: firstFiniteNumber([
+        sourceFormData.effectiveParticipantCount,
+        groupData.effectiveParticipantCount,
+        groupData.finalizedParticipantCount,
+      ]) || 1,
+      effectiveCostPerPaidParticipant: firstFiniteNumber([
+        sourceFormData.effectiveCostPerPaidParticipant,
+        groupData.currentPerParticipantCost,
+      ]) || 0,
+      submittedParticipantUserIds:
+        sourceFormData.submittedParticipantUserIds || [],
+      paidParticipants: sourceFormData.paidParticipants || [],
+      isDoubleMode: Boolean(sourceFormData.isDoubleMode),
+      lotteryId: firstFiniteNumber([
+        sourceFormData.lotteryId,
+        sourceFormData.drawNumber,
+        groupData.lotteryId,
+        groupData.drawNumber,
+      ]),
+      drawNumber: firstFiniteNumber([
+        sourceFormData.drawNumber,
+        sourceFormData.lotteryId,
+        groupData.drawNumber,
+        groupData.lotteryId,
+      ]),
+      salesCloseAt:
+        sourceFormData.salesCloseAt ||
+        sourceFormData.drawDate ||
+        groupData.salesCloseAt ||
+        groupData.drawDate ||
+        null,
+      drawDate:
+        sourceFormData.drawDate ||
+        sourceFormData.salesCloseAt ||
+        groupData.drawDate ||
+        groupData.salesCloseAt ||
+        null,
+      tableCount,
+      cost: firstFiniteNumber([
+        sourceFormData.cost,
+        groupData.baseTicketCost,
+      ]) || 0,
+      tables: rawTables,
+      isComplete: sourceFormData.isComplete !== false,
+      createdAt:
+        sourceFormData.createdAt ||
+        sourceFormData.savedAt ||
+        groupData.createdAt ||
+        null,
+      updatedAt:
+        sourceFormData.updatedAt ||
+        groupData.updatedAt ||
+        admin.firestore.FieldValue.serverTimestamp(),
+      submittedAt:
+        sourceFormData.submittedAt ||
+        groupData.submittedAt ||
+        null,
+      resultStatus: asTrimmedString(
+          sourceFormData.resultStatus,
+          RESULT_STATUS.waiting,
+      ),
+      resultPublishedAt: sourceFormData.resultPublishedAt || null,
+      winAmount: firstFiniteNumber([
+        sourceFormData.winAmount,
+        sourceFormData.winningAmount,
+      ]) || 0,
+      checkedAt: sourceFormData.checkedAt || null,
+      balanceApplied: sourceFormData.balanceApplied === true,
+      winAllocations: sourceFormData.winAllocations || null,
+      ticketFingerprint: asTrimmedString(sourceFormData.ticketFingerprint) || null,
+      ticketFingerprintSource:
+        asTrimmedString(sourceFormData.ticketFingerprintSource) || null,
+      fingerprintVersion: firstFiniteNumber([
+        sourceFormData.fingerprintVersion,
+      ]),
+      printedAt: sourceFormData.printedAt || null,
+      submittedToStationAt: sourceFormData.submittedToStationAt || null,
+      printReadyUrl: asTrimmedString(sourceFormData.printReadyUrl) || null,
+      printReadyGeneratedAt: sourceFormData.printReadyGeneratedAt || null,
+      printReadyStoragePath:
+        asTrimmedString(sourceFormData.printReadyStoragePath) || null,
+    }, {merge: true});
+    if (DEBUG_GROUP_RESULT_GROUP_IDS.has(groupDoc.id)) {
+      console.log("repairCanonicalGroupForms normalized single-form child status", {
+        groupId: groupDoc.id,
+        formId: sourceFormId,
+        previousStatus: asTrimmedString(sourceFormData.status),
+        nextStatus: "submitted",
+      });
+    }
+    operations += 1;
+    updatedDocs += 1;
+    await commitBatchIfNeeded();
+  }
+
+  await commitBatchIfNeeded(true);
+  return {
+    scannedGroups: groupDocs.length,
+    matchedGroups,
+    updatedDocs,
+  };
+}
+
+async function repairCanonicalPersonalSubmissionForms(options = {}) {
+  console.log("repairCanonicalPersonalSubmissionForms query start", {
+    query: options.submissionId || options.uid ?
+      "targeted personal submissions" :
+      "collectionGroup(submissions).limit(stageLimit)",
+    options,
+  });
+  const submissionDocs = await loadTargetPersonalSubmissionDocs(options);
+  console.log(
+      "repairCanonicalPersonalSubmissionForms scan",
+      submissionDocs.length,
+  );
+
+  let batch = firestore.batch();
+  let operations = 0;
+  let updatedDocs = 0;
+  let matchedSubmissions = 0;
+
+  const commitBatchIfNeeded = async (force = false) => {
+    if (operations === 0) {
+      return;
+    }
+    if (!force && operations < 300) {
+      return;
+    }
+    await batch.commit();
+    batch = firestore.batch();
+    operations = 0;
+  };
+
+  for (const submissionDoc of submissionDocs) {
+    const submissionData = submissionDoc.data() || {};
+    if (asTrimmedString(submissionData.type) !== "personal" ||
+        asTrimmedString(submissionData.status) !== "submitted") {
+      continue;
+    }
+    matchedSubmissions += 1;
+
+    const userId = asTrimmedString(
+        submissionData.userId,
+        submissionDoc.ref.parent.parent ? submissionDoc.ref.parent.parent.id : "",
+    );
+    if (!userId) {
+      continue;
+    }
+
+    console.log("repairCanonicalPersonalSubmissionForms query start", {
+      submissionId: submissionDoc.id,
+      userId,
+      query: `users/${userId}/forms.where(submissionId==${submissionDoc.id})`,
+    });
+    const canonicalSnapshot = await firestore
+        .collection("users")
+        .doc(userId)
+        .collection("forms")
+        .where("submissionId", "==", submissionDoc.id)
+        .get();
+    const existingCanonicalIds = new Set(
+        canonicalSnapshot.docs.map((doc) => doc.id),
+    );
+
+    console.log("repairCanonicalPersonalSubmissionForms query start", {
+      submissionId: submissionDoc.id,
+      userId,
+      query: `${submissionDoc.ref.path}/forms.get()`,
+    });
+    const legacySnapshot = await submissionDoc.ref.collection("forms").get();
+    for (const legacyFormDoc of legacySnapshot.docs) {
+      if (existingCanonicalIds.has(legacyFormDoc.id)) {
+        continue;
+      }
+
+      const legacyData = legacyFormDoc.data() || {};
+      const canonicalFormRef = firestore
+          .collection("users")
+          .doc(userId)
+          .collection("forms")
+          .doc(legacyFormDoc.id);
+      batch.set(canonicalFormRef, {
+        formId: legacyFormDoc.id,
+        submissionId: submissionDoc.id,
+        userId,
+        displayOrder: firstFiniteNumber([legacyData.displayOrder]) || 0,
+        status: "submitted",
+        submissionType: "personal",
+        mode: "personal",
+        isDoubleMode: Boolean(legacyData.isDoubleMode),
+        tableCount: firstFiniteNumber([
+          legacyData.tableCount,
+          Array.isArray(legacyData.tables) ? legacyData.tables.length : 0,
+        ]) || 0,
+        cost: firstFiniteNumber([legacyData.cost]) || 0,
+        tables: Array.isArray(legacyData.tables) ? legacyData.tables : [],
+        isComplete: legacyData.isComplete !== false,
+        createdAt:
+          legacyData.createdAt ||
+          submissionData.createdAt ||
+          null,
+        updatedAt:
+          legacyData.updatedAt ||
+          submissionData.updatedAt ||
+          admin.firestore.FieldValue.serverTimestamp(),
+        submittedAt:
+          legacyData.submittedAt ||
+          submissionData.submittedAt ||
+          null,
+        savedAt: legacyData.savedAt || null,
+        source: "personal_submission_bundle",
+        version: firstFiniteNumber([legacyData.version]) || 1,
+        lotteryId: firstFiniteNumber([
+          legacyData.lotteryId,
+          legacyData.drawNumber,
+        ]),
+        drawNumber: firstFiniteNumber([
+          legacyData.drawNumber,
+          legacyData.lotteryId,
+        ]),
+        salesCloseAt: legacyData.salesCloseAt || legacyData.drawDate || null,
+        drawDate: legacyData.drawDate || legacyData.salesCloseAt || null,
+        resultStatus: asTrimmedString(
+            legacyData.resultStatus,
+            RESULT_STATUS.waiting,
+        ),
+        resultPublishedAt: legacyData.resultPublishedAt || null,
+        winAmount: firstFiniteNumber([
+          legacyData.winAmount,
+          legacyData.winningAmount,
+        ]) || 0,
+        checkedAt: legacyData.checkedAt || null,
+        balanceApplied: legacyData.balanceApplied === true,
+        printedAt: legacyData.printedAt || null,
+        submittedToStationAt: legacyData.submittedToStationAt || null,
+        receiptUrl: asTrimmedString(legacyData.receiptUrl) || null,
+      }, {merge: true});
+      operations += 1;
+      updatedDocs += 1;
+      await commitBatchIfNeeded();
+    }
+  }
+
+  await commitBatchIfNeeded(true);
+  return {
+    scannedSubmissions: submissionDocs.length,
+    matchedSubmissions,
+    updatedDocs,
+  };
+}
+
+async function repairMissingPersonalSubmissionLotteryMetadata(options = {}) {
+  console.log("repairMissingPersonalSubmissionLotteryMetadata query start", {
+    query: options.submissionId || options.uid ?
+      "targeted personal submissions" :
+      "collectionGroup(submissions).limit(stageLimit)",
+    options,
+  });
+  const submissionDocs = await loadTargetPersonalSubmissionDocs(options);
+  console.log(
+      "repairMissingPersonalSubmissionLotteryMetadata scan",
+      submissionDocs.length,
+  );
+
+  let batch = firestore.batch();
+  let operations = 0;
+  let updatedDocs = 0;
+  let matchedSubmissions = 0;
+  let queryFailures = 0;
+
+  const commitBatchIfNeeded = async (force = false) => {
+    if (operations === 0) {
+      return;
+    }
+    if (!force && operations < 300) {
+      return;
+    }
+    await batch.commit();
+    batch = firestore.batch();
+    operations = 0;
+  };
+
+  for (const submissionDoc of submissionDocs) {
+    const submissionData = submissionDoc.data() || {};
+    if (asTrimmedString(submissionData.type) !== "personal" ||
+        asTrimmedString(submissionData.status) !== "submitted") {
+      continue;
+    }
+    matchedSubmissions += 1;
+
+    const userId = asTrimmedString(
+        submissionData.userId,
+        submissionDoc.ref.parent.parent ? submissionDoc.ref.parent.parent.id : "",
+    );
+    if (!userId) {
+      continue;
+    }
+
+    const canonicalQueryLabel =
+      `users/${userId}/forms.where(submissionId==${submissionDoc.id})`;
+    console.log("repairMissingPersonalSubmissionLotteryMetadata query start", {
+      submissionId: submissionDoc.id,
+      userId,
+      query: canonicalQueryLabel,
+    });
+    let canonicalSnapshot;
+    try {
+      canonicalSnapshot = await firestore
+          .collection("users")
+          .doc(userId)
+          .collection("forms")
+          .where("submissionId", "==", submissionDoc.id)
+          .get();
+    } catch (error) {
+      queryFailures += 1;
+      logFirestoreQueryFailure({
+        scope: "repairMissingPersonalSubmissionLotteryMetadata",
+        queryLabel: canonicalQueryLabel,
+        collectionPath: `users/${userId}/forms`,
+        whereClauses: [
+          `submissionId == ${submissionDoc.id}`,
+        ],
+        orderByClauses: [],
+        error,
+        extra: {
+          submissionId: submissionDoc.id,
+          userId,
+        },
+      });
+      continue;
+    }
+
+    if (canonicalSnapshot.empty) {
+      continue;
+    }
+
+    const repairEventDate =
+      asDate(submissionData.submittedAt) ||
+      asDate(submissionData.createdAt) ||
+      asDate(submissionData.drawDate) ||
+      asDate(submissionData.salesCloseAt);
+    const submissionCurrentMetadata = normalizeLotteryMetadata(submissionData);
+    const submissionHasInvalidMetadata = hasInvalidLotteryAssignment(
+        submissionCurrentMetadata,
+        repairEventDate,
+    );
+    let hintedLotteryId = normalizeLotteryMetadata(submissionData).lotteryId;
+    let hintedDrawDate = coerceValidLotteryDateForEvent(
+        asDate(submissionData.salesCloseAt || submissionData.drawDate),
+        repairEventDate,
+        {
+          scope: "repairMissingPersonalSubmissionLotteryMetadata",
+          submissionId: submissionDoc.id,
+          userId,
+          source: "parentSubmission",
+        },
+    );
+    for (const formDoc of canonicalSnapshot.docs) {
+      const formMetadata = normalizeLotteryMetadata(formDoc.data() || {});
+      if (hasInvalidLotteryAssignment(formMetadata, repairEventDate)) {
+        console.log("invalidPastLotteryAssignment", {
+          scope: "repairMissingPersonalSubmissionLotteryMetadata",
+          submissionId: submissionDoc.id,
+          userId,
+          source: `childForm:${formDoc.id}`,
+          resolvedLotteryId: formMetadata.lotteryId,
+          resolvedDrawDate:
+            formMetadata.salesCloseAt ? formMetadata.salesCloseAt.toISOString() : null,
+          eventDate: repairEventDate ? repairEventDate.toISOString() : null,
+        });
+        continue;
+      }
+      if (!hintedLotteryId && formMetadata.lotteryId) {
+        hintedLotteryId = formMetadata.lotteryId;
+      }
+      if (!hintedDrawDate) {
+        hintedDrawDate = coerceValidLotteryDateForEvent(
+            formMetadata.salesCloseAt,
+            repairEventDate,
+            {
+              scope: "repairMissingPersonalSubmissionLotteryMetadata",
+              submissionId: submissionDoc.id,
+              userId,
+              source: `childForm:${formDoc.id}`,
+              candidateLotteryId: formMetadata.lotteryId,
+            },
+        );
+      }
+    }
+    let metadata = {
+      lotteryId: hintedLotteryId,
+      drawNumber: hintedLotteryId,
+      salesCloseAt: hintedDrawDate,
+      drawDate: hintedDrawDate,
+    };
+    console.log("repairMissingPersonalSubmissionLotteryMetadata candidate", {
+      submissionId: submissionDoc.id,
+      userId,
+      salesCloseAt:
+        asDate(submissionData.salesCloseAt || submissionData.drawDate)?.toISOString() ||
+        null,
+      drawDate:
+        asDate(submissionData.drawDate || submissionData.salesCloseAt)?.toISOString() ||
+        null,
+      resolvedEventDate: repairEventDate ? repairEventDate.toISOString() : null,
+      currentLotteryId: hintedLotteryId,
+      currentDrawNumber: hintedLotteryId,
+      hintedDrawDate: hintedDrawDate ? hintedDrawDate.toISOString() : null,
+      submissionHasInvalidMetadata,
+    });
+
+    if (isTargetedPersonalSubmissionMode(options)) {
+      metadata = await resolveTargetedPersonalSubmissionLotteryMetadata({
+        submissionId: submissionDoc.id,
+        userId,
+        repairEventDate,
+        hintedLotteryId,
+        hintedDrawDate,
+      });
+    } else {
+      if (!metadata.lotteryId || !metadata.salesCloseAt) {
+        try {
+          metadata = await resolveLotteryMetadataFallback({
+            directData: {
+              lotteryId: hintedLotteryId,
+              drawNumber: hintedLotteryId,
+              salesCloseAt: hintedDrawDate,
+              drawDate: hintedDrawDate,
+            },
+            eventDate: repairEventDate,
+            debugContext: {
+              scope: "repairMissingPersonalSubmissionLotteryMetadata",
+              submissionId: submissionDoc.id,
+              userId,
+            },
+          });
+        } catch (error) {
+          queryFailures += 1;
+          logFirestoreQueryFailure({
+            scope: "repairMissingPersonalSubmissionLotteryMetadata",
+            queryLabel: "resolveLotteryMetadataFallback",
+            collectionPath: "multiple helper queries",
+            whereClauses: [
+              "collectionGroup(forms).where(lotteryId == hintedLotteryId)",
+              "collectionGroup(forms).where(drawNumber == hintedLotteryId)",
+              "collectionGroup(forms).where(salesCloseAt == hintedDrawDate)",
+              "collectionGroup(forms).where(drawDate == hintedDrawDate)",
+            ],
+            orderByClauses: [],
+            error,
+            extra: {
+              submissionId: submissionDoc.id,
+              userId,
+              hintedLotteryId,
+              hintedDrawDate: hintedDrawDate ? hintedDrawDate.toISOString() : null,
+            },
+          });
+          metadata = emptyLotteryMetadata();
+        }
+      }
+
+      metadata = ensureSafeLotteryMetadataForEventDate(
+          metadata,
+          repairEventDate,
+          {
+            scope: "repairMissingPersonalSubmissionLotteryMetadata",
+            submissionId: submissionDoc.id,
+            userId,
+            source: "finalValidation",
+          },
+      );
+
+      if (!metadata.lotteryId || !metadata.salesCloseAt) {
+        try {
+          metadata = await findEarliestFutureLotteryMetadata(repairEventDate, {
+            scope: "repairMissingPersonalSubmissionLotteryMetadata",
+            submissionId: submissionDoc.id,
+            userId,
+          });
+        } catch (error) {
+          queryFailures += 1;
+          logFirestoreQueryFailure({
+            scope: "repairMissingPersonalSubmissionLotteryMetadata",
+            queryLabel: "findEarliestFutureLotteryMetadata",
+            collectionPath: "collectionGroup(forms)",
+            whereClauses: [
+              repairEventDate ?
+                `salesCloseAt >= ${repairEventDate.toISOString()}` :
+                "salesCloseAt >= null",
+            ],
+            orderByClauses: [],
+            error,
+            extra: {
+              submissionId: submissionDoc.id,
+              userId,
+              repairEventDate: repairEventDate ? repairEventDate.toISOString() : null,
+            },
+          });
+          metadata = emptyLotteryMetadata();
+        }
+      }
+
+      metadata = ensureSafeLotteryMetadataForEventDate(
+          metadata,
+          repairEventDate,
+          {
+            scope: "repairMissingPersonalSubmissionLotteryMetadata",
+            submissionId: submissionDoc.id,
+            userId,
+            source: "futureLotteryValidation",
+          },
+      );
+    }
+
+    const shouldCleanupSubmission =
+      submissionHasInvalidMetadata ||
+      hasInvalidLotteryAssignment(submissionCurrentMetadata, repairEventDate);
+
+    if (!metadata.lotteryId && !metadata.salesCloseAt) {
+      if (shouldCleanupSubmission) {
+        batch.set(submissionDoc.ref, {
+          ...buildInvalidLotteryCleanupPatch(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        operations += 1;
+        updatedDocs += 1;
+        for (const formDoc of canonicalSnapshot.docs) {
+          batch.set(formDoc.ref, {
+            ...buildInvalidLotteryCleanupPatch(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, {merge: true});
+          operations += 1;
+          updatedDocs += 1;
+          await commitBatchIfNeeded();
+        }
+      }
+      console.log("repairMissingPersonalSubmissionLotteryMetadata unresolved", {
+        submissionId: submissionDoc.id,
+        userId,
+        resolvedEventDate: repairEventDate ? repairEventDate.toISOString() : null,
+        cleanedInvalidMetadata: shouldCleanupSubmission,
+      });
+      continue;
+    }
+
+    const metadataPatch = buildLotteryMetadataPatch(metadata);
+    console.log("repairMissingPersonalSubmissionLotteryMetadata resolved", {
+      submissionId: submissionDoc.id,
+      userId,
+      resolvedLotteryId: metadata.lotteryId,
+      resolvedDrawNumber: metadata.drawNumber,
+      updatePayload: metadataPatch,
+      shouldCleanupSubmission,
+    });
+    if (shouldCleanupSubmission) {
+      batch.set(submissionDoc.ref, {
+        ...buildInvalidLotteryCleanupPatch(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      operations += 1;
+      updatedDocs += 1;
+    }
+    if (needsLotteryMetadataPatch(submissionData, metadata) || shouldCleanupSubmission) {
+      batch.set(submissionDoc.ref, {
+        ...metadataPatch,
+        ...emptyDerivedResultPatch(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      operations += 1;
+      updatedDocs += 1;
+    }
+
+    for (const formDoc of canonicalSnapshot.docs) {
+      const formData = formDoc.data() || {};
+      const formCurrentMetadata = normalizeLotteryMetadata(formData);
+      const formHasInvalidMetadata = hasInvalidLotteryAssignment(
+          formCurrentMetadata,
+          repairEventDate,
+      );
+      if (formHasInvalidMetadata) {
+        batch.set(formDoc.ref, {
+          ...buildInvalidLotteryCleanupPatch(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        operations += 1;
+        updatedDocs += 1;
+      }
+      if (!needsLotteryMetadataPatch(formData, metadata) && !formHasInvalidMetadata) {
+        continue;
+      }
+      batch.set(formDoc.ref, {
+        ...metadataPatch,
+        ...emptyDerivedResultPatch(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      operations += 1;
+      updatedDocs += 1;
+      await commitBatchIfNeeded();
+    }
+  }
+
+  await commitBatchIfNeeded(true);
+  return {
+    scannedSubmissions: submissionDocs.length,
+    matchedSubmissions,
+    updatedDocs,
+    queryFailures,
+  };
+}
+
+async function repairMissingGroupLotteryMetadata(options = {}) {
+  console.log("repairMissingGroupLotteryMetadata query start", {
+    query: options.groupId ?
+      `lottery_groups/${options.groupId}` :
+      "collection(lottery_groups).limit(stageLimit)",
+    options,
+  });
+  const groupDocs = await loadTargetGroupDocs(options);
+  console.log("repairMissingGroupLotteryMetadata scan", groupDocs.length);
+
+  let batch = firestore.batch();
+  let operations = 0;
+  let updatedDocs = 0;
+  let matchedGroups = 0;
+
+  const commitBatchIfNeeded = async (force = false) => {
+    if (operations === 0) {
+      return;
+    }
+    if (!force && operations < 350) {
+      return;
+    }
+    await batch.commit();
+    batch = firestore.batch();
+    operations = 0;
+  };
+
+  for (const groupDoc of groupDocs) {
+    const groupData = groupDoc.data() || {};
+    matchedGroups += 1;
+    console.log("repairMissingGroupLotteryMetadata query start", {
+      query: `lottery_groups/${groupDoc.id}/forms.get()`,
+      groupId: groupDoc.id,
+    });
+    const formsSnapshot = await groupDoc.ref.collection("forms").get();
+    const metadata = await resolveGroupLotteryMetadata({
+      groupId: groupDoc.id,
+      groupData,
+      groupFormsDocs: formsSnapshot.docs,
+    });
+
+    if (!metadata.lotteryId && !metadata.salesCloseAt) {
+      continue;
+    }
+
+    const groupPatch = buildLotteryMetadataPatch(metadata);
+    if (needsLotteryMetadataPatch(groupData, metadata)) {
+      batch.set(groupDoc.ref, groupPatch, {merge: true});
+      operations += 1;
+      updatedDocs += 1;
+    }
+
+    for (const formDoc of formsSnapshot.docs) {
+      const formData = formDoc.data() || {};
+      if (!needsLotteryMetadataPatch(formData, metadata)) {
+        continue;
+      }
+      batch.set(formDoc.ref, {
+        ...groupPatch,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      operations += 1;
+      updatedDocs += 1;
+      await commitBatchIfNeeded();
+    }
+  }
+
+  await commitBatchIfNeeded(true);
+  return {
+    scannedGroups: groupDocs.length,
+    matchedGroups,
+    updatedDocs,
+  };
+}
+
+async function resolveAndRepairLotteryMetadataForFormDoc(doc, options = {}) {
+  const data = doc.data() || {};
+  let metadata = normalizeLotteryMetadata(data);
+  if (!metadata.lotteryId || !metadata.salesCloseAt) {
+    if (isGroupFormDocument(doc.ref)) {
+      const groupRef = doc.ref.parent.parent;
+      const groupSnapshot = groupRef ? await groupRef.get() : null;
+      const groupData = groupSnapshot && groupSnapshot.exists ?
+        (groupSnapshot.data() || {}) :
+        {};
+      metadata = await resolveGroupLotteryMetadata({
+        groupId: groupRef ? groupRef.id : "",
+        groupData,
+        groupFormsDocs: [doc],
+      });
+      if (needsLotteryMetadataPatch(data, metadata)) {
+        await doc.ref.set(buildLotteryMetadataPatch(metadata), {merge: true});
+      }
+      if (groupRef && groupSnapshot && needsLotteryMetadataPatch(groupData, metadata)) {
+        await groupRef.set(buildLotteryMetadataPatch(metadata), {merge: true});
+      }
+    } else {
+      if (isTargetedPersonalSubmissionMode(options)) {
+        console.log("resolveAndRepairLotteryMetadataForFormDoc targeted personal skip fallback", {
+          formPath: doc.ref.path,
+          submissionId: asTrimmedString(data.submissionId),
+          userId: asTrimmedString(data.userId),
+          query: "no collectionGroup fallback in targeted personal mode",
+        });
+      } else {
+        metadata = await resolveLotteryMetadataFallback({
+          directData: data,
+          eventDate:
+            asDate(data.submittedAt) ||
+            asDate(data.createdAt) ||
+            asDate(data.savedAt),
+        });
+        if (needsLotteryMetadataPatch(data, metadata)) {
+          await doc.ref.set(buildLotteryMetadataPatch(metadata), {merge: true});
+        }
+      }
+    }
+  }
+
+  return metadata;
+}
+
+async function repairMissingGroupResultSummaries(options = {}) {
+  console.log("repairMissingGroupResultSummaries query start", {
+    query: options.groupId ?
+      `lottery_groups/${options.groupId}` :
+      "collection(lottery_groups).limit(stageLimit)",
+    options,
+  });
+  const groupDocs = await loadTargetGroupDocs(options);
+  console.log("repairMissingGroupResultSummaries scan", groupDocs.length);
+  let rebuiltGroups = 0;
+  let matchedGroups = 0;
+
+  for (const groupDoc of groupDocs) {
+    const groupData = groupDoc.data() || {};
+    if (asTrimmedString(groupData.status) !== "submitted") {
+      continue;
+    }
+    matchedGroups += 1;
+
+    console.log("repairMissingGroupResultSummaries repairing", {
+      groupId: groupDoc.id,
+      bundleType: asTrimmedString(groupData.bundleType, "single_form"),
+      submittedFormId: asTrimmedString(groupData.submittedFormId),
+      sourceFormId: asTrimmedString(groupData.sourceFormId),
+      creatorUserId: asTrimmedString(groupData.creatorUserId),
+      repairNeeded: needsGroupResultSummaryRepair(groupData),
+    });
+
+    await reconcileGroupResultSummary({
+      groupRef: groupDoc.ref,
+      fallbackData: groupData,
+      repairReason: "missing_group_result_summary",
+    });
+    rebuiltGroups += 1;
+  }
+  return {
+    scannedGroups: groupDocs.length,
+    matchedGroups,
+    rebuiltGroups,
+  };
+}
+
+async function repairPersonalSubmissionSummaries(options = {}) {
+  console.log("repairPersonalSubmissionSummaries query start", {
+    query: options.submissionId || options.uid ?
+      "targeted personal submissions" :
+      "collectionGroup(submissions).limit(stageLimit)",
+    options,
+  });
+  const submissionDocs = await loadTargetPersonalSubmissionDocs(options);
+  console.log("repairPersonalSubmissionSummaries scan", submissionDocs.length);
+  let rebuiltSubmissions = 0;
+  let matchedSubmissions = 0;
+
+  for (const submissionDoc of submissionDocs) {
+    const submissionData = submissionDoc.data() || {};
+    if (asTrimmedString(submissionData.type) !== "personal" ||
+        asTrimmedString(submissionData.status) !== "submitted") {
+      continue;
+    }
+    matchedSubmissions += 1;
+
+    const userId = asTrimmedString(
+        submissionData.userId,
+        submissionDoc.ref.parent.parent ? submissionDoc.ref.parent.parent.id : "",
+    );
+    if (!userId) {
+      continue;
+    }
+
+    await reconcilePersonalSubmissionSummary({
+      submissionRef: submissionDoc.ref,
+      userId,
+      submissionId: submissionDoc.id,
+      fallbackData: submissionData,
+      repairReason: "summary_rebuild_scan",
+    });
+    rebuiltSubmissions += 1;
+  }
+  return {
+    scannedSubmissions: submissionDocs.length,
+    matchedSubmissions,
+    rebuiltSubmissions,
+  };
+}
+
+async function reconcilePersonalSubmissionSummary({
+  submissionRef,
+  userId,
+  submissionId,
+  fallbackData = {},
+  repairReason = "unknown",
+}) {
+  console.log("reconcilePersonalSubmissionSummary query start", {
+    submissionId,
+    userId,
+    query: `users/${userId}/forms.where(submissionId==${submissionId})`,
+    repairReason,
+  });
+  const canonicalSnapshot = await firestore
+      .collection("users")
+      .doc(userId)
+      .collection("forms")
+      .where("submissionId", "==", submissionId)
+      .get();
+
+  let sourceForms = canonicalSnapshot.docs
+      .filter((doc) =>
+        asTrimmedString(doc.data()?.status) === "submitted" &&
+        isCanonicalSubmittedResultDoc(doc.ref, doc.data() || {}))
+      .map((doc) => ({ref: doc.ref, data: doc.data() || {}}));
+
+  if (!sourceForms.length) {
+    console.log("reconcilePersonalSubmissionSummary query start", {
+      submissionId,
+      userId,
+      query: `${submissionRef.path}/forms.get()`,
+      repairReason,
+    });
+    const legacySnapshot = await submissionRef.collection("forms").get();
+    sourceForms = legacySnapshot.docs.map((doc) => ({
+      ref: doc.ref,
+      data: doc.data() || {},
+    }));
+  }
+
+  if (!sourceForms.length) {
+    return;
+  }
+
+  const publishedForms = sourceForms.filter((entry) => isResultPublished(entry.data));
+  const allPublished = publishedForms.length === sourceForms.length;
+  const anyPublished = publishedForms.length > 0;
+  const totalWinningAmount = sourceForms.reduce(
+      (sum, entry) => sum + resultAmountFromData(entry.data),
+      0,
+  );
+  const resultPublishedAt = publishedForms.reduce((latest, entry) => {
+    const date = asDate(entry.data.resultPublishedAt);
+    if (!date) {
+      return latest;
+    }
+    return !latest || date.getTime() > latest.getTime() ? date : latest;
+  }, null);
+  const totalCost = sourceForms.reduce(
+      (sum, entry) => sum + (firstFiniteNumber([entry.data.cost]) || 0),
+      0,
+  );
+  const formCount = sourceForms.length;
+  const primaryMetadata = sourceForms.reduce(
+      (metadata, entry) => mergeLotteryMetadata(
+          metadata,
+          normalizeLotteryMetadata(entry.data),
+      ),
+      normalizeLotteryMetadata(fallbackData),
+  );
+
+  let resultStatus = asTrimmedString(fallbackData.resultStatus);
+  if (allPublished) {
+    resultStatus = totalWinningAmount > 0 ? RESULT_STATUS.winner : RESULT_STATUS.loser;
+  } else if (anyPublished) {
+    resultStatus = RESULT_STATUS.checked;
+  } else if (!resultStatus) {
+    resultStatus = RESULT_STATUS.waiting;
+  }
+
+  const summaryPatch = {
+    resultStatus,
+    resultPublishedAt: resultPublishedAt || null,
+    totalWinningAmount,
+    winAmount: totalWinningAmount,
+    winningAmount: totalWinningAmount,
+    formCount,
+    totalCost,
+    lotteryId: primaryMetadata.lotteryId ?? null,
+    drawNumber: primaryMetadata.drawNumber ?? primaryMetadata.lotteryId ?? null,
+    salesCloseAt: primaryMetadata.salesCloseAt ?? null,
+    drawDate: primaryMetadata.drawDate ?? primaryMetadata.salesCloseAt ?? null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  console.log("reconcilePersonalSubmissionSummary patch", {
+    submissionId,
+    userId,
+    formCount,
+    totalWinningAmount,
+    resultStatus,
+    resultPublishedAtExists: Boolean(summaryPatch.resultPublishedAt),
+    repairReason,
+  });
+
+  await submissionRef.set(summaryPatch, {merge: true});
+}
+
+function needsGroupResultSummaryRepair(groupData) {
+  const resultStatus = asTrimmedString(groupData?.resultStatus);
+  const hasResultPublishedAt = Boolean(asDate(groupData?.resultPublishedAt));
+  const hasGroupWinningAmount = typeof groupData?.groupWinningAmount === "number" &&
+    Number.isFinite(groupData.groupWinningAmount);
+  const hasMyWinningAmount = typeof groupData?.myWinningAmount === "number" &&
+    Number.isFinite(groupData.myWinningAmount);
+  const hasLegacyWinningAmount = typeof groupData?.winAmount === "number" &&
+    Number.isFinite(groupData.winAmount);
+
+  return !hasResultPublishedAt ||
+    !resultStatus ||
+    !hasGroupWinningAmount ||
+    !hasMyWinningAmount ||
+    !hasLegacyWinningAmount;
+}
+
+async function reconcileGroupResultSummary({
+  sourceFormRef,
+  groupRef,
+  fallbackData,
+  repairReason = "unknown",
+}) {
+  const groupId = asTrimmedString(fallbackData.groupId);
+  if (!groupId) {
+    return;
+  }
+
+  const resolvedGroupRef =
+    groupRef || firestore.collection("lottery_groups").doc(groupId);
+  const groupSnapshot = await resolvedGroupRef.get();
+  if (!groupSnapshot.exists) {
+    console.log("reconcileGroupResultSummary missing group", {
+      groupId,
+      formPath: sourceFormRef ? sourceFormRef.path : null,
+      repairReason,
+    });
+    return;
+  }
+
+  const groupData = groupSnapshot.data() || {};
+  const creatorUserId = asTrimmedString(
+      groupData.creatorUserId,
+      asTrimmedString(fallbackData.creatorUserId),
+  );
+  const bundleType = asTrimmedString(groupData.bundleType, "single_form");
+
+  let sourceForms = [];
+  console.log("reconcileGroupResultSummary query start", {
+    groupId,
+    query: `lottery_groups/${groupId}/forms.get()`,
+    repairReason,
+  });
+  const canonicalFormsSnapshot = await resolvedGroupRef.collection("forms").get();
+  sourceForms = canonicalFormsSnapshot.docs.map((doc) => ({
+    ref: doc.ref,
+    data: doc.data() || {},
+  }));
+
+  if (!sourceForms.length) {
+    const submittedFormId = asTrimmedString(groupData.submittedFormId);
+    const sourceFormId = asTrimmedString(groupData.sourceFormId);
+    const formId = submittedFormId || sourceFormId;
+    if (!creatorUserId || !formId) {
+      console.log("reconcileGroupResultSummary missing single-form refs", {
+        groupId,
+        creatorUserId,
+        submittedFormId,
+        sourceFormId,
+      });
+      return;
+    }
+    console.log("reconcileGroupResultSummary query start", {
+      groupId,
+      query: `users/${creatorUserId}/forms/${formId}`,
+      repairReason,
+    });
+    const sourceFormSnapshot = await firestore
+        .collection("users")
+        .doc(creatorUserId)
+        .collection("forms")
+        .doc(formId)
+        .get();
+    if (!sourceFormSnapshot.exists) {
+      console.log("reconcileGroupResultSummary source form missing", {
+        groupId,
+        creatorUserId,
+        formId,
+        repairReason,
+      });
+      return;
+    }
+    sourceForms = [{
+      ref: sourceFormSnapshot.ref,
+      data: sourceFormSnapshot.data() || {},
+    }];
+  }
+
+  if (!sourceForms.length) {
+    return;
+  }
+
+  const publishedForms = sourceForms.filter((entry) => isResultPublished(entry.data));
+  const allPublished = publishedForms.length === sourceForms.length;
+  const anyPublished = publishedForms.length > 0;
+  const totalWinAmount = sourceForms.reduce(
+      (sum, entry) => sum + resultAmountFromData(entry.data),
+      0,
+  );
+  const resultPublishedAt = publishedForms.reduce((latest, entry) => {
+    const date =
+      asDate(entry.data.resultPublishedAt) ||
+      asDate(entry.data.checkedAt) ||
+      asDate(entry.data.updatedAt);
+    if (!date) {
+      return latest;
+    }
+    return !latest || date.getTime() > latest.getTime() ? date : latest;
+  }, null);
+
+  let groupResultStatus = asTrimmedString(groupData.resultStatus);
+  if (allPublished) {
+    groupResultStatus = totalWinAmount > 0 ? RESULT_STATUS.winner : RESULT_STATUS.loser;
+  } else if (anyPublished) {
+    groupResultStatus = RESULT_STATUS.checked;
+  }
+
+  const participantUserIds = extractParticipantUserIds(sourceForms, groupData);
+  const effectiveParticipantCount = Number(
+      groupData.effectiveParticipantCount ||
+      groupData.finalizedParticipantCount ||
+      participantUserIds.length,
+  ) || participantUserIds.length;
+  const myWinningAmounts = new Map();
+  for (const userId of participantUserIds) {
+    myWinningAmounts.set(
+        userId,
+        sourceForms.reduce(
+            (sum, entry) =>
+              sum + resolveUserWinningAmountFromForm(entry.data, userId, participantUserIds.length),
+            0,
+        ),
+    );
+  }
+  const creatorWinningAmount = creatorUserId ?
+    (myWinningAmounts.get(creatorUserId) || 0) :
+    0;
+
+  const summaryPatch = {
+    resultStatus: groupResultStatus || null,
+    resultPublishedAt: resultPublishedAt || null,
+    groupWinningAmount: totalWinAmount,
+    myWinningAmount: creatorWinningAmount,
+    winAmount: totalWinAmount,
+    winningAmount: totalWinAmount,
+    effectiveParticipantCount,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  console.log("reconcileGroupResultSummary patch", {
+    groupId,
+    bundleType,
+    allPublished,
+    anyPublished,
+    resultStatus: summaryPatch.resultStatus,
+    resultPublishedAtExists: Boolean(summaryPatch.resultPublishedAt),
+    totalWinAmount,
+    creatorWinningAmount,
+    participantCount: participantUserIds.length,
+    repairReason,
+  });
+
+  if (DEBUG_GROUP_RESULT_GROUP_IDS.has(groupId)) {
+    console.log("reconcileGroupResultSummary debug target hit", {
+      groupId,
+      repairReason,
+      creatorUserId,
+      sourceFormPath:
+        sourceForms.length === 1 && sourceForms[0].ref ?
+          sourceForms[0].ref.path :
+          null,
+      sourceFormsCount: sourceForms.length,
+      sourceForms: sourceForms.map((entry) => ({
+        path: entry.ref ? entry.ref.path : null,
+        resultStatus: asTrimmedString(entry.data.resultStatus),
+        resultPublishedAtExists: Boolean(asDate(entry.data.resultPublishedAt)),
+        winAmount: firstFiniteNumber([
+          entry.data.winAmount,
+          entry.data.winningAmount,
+          entry.data.groupWinningAmount,
+        ]),
+        myWinningAmount: firstFiniteNumber([entry.data.myWinningAmount]),
+      })),
+      groupPatchPreview: summaryPatch,
+      submittedGroupsTargets: participantUserIds.map((userId) => ({
+        userId,
+        path: `users/${userId}/submitted_groups/${groupId}`,
+        myWinningAmount: myWinningAmounts.get(userId) || 0,
+      })),
+    });
+  }
+
+  const batch = firestore.batch();
+  batch.set(resolvedGroupRef, summaryPatch, {merge: true});
+
+  for (const userId of participantUserIds) {
+    batch.set(
+        firestore
+            .collection("users")
+            .doc(userId)
+            .collection("submitted_groups")
+            .doc(groupId),
+        {
+          ...summaryPatch,
+          myWinningAmount: myWinningAmounts.get(userId) || 0,
+        },
+        {merge: true},
+    );
+  }
+
+  await batch.commit();
+}
+
+async function resolveGroupLotteryMetadata({
+  groupId,
+  groupData,
+  groupFormsDocs = [],
+}) {
+  let metadata = normalizeLotteryMetadata(groupData);
+  if (metadata.lotteryId && metadata.salesCloseAt) {
+    return metadata;
+  }
+
+  const snapshotData = groupData.formSnapshot || {};
+  metadata = mergeLotteryMetadata(metadata, normalizeLotteryMetadata(snapshotData));
+  if (metadata.lotteryId && metadata.salesCloseAt) {
+    return metadata;
+  }
+
+  for (const formDoc of groupFormsDocs) {
+    const formData = typeof formDoc.data === "function" ? formDoc.data() || {} : {};
+    metadata = mergeLotteryMetadata(metadata, normalizeLotteryMetadata(formData));
+    if (metadata.lotteryId && metadata.salesCloseAt) {
+      return metadata;
+    }
+  }
+
+  const creatorUserId = asTrimmedString(groupData.creatorUserId);
+  const submittedFormId = asTrimmedString(groupData.submittedFormId);
+  const sourceFormId = asTrimmedString(groupData.sourceFormId);
+  for (const formId of [submittedFormId, sourceFormId]) {
+    if (!creatorUserId || !formId) {
+      continue;
+    }
+    console.log("resolveGroupLotteryMetadata source form query start", {
+      groupId,
+      creatorUserId,
+      formId,
+      query: `users/${creatorUserId}/forms/${formId}`,
+    });
+    const sourceSnapshot = await firestore
+        .collection("users")
+        .doc(creatorUserId)
+        .collection("forms")
+        .doc(formId)
+        .get();
+    console.log("resolveGroupLotteryMetadata source form query done", {
+      groupId,
+      creatorUserId,
+      formId,
+      exists: sourceSnapshot.exists,
+    });
+    if (!sourceSnapshot.exists) {
+      continue;
+    }
+    metadata = mergeLotteryMetadata(
+        metadata,
+        normalizeLotteryMetadata(sourceSnapshot.data() || {}),
+    );
+    if (metadata.lotteryId && metadata.salesCloseAt) {
+      return metadata;
+    }
+  }
+
+  metadata = await resolveLotteryMetadataFallback({
+    directData: groupData,
+    eventDate:
+      metadata.salesCloseAt ||
+      asDate(groupData.submittedAt) ||
+      asDate(groupData.createdAt),
+  });
+
+  if (!metadata.lotteryId || !metadata.salesCloseAt) {
+    console.log("resolveGroupLotteryMetadata unresolved", groupId);
+  }
+
+  return metadata;
+}
+
+async function resolveTargetedPersonalSubmissionLotteryMetadata({
+  submissionId,
+  userId,
+  repairEventDate,
+  hintedLotteryId,
+  hintedDrawDate,
+}) {
+  let metadata = {
+    lotteryId: hintedLotteryId || null,
+    drawNumber: hintedLotteryId || null,
+    salesCloseAt: hintedDrawDate || null,
+    drawDate: hintedDrawDate || null,
+  };
+
+  metadata = ensureSafeLotteryMetadataForEventDate(
+      metadata,
+      repairEventDate,
+      {
+        scope: "repairMissingPersonalSubmissionLotteryMetadata",
+        submissionId,
+        userId,
+        source: "targetedDirectHints",
+      },
+  );
+
+  if (metadata.lotteryId && metadata.salesCloseAt) {
+    console.log("repairMissingPersonalSubmissionLotteryMetadata targeted resolved", {
+      submissionId,
+      userId,
+      query: "direct submission + child forms hints",
+      resolvedLotteryId: metadata.lotteryId,
+      resolvedDrawDate: metadata.salesCloseAt.toISOString(),
+      sourceOfDrawDate: "childFormOrParentSubmission",
+    });
+    return metadata;
+  }
+
+  console.log("repairMissingPersonalSubmissionLotteryMetadata targeted next-lottery lookup", {
+    submissionId,
+    userId,
+    query: "fetchNextLotteryMetadata()",
+    eventDate: repairEventDate ? repairEventDate.toISOString() : null,
+  });
+
+  try {
+    const nextLottery = await fetchNextLotteryMetadata();
+    const nextMetadata = ensureSafeLotteryMetadataForEventDate({
+      lotteryId: firstFiniteNumber([
+        nextLottery?.lotteryId,
+        nextLottery?.drawNumber,
+      ]),
+      drawNumber: firstFiniteNumber([
+        nextLottery?.drawNumber,
+        nextLottery?.lotteryId,
+      ]),
+      salesCloseAt: asDate(nextLottery?.salesCloseAt || nextLottery?.drawDate),
+      drawDate: asDate(nextLottery?.drawDate || nextLottery?.salesCloseAt),
+    }, repairEventDate, {
+      scope: "repairMissingPersonalSubmissionLotteryMetadata",
+      submissionId,
+      userId,
+      source: "officialNextLottery",
+    });
+
+    if (nextMetadata.lotteryId && nextMetadata.salesCloseAt) {
+      console.log("repairMissingPersonalSubmissionLotteryMetadata targeted next-lottery match", {
+        submissionId,
+        userId,
+        matchedDocId: String(nextMetadata.lotteryId),
+        resolvedLotteryId: nextMetadata.lotteryId,
+        resolvedDrawDate: nextMetadata.salesCloseAt.toISOString(),
+        sourceOfDrawDate: "lotteryMetadata",
+      });
+      return nextMetadata;
+    }
+  } catch (error) {
+    console.error("repairMissingPersonalSubmissionLotteryMetadata targeted next-lottery lookup failed", {
+      submissionId,
+      userId,
+      query: "fetchNextLotteryMetadata()",
+      message: error && error.message ? error.message : String(error),
+      stack: error && error.stack ? error.stack : null,
+    });
+  }
+
+  console.log("repairMissingPersonalSubmissionLotteryMetadata targeted unresolved", {
+    submissionId,
+    userId,
+    eventDate: repairEventDate ? repairEventDate.toISOString() : null,
+    sourceOfDrawDate: "none",
+  });
+  return emptyLotteryMetadata();
+}
+
+async function resolveLotteryMetadataFallback({
+  directData,
+  eventDate,
+  debugContext = null,
+}) {
+  let metadata = normalizeLotteryMetadata(directData);
+  if (metadata.salesCloseAt) {
+    metadata = {
+      lotteryId: metadata.lotteryId,
+      drawNumber: metadata.drawNumber,
+      salesCloseAt: coerceValidLotteryDateForEvent(
+          metadata.salesCloseAt,
+          eventDate,
+          {
+            ...(debugContext || {}),
+            source: "directData",
+            candidateLotteryId: metadata.lotteryId,
+          },
+      ),
+      drawDate: coerceValidLotteryDateForEvent(
+          metadata.drawDate,
+          eventDate,
+          {
+            ...(debugContext || {}),
+            source: "directData",
+            candidateLotteryId: metadata.lotteryId,
+          },
+      ),
+    };
+  }
+  if (metadata.lotteryId && metadata.salesCloseAt) {
+    return metadata;
+  }
+
+  if (metadata.lotteryId && !metadata.salesCloseAt) {
+    if (debugContext) {
+      console.log("resolveLotteryMetadataFallback exact-lotteryId search", {
+        ...debugContext,
+        lotteryId: metadata.lotteryId,
+      });
+    }
+    metadata = mergeLotteryMetadata(
+        metadata,
+        await findLotteryMetadataByLotteryId(metadata.lotteryId, debugContext),
+    );
+    metadata = ensureSafeLotteryMetadataForEventDate(metadata, eventDate, {
+      ...(debugContext || {}),
+      source: "lotteryMetadata",
+    });
+  }
+
+  if ((!metadata.lotteryId || !metadata.salesCloseAt) && metadata.salesCloseAt) {
+    if (debugContext) {
+      console.log("resolveLotteryMetadataFallback searching", {
+        ...debugContext,
+        targetDate: metadata.salesCloseAt.toISOString(),
+      });
+    }
+    metadata = mergeLotteryMetadata(
+        metadata,
+        await findLotteryMetadataBySalesCloseAt(metadata.salesCloseAt, debugContext),
+    );
+    metadata = ensureSafeLotteryMetadataForEventDate(metadata, eventDate, {
+      ...(debugContext || {}),
+      source: "fallback",
+    });
+  }
+
+  return metadata;
+}
+
+async function findLotteryMetadataByLotteryId(lotteryId, debugContext = null) {
+  if (!Number.isFinite(Number(lotteryId)) || Number(lotteryId) <= 0) {
+    return emptyLotteryMetadata();
+  }
+
+  console.log("findLotteryMetadataByLotteryId query start", {
+    query: "collectionGroup(forms).where(lotteryId==lotteryId).limit(20)",
+    lotteryId,
+    ...(debugContext || {}),
+  });
+  let directSnapshot;
+  try {
+    directSnapshot = await firestore
+        .collectionGroup("forms")
+        .where("lotteryId", "==", Number(lotteryId))
+        .limit(20)
+        .get();
+  } catch (error) {
+    console.error("findLotteryMetadataByLotteryId query failed", {
+      query: "collectionGroup(forms).where(lotteryId==lotteryId).limit(20)",
+      lotteryId,
+      code: error && error.code ? error.code : null,
+      message: error && error.message ? error.message : String(error),
+      ...(debugContext || {}),
+    });
+    throw error;
+  }
+  if (!directSnapshot.empty) {
+    const directMatch = metadataFromDocsWithLotteryIdMatch(
+        directSnapshot.docs,
+        Number(lotteryId),
+        "forms.lotteryId==lotteryId",
+        debugContext,
+    );
+    if (directMatch.salesCloseAt) {
+      return directMatch;
+    }
+  }
+
+  console.log("findLotteryMetadataByLotteryId query start", {
+    query: "collectionGroup(forms).where(drawNumber==lotteryId).limit(20)",
+    lotteryId,
+    ...(debugContext || {}),
+  });
+  let drawNumberSnapshot;
+  try {
+    drawNumberSnapshot = await firestore
+        .collectionGroup("forms")
+        .where("drawNumber", "==", Number(lotteryId))
+        .limit(20)
+        .get();
+  } catch (error) {
+    console.error("findLotteryMetadataByLotteryId query failed", {
+      query: "collectionGroup(forms).where(drawNumber==lotteryId).limit(20)",
+      lotteryId,
+      code: error && error.code ? error.code : null,
+      message: error && error.message ? error.message : String(error),
+      ...(debugContext || {}),
+    });
+    throw error;
+  }
+  if (!drawNumberSnapshot.empty) {
+    const drawNumberMatch = metadataFromDocsWithLotteryIdMatch(
+        drawNumberSnapshot.docs,
+        Number(lotteryId),
+        "forms.drawNumber==lotteryId",
+        debugContext,
+    );
+    if (drawNumberMatch.salesCloseAt) {
+      return drawNumberMatch;
+    }
+  }
+
+  return emptyLotteryMetadata();
+}
+
+function metadataFromDocsWithLotteryIdMatch(
+    docs,
+    lotteryId,
+    queryLabel,
+    debugContext = null,
+) {
+  for (const doc of docs) {
+    const data = doc.data() || {};
+    const metadata = normalizeLotteryMetadata(data);
+    if (metadata.lotteryId !== Number(lotteryId) || !metadata.salesCloseAt) {
+      continue;
+    }
+    console.log("findLotteryMetadataByLotteryId match", {
+      ...(debugContext || {}),
+      queryLabel,
+      lotteryId,
+      matchedDocPath: doc.ref.path,
+      matchedDocId: doc.id,
+      resolvedLotteryId: metadata.lotteryId,
+      resolvedDrawDate:
+        metadata.salesCloseAt ? metadata.salesCloseAt.toISOString() : null,
+      sourceOfDrawDate: "lotteryMetadata",
+    });
+    return metadata;
+  }
+  console.log("findLotteryMetadataByLotteryId no-valid-metadata", {
+    ...(debugContext || {}),
+    queryLabel,
+    lotteryId,
+    scannedDocs: docs.length,
+  });
+  return emptyLotteryMetadata();
+}
+
+function metadataFromDocsWithDateMatch(docs, targetDate, queryLabel, debugContext = null) {
+  for (const doc of docs) {
+    const data = doc.data() || {};
+    const metadata = normalizeLotteryMetadata(data);
+    if (!metadata.lotteryId) {
+      continue;
+    }
+    console.log("findLotteryMetadataBySalesCloseAt match", {
+      ...(debugContext || {}),
+      queryLabel,
+      targetDate: targetDate.toISOString(),
+      matchedDocPath: doc.ref.path,
+      matchedDocId: doc.id,
+      resolvedLotteryId: metadata.lotteryId,
+      resolvedDrawNumber: metadata.drawNumber,
+      resolvedDrawDate:
+        metadata.salesCloseAt ? metadata.salesCloseAt.toISOString() : null,
+      sourceOfDrawDate: "fallback",
+    });
+    return metadata;
+  }
+  console.log("findLotteryMetadataBySalesCloseAt no-valid-metadata", {
+    ...(debugContext || {}),
+    queryLabel,
+    targetDate: targetDate.toISOString(),
+    scannedDocs: docs.length,
+  });
+  return emptyLotteryMetadata();
+}
+
+async function findLotteryMetadataBySalesCloseAt(targetDate, debugContext = null) {
+  if (!targetDate) {
+    return emptyLotteryMetadata();
+  }
+
+  console.log("findLotteryMetadataBySalesCloseAt query start", {
+    query: "collectionGroup(forms).where(salesCloseAt==targetDate).limit(20)",
+    targetDate: targetDate.toISOString(),
+    ...(debugContext || {}),
+  });
+  let exactSnapshot;
+  try {
+    exactSnapshot = await firestore
+        .collectionGroup("forms")
+        .where("salesCloseAt", "==", admin.firestore.Timestamp.fromDate(targetDate))
+        .limit(20)
+        .get();
+  } catch (error) {
+    console.error("findLotteryMetadataBySalesCloseAt query failed", {
+      query: "collectionGroup(forms).where(salesCloseAt==targetDate).limit(20)",
+      targetDate: targetDate.toISOString(),
+      code: error && error.code ? error.code : null,
+      message: error && error.message ? error.message : String(error),
+      ...(debugContext || {}),
+    });
+    throw error;
+  }
+  if (!exactSnapshot.empty) {
+    const exactMatch = metadataFromDocsWithDateMatch(
+        exactSnapshot.docs,
+        targetDate,
+        "forms.salesCloseAt==targetDate",
+        debugContext,
+    );
+    if (exactMatch.lotteryId) {
+      return exactMatch;
+    }
+  }
+
+  console.log("findLotteryMetadataBySalesCloseAt query start", {
+    query: "collectionGroup(forms).where(drawDate==targetDate).limit(20)",
+    targetDate: targetDate.toISOString(),
+    ...(debugContext || {}),
+  });
+  let exactDrawDateSnapshot;
+  try {
+    exactDrawDateSnapshot = await firestore
+        .collectionGroup("forms")
+        .where("drawDate", "==", admin.firestore.Timestamp.fromDate(targetDate))
+        .limit(20)
+        .get();
+  } catch (error) {
+    console.error("findLotteryMetadataBySalesCloseAt query failed", {
+      query: "collectionGroup(forms).where(drawDate==targetDate).limit(20)",
+      targetDate: targetDate.toISOString(),
+      code: error && error.code ? error.code : null,
+      message: error && error.message ? error.message : String(error),
+      ...(debugContext || {}),
+    });
+    throw error;
+  }
+  if (!exactDrawDateSnapshot.empty) {
+    const exactDrawDateMatch = metadataFromDocsWithDateMatch(
+        exactDrawDateSnapshot.docs,
+        targetDate,
+        "forms.drawDate==targetDate",
+        debugContext,
+    );
+    if (exactDrawDateMatch.lotteryId) {
+      return exactDrawDateMatch;
+    }
+  }
+
+  return emptyLotteryMetadata();
+}
+
+async function findEarliestFutureLotteryMetadata(eventDate, debugContext = null) {
+  if (!eventDate) {
+    return emptyLotteryMetadata();
+  }
+
+  console.log("findEarliestFutureLotteryMetadata query start", {
+    query: "collectionGroup(forms).where(salesCloseAt>=eventDate).limit(20)",
+    eventDate: eventDate.toISOString(),
+    ...(debugContext || {}),
+  });
+  let snapshot;
+  try {
+    snapshot = await firestore
+        .collectionGroup("forms")
+        .where("salesCloseAt", ">=", admin.firestore.Timestamp.fromDate(eventDate))
+        .limit(20)
+        .get();
+  } catch (error) {
+    console.error("findEarliestFutureLotteryMetadata query failed", {
+      query: "collectionGroup(forms).where(salesCloseAt>=eventDate).limit(20)",
+      eventDate: eventDate.toISOString(),
+      code: error && error.code ? error.code : null,
+      message: error && error.message ? error.message : String(error),
+      ...(debugContext || {}),
+    });
+    throw error;
+  }
+
+  let bestMetadata = null;
+  let bestDoc = null;
+  for (const doc of snapshot.docs) {
+    const metadata = normalizeLotteryMetadata(doc.data() || {});
+    if (!metadata.lotteryId || !metadata.salesCloseAt) {
+      continue;
+    }
+    if (metadata.salesCloseAt.getTime() < eventDate.getTime()) {
+      continue;
+    }
+    if (!bestMetadata ||
+        metadata.salesCloseAt.getTime() < bestMetadata.salesCloseAt.getTime()) {
+      bestMetadata = metadata;
+      bestDoc = doc;
+    }
+  }
+
+  if (!bestMetadata) {
+    console.log("findEarliestFutureLotteryMetadata no-valid-metadata", {
+      eventDate: eventDate.toISOString(),
+      scannedDocs: snapshot.docs.length,
+      ...(debugContext || {}),
+    });
+    return emptyLotteryMetadata();
+  }
+
+  console.log("findEarliestFutureLotteryMetadata match", {
+    eventDate: eventDate.toISOString(),
+    matchedDocPath: bestDoc.ref.path,
+    matchedDocId: bestDoc.id,
+    resolvedLotteryId: bestMetadata.lotteryId,
+    resolvedDrawDate: bestMetadata.salesCloseAt.toISOString(),
+    sourceOfDrawDate: "futureLotteryMetadata",
+    ...(debugContext || {}),
+  });
+  return bestMetadata;
+}
+
+function isGroupFormDocument(formRef) {
+  return formRef.parent &&
+    formRef.parent.id === "forms" &&
+    formRef.parent.parent &&
+    formRef.parent.parent.parent &&
+    formRef.parent.parent.parent.id === "lottery_groups";
+}
+
+function isUserFormDocument(formRef) {
+  return formRef.parent &&
+    formRef.parent.id === "forms" &&
+    formRef.parent.parent &&
+    formRef.parent.parent.parent &&
+    formRef.parent.parent.parent.id === "users";
+}
+
+function isCanonicalSubmittedResultDoc(formRef, data) {
+  if (isGroupFormDocument(formRef)) {
+    return true;
+  }
+  if (!isUserFormDocument(formRef)) {
+    return false;
+  }
+
+  const submissionType = asTrimmedString(data?.submissionType);
+  const source = asTrimmedString(data?.source);
+  if (submissionType === "group" || source === "group_snapshot") {
+    return false;
+  }
+
+  return true;
+}
+
+function shouldProcessCanonicalResultDoc(data) {
+  const resultStatus = asTrimmedString(data.resultStatus, RESULT_STATUS.waiting);
+  if (isResultPublished(data)) {
+    return false;
+  }
+
+  const status = asTrimmedString(data.status);
+  const submissionType = asTrimmedString(data.submissionType);
+  const hasLotteryId = firstFiniteNumber([data.lotteryId, data.drawNumber]) !== null;
+  const drawDate = asDate(data.salesCloseAt || data.drawDate);
+  const isPastDraw = Boolean(drawDate && drawDate.getTime() <= Date.now());
+  const isAllowedGroupLockedState =
+    submissionType === "group" &&
+    status === "locked_for_group" &&
+    hasLotteryId &&
+    isPastDraw;
+
+  if (status !== "submitted" && !isAllowedGroupLockedState) {
+    return false;
+  }
+
+  return (
+    !resultStatus ||
+    resultStatus === RESULT_STATUS.waiting ||
+    resultStatus === "pending"
+  );
+}
+
+function emptyLotteryMetadata() {
+  return {
+    lotteryId: null,
+    drawNumber: null,
+    salesCloseAt: null,
+    drawDate: null,
+  };
+}
+
+function emptyDerivedResultPatch() {
+  return {
+    resultStatus: RESULT_STATUS.waiting,
+    resultPublishedAt: null,
+    winAmount: 0,
+    winningAmount: 0,
+    totalWinningAmount: 0,
+    checkedAt: null,
+    balanceApplied: false,
+  };
+}
+
+function buildInvalidLotteryCleanupPatch() {
+  return {
+    lotteryId: null,
+    drawNumber: null,
+    salesCloseAt: null,
+    drawDate: null,
+    ...emptyDerivedResultPatch(),
+  };
+}
+
+function hasInvalidLotteryAssignment(metadata, eventDate) {
+  return Boolean(
+      eventDate &&
+      metadata &&
+      metadata.salesCloseAt &&
+      metadata.salesCloseAt.getTime() < eventDate.getTime(),
+  );
+}
+
+function coerceValidLotteryDateForEvent(dateValue, eventDate, debugContext = null) {
+  const date = asDate(dateValue);
+  if (!date) {
+    return null;
+  }
+  if (!eventDate) {
+    return date;
+  }
+  if (date.getTime() >= eventDate.getTime()) {
+    return date;
+  }
+  console.log("invalidPastLotteryAssignment", {
+    ...(debugContext || {}),
+    eventDate: eventDate.toISOString(),
+    candidateDrawDate: date.toISOString(),
+  });
+  return null;
+}
+
+function ensureSafeLotteryMetadataForEventDate(
+    metadata,
+    eventDate,
+    debugContext = null,
+) {
+  if (!eventDate || !metadata.salesCloseAt) {
+    return metadata;
+  }
+  if (metadata.salesCloseAt.getTime() >= eventDate.getTime()) {
+    return metadata;
+  }
+  console.log("invalidPastLotteryAssignment", {
+    ...(debugContext || {}),
+    resolvedLotteryId: metadata.lotteryId,
+    resolvedDrawDate: metadata.salesCloseAt.toISOString(),
+    eventDate: eventDate.toISOString(),
+  });
+  return emptyLotteryMetadata();
+}
+
+function isResultPublished(data) {
+  const resultStatus = asTrimmedString(data?.resultStatus);
+  const hasExplicitAmount =
+    firstFiniteNumber([
+      data?.groupWinningAmount,
+      data?.winAmount,
+      data?.winningAmount,
+    ]) !== null;
+  return Boolean(asDate(data?.resultPublishedAt)) ||
+    resultStatus === RESULT_STATUS.winner ||
+    resultStatus === RESULT_STATUS.loser ||
+    resultStatus === RESULT_STATUS.checked ||
+    (hasExplicitAmount && !isWaitingResultStatus(resultStatus));
+}
+
+function isWaitingResultStatus(resultStatus) {
+  const normalized = asTrimmedString(resultStatus).toLowerCase();
+  return !normalized ||
+    normalized === RESULT_STATUS.waiting ||
+    normalized === "waitingforresults" ||
+    normalized === "pending";
+}
+
+function resultAmountFromData(data) {
+  const candidates = [
+    data?.groupWinningAmount,
+    data?.winAmount,
+    data?.winningAmount,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return 0;
+}
+
+function extractParticipantUserIds(sourceForms, groupData) {
+  const ids = new Set();
+  for (const entry of sourceForms) {
+    const data = entry.data || {};
+    const directUserIds = Array.isArray(data.submittedParticipantUserIds) ?
+      data.submittedParticipantUserIds :
+      [];
+    for (const rawUserId of directUserIds) {
+      const userId = asTrimmedString(rawUserId);
+      if (userId) {
+        ids.add(userId);
+      }
+    }
+    const paidParticipants = Array.isArray(data.paidParticipants) ?
+      data.paidParticipants :
+      [];
+    for (const participant of paidParticipants) {
+      const userId = asTrimmedString(participant?.userId);
+      if (userId) {
+        ids.add(userId);
+      }
+    }
+  }
+  if (!ids.size) {
+    const creatorUserId = asTrimmedString(groupData?.creatorUserId);
+    if (creatorUserId) {
+      ids.add(creatorUserId);
+    }
+  }
+  return Array.from(ids);
+}
+
+function resolveUserWinningAmountFromForm(data, userId, participantCount) {
+  const directAmount = firstFiniteNumber([
+    data?.myWinningAmount,
+  ]);
+  if (directAmount !== null && directAmount > 0) {
+    return directAmount;
+  }
+
+  const fromAllocations = extractWinningAllocationForUser(
+      data?.winAllocations,
+      userId,
+  );
+  if (fromAllocations !== null) {
+    return fromAllocations;
+  }
+
+  if (participantCount === 1) {
+    return resultAmountFromData(data);
+  }
+
+  return 0;
+}
+
+function extractWinningAllocationForUser(winAllocations, userId) {
+  if (!winAllocations) {
+    return null;
+  }
+  if (Array.isArray(winAllocations)) {
+    for (const entry of winAllocations) {
+      if (asTrimmedString(entry?.userId) === userId) {
+        return Number(entry?.amount) || 0;
+      }
+    }
+    return null;
+  }
+  if (typeof winAllocations === "object") {
+    const direct = winAllocations[userId];
+    if (typeof direct === "number" && Number.isFinite(direct)) {
+      return direct;
+    }
+    for (const [key, value] of Object.entries(winAllocations)) {
+      if (asTrimmedString(key) === userId &&
+          typeof value === "number" &&
+          Number.isFinite(value)) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+function firstFiniteNumber(candidates) {
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function normalizeLotteryMetadata(data) {
+  const directLotteryId = Number(data?.lotteryId ?? data?.drawNumber);
+  const lotteryId = Number.isFinite(directLotteryId) && directLotteryId > 0 ?
+    directLotteryId :
+    null;
+  const salesCloseAt = asDate(data?.salesCloseAt ?? data?.drawDate);
+  return {
+    lotteryId,
+    drawNumber: lotteryId,
+    salesCloseAt,
+    drawDate: salesCloseAt,
+  };
+}
+
+function mergeLotteryMetadata(primary, fallback) {
+  return {
+    lotteryId: primary.lotteryId ?? fallback.lotteryId ?? null,
+    drawNumber:
+      primary.drawNumber ?? primary.lotteryId ??
+      fallback.drawNumber ?? fallback.lotteryId ?? null,
+    salesCloseAt: primary.salesCloseAt ?? fallback.salesCloseAt ?? null,
+    drawDate: primary.drawDate ?? primary.salesCloseAt ??
+      fallback.drawDate ?? fallback.salesCloseAt ?? null,
+  };
+}
+
+function buildLotteryMetadataPatch(metadata) {
+  return {
+    lotteryId: metadata.lotteryId ?? null,
+    drawNumber: metadata.drawNumber ?? metadata.lotteryId ?? null,
+    salesCloseAt: metadata.salesCloseAt ?? null,
+    drawDate: metadata.drawDate ?? metadata.salesCloseAt ?? null,
+  };
+}
+
+function needsLotteryMetadataPatch(currentData, metadata) {
+  const current = normalizeLotteryMetadata(currentData);
+  return (
+    current.lotteryId !== metadata.lotteryId ||
+    current.drawNumber !== (metadata.drawNumber ?? metadata.lotteryId ?? null) ||
+    dateMillis(current.salesCloseAt) !== dateMillis(metadata.salesCloseAt) ||
+    dateMillis(current.drawDate) !==
+      dateMillis(metadata.drawDate ?? metadata.salesCloseAt ?? null)
+  );
 }
 
 // Splits winAmount across paidParticipants by costShare (proportional).
@@ -1016,6 +3637,7 @@ async function applyLotteryResultToForm(formRef, formData, result) {
       const updates = {
         resultStatus,
         winAmount,
+        winningAmount: winAmount,
         checkedAt,
         resultPublishedAt: result.resultPublishedAt,
         updatedAt: checkedAt,
@@ -1026,10 +3648,10 @@ async function applyLotteryResultToForm(formRef, formData, result) {
         const paidParticipants = Array.isArray(freshData.paidParticipants)
             ? freshData.paidParticipants
             : [];
-
         if (isGroupForm && paidParticipants.length >= 2) {
           // Group form: split winnings across all paid participants by costShare.
           const allocations = computeWinAllocations(winAmount, paidParticipants);
+          updates.groupWinningAmount = winAmount;
           updates.winAllocations = allocations;
           for (const allocation of allocations) {
             const participantUserRef = firestore
@@ -1053,7 +3675,15 @@ async function applyLotteryResultToForm(formRef, formData, result) {
           );
         } else {
           // Personal form (or group with a single participant): credit form owner.
-          const userRef = formRef.parent.parent;
+          const ownerUserId = asTrimmedString(freshData.userId);
+          if (!ownerUserId) {
+            throw new Error(`Could not resolve owner userId for form ${formRef.id}`);
+          }
+          if (isGroupForm) {
+            updates.groupWinningAmount = winAmount;
+            updates.myWinningAmount = winAmount;
+          }
+          const userRef = firestore.collection("users").doc(ownerUserId);
           transaction.set(userRef, {
             balance: admin.firestore.FieldValue.increment(winAmount),
           }, {merge: true});
@@ -1073,8 +3703,49 @@ async function applyLotteryResultToForm(formRef, formData, result) {
         );
       }
 
+      if (freshData.submissionType === "group" &&
+          !Object.prototype.hasOwnProperty.call(updates, "groupWinningAmount")) {
+        updates.groupWinningAmount = winAmount;
+      }
+
       transaction.update(formRef, updates);
     });
+
+    if (asTrimmedString(formData.submissionType) === "group") {
+      const groupId =
+        formRef.parent && formRef.parent.parent ? formRef.parent.parent.id : null;
+      if (groupId && DEBUG_GROUP_RESULT_GROUP_IDS.has(groupId)) {
+        console.log("applyLotteryResultToForm debug target hit", {
+          groupId,
+          formPath: formRef.path,
+          resultStatus,
+          winAmount,
+          resultPublishedAt: result.resultPublishedAt ?
+            result.resultPublishedAt.toDate().toISOString() :
+            null,
+        });
+      }
+      await reconcileGroupResultSummary({
+        sourceFormRef: formRef,
+        fallbackData: formData,
+        repairReason: "post_form_result_application",
+      });
+    } else {
+      const submissionId = asTrimmedString(formData.submissionId);
+      const userId = asTrimmedString(formData.userId);
+      if (submissionId && userId) {
+        await reconcilePersonalSubmissionSummary({
+          submissionRef: firestore
+              .collection("users")
+              .doc(userId)
+              .collection("submissions")
+              .doc(submissionId),
+          userId,
+          submissionId,
+          repairReason: "post_form_result_application",
+        });
+      }
+    }
   } catch (error) {
     console.error("applyLotteryResultToForm failed", formRef.id, error);
     throw error;
@@ -1861,6 +4532,31 @@ function asTrimmedString(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
+function asDate(value) {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.toDate();
+  }
+  if (value instanceof Date) {
+    return value;
+  }
+  if (typeof value.toDate === "function") {
+    try {
+      return value.toDate();
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function dateMillis(value) {
+  const date = asDate(value);
+  return date ? date.getTime() : null;
+}
+
 function asPositiveNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -1965,39 +4661,50 @@ function normalizeTables(rawTables) {
     );
   }
 
-  return rawTables.map((table, index) => {
-    if (!table || typeof table !== "object" || Array.isArray(table)) {
-      throw new functions.https.HttpsError(
-          "invalid-argument",
-          `Table ${index + 1} is malformed.`,
-      );
-    }
+  return rawTables.map((table, index) => normalizeTable(table, index));
+}
 
-    if (table.regularNumbers != null && !Array.isArray(table.regularNumbers)) {
-      throw new functions.https.HttpsError(
-          "invalid-argument",
-          `Table ${index + 1} regular numbers are malformed.`,
-      );
-    }
+function normalizeTable(table, index = 0) {
+  if (!table || typeof table !== "object" || Array.isArray(table)) {
+    throw new functions.https.HttpsError(
+        "invalid-argument",
+        `Table ${index + 1} is malformed.`,
+    );
+  }
 
-    const regularNumbers = Array.isArray(table.regularNumbers) ?
-      normalizeRegularNumbers(
-          table.regularNumbers
-              .map((value) => Number(value))
-              .filter(isRegularNumber),
-      ) : [];
-    const strongNumber = table.strongNumber == null ? null : Number(table.strongNumber);
+  const rawRegularNumbers = Array.isArray(table.regularNumbers) ?
+    table.regularNumbers :
+    Array.isArray(table.numbers) ?
+      table.numbers :
+      Array.isArray(table.selectedNumbers) ?
+        table.selectedNumbers :
+        [];
+  if (!Array.isArray(rawRegularNumbers)) {
+    throw new functions.https.HttpsError(
+        "invalid-argument",
+        `Table ${index + 1} regular numbers are malformed.`,
+    );
+  }
 
-    return {
-      tableIndex: Number(table.tableIndex) || index + 1,
+  const regularNumbers = normalizeRegularNumbers(
+      rawRegularNumbers
+          .map((value) => Number(value))
+          .filter(isRegularNumber),
+  );
+  const rawStrongNumber =
+    table.strongNumber != null ? table.strongNumber : table.strong;
+  const strongNumber =
+    rawStrongNumber == null ? null : Number(rawStrongNumber);
+
+  return {
+    tableIndex: Number(table.tableIndex) || index + 1,
+    regularNumbers,
+    strongNumber: isStrongNumber(strongNumber) ? strongNumber : null,
+    isComplete: isTableComplete({
       regularNumbers,
-      strongNumber: isStrongNumber(strongNumber) ? strongNumber : null,
-      isComplete: isTableComplete({
-        regularNumbers,
-        strongNumber,
-      }),
-    };
-  });
+      strongNumber,
+    }),
+  };
 }
 
 function normalizeRegularNumbers(regularNumbers) {
