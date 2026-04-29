@@ -89,6 +89,7 @@ class PersonalFormDetailsPage extends StatelessWidget {
                           builder: (_) => LotteryTicketPreviewPage(
                             title: title ?? 'טופס אישי',
                             subtitle: 'תצוגה לקריאה בלבד של הטופס שנשמר במערכת',
+                            lotteryId: form.lotteryId,
                             tables: form.tables,
                             showDebug: false,
                           ),
@@ -113,6 +114,10 @@ class PersonalFormDetailsPage extends StatelessWidget {
                     rows: [
                       _InfoRow(label: 'סוג', value: 'טופס אישי'),
                       _InfoRow(label: 'סטטוס', value: statusLabel),
+                      _InfoRow(
+                        label: 'מס׳ הגרלה',
+                        value: form.lotteryId?.toString() ?? '—',
+                      ),
                       _InfoRow(label: 'עלות טופס', value: '$ticketCost ש״ח'),
                       _InfoRow(label: 'תאריך הגרלה', value: drawDateLabel),
                       _InfoRow(

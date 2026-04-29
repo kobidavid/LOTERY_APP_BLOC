@@ -139,6 +139,13 @@ service cloud.firestore {
         // מחיקה: ב-v1 רק היוצר
         allow delete: if isGroupCreator(groupId) || isOperator();
       }
+
+      match /forms/{formId} {
+        allow create: if isSignedIn() &&
+          request.auth.uid == request.resource.data.sourceUserId;
+        allow read: if isSignedIn();
+        allow update, delete: if isGroupCreator(groupId) || isOperator();
+      }
     }
   }
 }

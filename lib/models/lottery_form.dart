@@ -70,6 +70,8 @@ class LotteryForm extends Equatable {
   const LotteryForm({
     required this.formId,
     required this.userId,
+    required this.submissionId,
+    required this.parentSubmissionId,
     required this.status,
     required this.tables,
     required this.isComplete,
@@ -106,6 +108,8 @@ class LotteryForm extends Equatable {
 
   final String? formId;
   final String userId;
+  final String? submissionId;
+  final String? parentSubmissionId;
   final LotteryFormStatus status;
   final List<LotteryTable> tables;
   final bool isComplete;
@@ -143,6 +147,8 @@ class LotteryForm extends Equatable {
     return LotteryForm(
       formId: null,
       userId: userId,
+      submissionId: null,
+      parentSubmissionId: null,
       status: LotteryFormStatus.draft,
       tables: List<LotteryTable>.generate(
         14,
@@ -190,6 +196,8 @@ class LotteryForm extends Equatable {
     return LotteryForm(
       formId: formId,
       userId: map['userId'] as String? ?? '',
+      submissionId: map['submissionId'] as String?,
+      parentSubmissionId: map['parentSubmissionId'] as String?,
       status: _statusFromString(map['status'] as String?),
       tables: rawTables
           .map((item) => LotteryTable.fromMap(item as Map<String, dynamic>))
@@ -205,8 +213,11 @@ class LotteryForm extends Equatable {
       refundAmount: (map['refundAmount'] as num?) ?? 0,
       source: map['source'] as String? ?? 'manual',
       version: (map['version'] as num?)?.toInt() ?? 1,
-      lotteryId: (map['lotteryId'] as num?)?.toInt(),
-      salesCloseAt: _asDateTime(map['salesCloseAt']),
+      lotteryId:
+          (map['lotteryId'] as num?)?.toInt() ??
+          (map['drawNumber'] as num?)?.toInt(),
+      salesCloseAt:
+          _asDateTime(map['salesCloseAt']) ?? _asDateTime(map['drawDate']),
       resultStatus: _resultStatusFromString(map['resultStatus'] as String?),
       resultPublishedAt: _asDateTime(map['resultPublishedAt']),
       winAmount: (map['winAmount'] as num?) ?? 0,
@@ -279,6 +290,8 @@ class LotteryForm extends Equatable {
   LotteryForm copyWith({
     String? formId,
     String? userId,
+    String? submissionId,
+    String? parentSubmissionId,
     LotteryFormStatus? status,
     List<LotteryTable>? tables,
     bool? isComplete,
@@ -312,6 +325,8 @@ class LotteryForm extends Equatable {
     String? ticketFingerprint,
     int? fingerprintVersion,
     bool clearId = false,
+    bool clearSubmissionId = false,
+    bool clearParentSubmissionId = false,
     bool clearSubmittedAt = false,
     bool clearSavedAt = false,
     bool clearCancelledAt = false,
@@ -327,6 +342,11 @@ class LotteryForm extends Equatable {
     return LotteryForm(
       formId: clearId ? null : (formId ?? this.formId),
       userId: userId ?? this.userId,
+      submissionId:
+          clearSubmissionId ? null : (submissionId ?? this.submissionId),
+      parentSubmissionId: clearParentSubmissionId
+          ? null
+          : (parentSubmissionId ?? this.parentSubmissionId),
       status: status ?? this.status,
       tables: tables ?? this.tables,
       isComplete: isComplete ?? this.isComplete,
@@ -377,6 +397,8 @@ class LotteryForm extends Equatable {
   List<Object?> get props => [
         formId,
         userId,
+        submissionId,
+        parentSubmissionId,
         status,
         tables,
         isComplete,

@@ -49,6 +49,24 @@ class PersonalSubmissionDraftPayload {
   final int displayOrder;
 }
 
+class GroupDraftPayload {
+  const GroupDraftPayload({
+    required this.form,
+    required this.cost,
+    required this.tableCount,
+    required this.isDoubleMode,
+    required this.displayOrder,
+    required this.sourceDraftNumber,
+  });
+
+  final LotteryForm form;
+  final num cost;
+  final int tableCount;
+  final bool isDoubleMode;
+  final int displayOrder;
+  final int sourceDraftNumber;
+}
+
 class PersonalSubmittedBundleForm {
   const PersonalSubmittedBundleForm({
     required this.formId,
@@ -56,10 +74,13 @@ class PersonalSubmittedBundleForm {
     required this.tableCount,
     required this.cost,
     required this.isDoubleMode,
+    required this.lotteryId,
+    required this.salesCloseAt,
     required this.tables,
     required this.submittedAt,
     required this.printedAt,
     required this.submittedToStationAt,
+    required this.resultPublishedAt,
     required this.resultStatus,
     required this.winAmount,
     required this.receiptUrl,
@@ -70,10 +91,13 @@ class PersonalSubmittedBundleForm {
   final int tableCount;
   final num cost;
   final bool isDoubleMode;
+  final int? lotteryId;
+  final DateTime? salesCloseAt;
   final List<LotteryTable> tables;
   final DateTime? submittedAt;
   final DateTime? printedAt;
   final DateTime? submittedToStationAt;
+  final DateTime? resultPublishedAt;
   final LotteryResultStatus? resultStatus;
   final num winAmount;
   final String? receiptUrl;
@@ -82,19 +106,25 @@ class PersonalSubmittedBundleForm {
     String formId,
     Map<String, dynamic> data,
   ) {
-    final List<dynamic> rawTables = data['tables'] as List<dynamic>? ?? <dynamic>[];
+    final List<dynamic> rawTables =
+        data['tables'] as List<dynamic>? ?? <dynamic>[];
     return PersonalSubmittedBundleForm(
       formId: formId,
       displayOrder: (data['displayOrder'] as num?)?.toInt() ?? 0,
       tableCount: (data['tableCount'] as num?)?.toInt() ?? rawTables.length,
       cost: (data['cost'] as num?) ?? 0,
       isDoubleMode: data['isDoubleMode'] as bool? ?? false,
+      lotteryId: (data['lotteryId'] as num?)?.toInt() ??
+          (data['drawNumber'] as num?)?.toInt(),
+      salesCloseAt: _repositoryAsDateTime(data['salesCloseAt']) ??
+          _repositoryAsDateTime(data['drawDate']),
       tables: rawTables
           .map((item) => LotteryTable.fromMap(item as Map<String, dynamic>))
           .toList(),
       submittedAt: _repositoryAsDateTime(data['submittedAt']),
       printedAt: _repositoryAsDateTime(data['printedAt']),
       submittedToStationAt: _repositoryAsDateTime(data['submittedToStationAt']),
+      resultPublishedAt: _repositoryAsDateTime(data['resultPublishedAt']),
       resultStatus: _repositoryResultStatusFromString(
         data['resultStatus'] as String?,
       ),
@@ -110,7 +140,11 @@ class PersonalSubmittedBundle {
     required this.userId,
     required this.formCount,
     required this.totalCost,
+    required this.lotteryId,
+    required this.salesCloseAt,
     required this.submittedAt,
+    required this.resultPublishedAt,
+    required this.totalWinningAmount,
     required this.forms,
   });
 
@@ -118,11 +152,29 @@ class PersonalSubmittedBundle {
   final String userId;
   final int formCount;
   final num totalCost;
+  final int? lotteryId;
+  final DateTime? salesCloseAt;
   final DateTime? submittedAt;
+  final DateTime? resultPublishedAt;
+  final num totalWinningAmount;
   final List<PersonalSubmittedBundleForm> forms;
 
   int get totalTableCount =>
       forms.fold<int>(0, (int total, form) => total + form.tableCount);
+}
+
+class _UpcomingLotteryMetadataPayload {
+  const _UpcomingLotteryMetadataPayload({
+    required this.lotteryId,
+    required this.salesCloseAt,
+  });
+
+  final int? lotteryId;
+  final DateTime? salesCloseAt;
+
+  int? get drawNumber => lotteryId != null && lotteryId! > 0 ? lotteryId : null;
+
+  DateTime? get drawDate => salesCloseAt;
 }
 
 class LotteryFormRepository {
@@ -140,6 +192,8 @@ class LotteryFormRepository {
   final FirebaseAuth _auth;
   static const String _submitFunctionName = 'submitLotteryForm';
   static const String _chargeWalletFunctionName = 'chargeUserWallet';
+  static const String _upcomingLotteryMetadataFunctionName =
+      'getUpcomingLotteryMetadata';
   static const int _regularLottoPairPriceNis = 6;
   static const String _groupSnapshotSource = 'group_snapshot';
 
@@ -156,17 +210,41 @@ class LotteryFormRepository {
   }
 
   Stream<List<LotteryForm>> watchSubmittedForms(String userId) {
-    return _formsRef(userId).snapshots().map(
-          (snapshot) => _mapForms(snapshot)
-            ..retainWhere(
-              (form) =>
-                  form.status == LotteryFormStatus.submitted &&
-                  form.source != _groupSnapshotSource,
-            )
-            ..sort((a, b) => (b.submittedAt ?? DateTime(0)).compareTo(
-                  a.submittedAt ?? DateTime(0),
-                )),
+    debugPrint(
+      '[PersonalFormsUiDebug] watchSubmittedForms listen path=users/$userId/forms filter=status==submitted excludeSource=$_groupSnapshotSource',
+    );
+    return _formsRef(userId).snapshots().map((snapshot) {
+      final List<LotteryForm> allForms = _mapForms(snapshot);
+      debugPrint(
+        '[PersonalFormsUiDebug] watchSubmittedForms snapshot path=users/$userId/forms docs=${snapshot.docs.length}',
+      );
+      final List<LotteryForm> submittedForms = <LotteryForm>[];
+      for (final LotteryForm form in allForms) {
+        String? filteredOutReason;
+        if (form.status != LotteryFormStatus.submitted) {
+          filteredOutReason = 'status=${form.status.value}';
+        } else if (form.source == _groupSnapshotSource) {
+          filteredOutReason = 'source=${form.source}';
+        }
+
+        debugPrint(
+          '[PersonalFormsUiDebug] doc formId=${form.formId ?? 'null'} status=${form.status.value} mode=${form.mode.value} submissionType=${form.mode.value} source=${form.source} submissionId=${_debugSubmissionId(snapshot, form.formId)} parentSubmissionId=${_debugParentSubmissionId(snapshot, form.formId)} userId=${form.userId} isComplete=${form.isComplete} submittedAt=${form.submittedAt?.toIso8601String() ?? 'null'} lotteryId=${form.lotteryId?.toString() ?? 'null'} resultStatus=${form.resultStatus?.value ?? 'null'} filteredOutReason=${filteredOutReason ?? 'included'}',
         );
+
+        if (filteredOutReason == null) {
+          submittedForms.add(form);
+        }
+      }
+      submittedForms.sort(
+        (a, b) => (b.submittedAt ?? DateTime(0)).compareTo(
+          a.submittedAt ?? DateTime(0),
+        ),
+      );
+      debugPrint(
+        '[PersonalFormsUiDebug] watchSubmittedForms returned=${submittedForms.length} ids=${submittedForms.map((form) => form.formId ?? 'null').join(',')}',
+      );
+      return submittedForms;
+    });
   }
 
   Stream<List<PersonalSubmittedBundle>> watchPersonalSubmissionBundles(
@@ -180,17 +258,12 @@ class LotteryFormRepository {
       final List<PersonalSubmittedBundle> bundles =
           await Future.wait<PersonalSubmittedBundle>(
         snapshot.docs.map((doc) async {
-          final QuerySnapshot<Map<String, dynamic>> formsSnapshot =
-              await doc.reference.collection('forms').get();
-          final List<PersonalSubmittedBundleForm> forms = formsSnapshot.docs
-              .map(
-                (formDoc) => PersonalSubmittedBundleForm.fromFirestore(
-                  formDoc.id,
-                  formDoc.data(),
-                ),
-              )
-              .toList()
-            ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+          final List<PersonalSubmittedBundleForm> forms =
+              await _loadPersonalSubmissionBundleFormsOnce(
+            userId: userId,
+            submissionId: doc.id,
+            fallbackSubmissionRef: doc.reference,
+          );
           final Map<String, dynamic> data = doc.data();
           return PersonalSubmittedBundle(
             submissionId: doc.id,
@@ -198,7 +271,13 @@ class LotteryFormRepository {
             formCount: (data['formCount'] as num?)?.toInt() ?? forms.length,
             totalCost: (data['totalCost'] as num?) ??
                 forms.fold<num>(0, (num total, form) => total + form.cost),
+            lotteryId: (data['lotteryId'] as num?)?.toInt() ??
+                (data['drawNumber'] as num?)?.toInt(),
+            salesCloseAt: _repositoryAsDateTime(data['salesCloseAt']) ??
+                _repositoryAsDateTime(data['drawDate']),
             submittedAt: _repositoryAsDateTime(data['submittedAt']),
+            resultPublishedAt: _repositoryAsDateTime(data['resultPublishedAt']),
+            totalWinningAmount: (data['totalWinningAmount'] as num?) ?? 0,
             forms: forms,
           );
         }),
@@ -212,33 +291,89 @@ class LotteryFormRepository {
   Stream<List<PersonalSubmittedBundleForm>> watchPersonalSubmissionBundleForms({
     required String userId,
     required String submissionId,
-  }) {
-    return _submissionsRef(userId)
+  }) async* {
+    final Query<Map<String, dynamic>> canonicalQuery =
+        _formsRef(userId).where('submissionId', isEqualTo: submissionId);
+    final QuerySnapshot<Map<String, dynamic>> firstSnapshot =
+        await canonicalQuery.get();
+    final List<PersonalSubmittedBundleForm> firstForms =
+        _mapPersonalSubmissionBundleForms(firstSnapshot);
+    if (firstForms.isNotEmpty) {
+      yield* canonicalQuery.snapshots().map(_mapPersonalSubmissionBundleForms);
+      return;
+    }
+
+    yield* _submissionsRef(userId)
         .doc(submissionId)
         .collection('forms')
         .snapshots()
-        .map((snapshot) {
-      final List<PersonalSubmittedBundleForm> forms = snapshot.docs
-          .map(
-            (doc) => PersonalSubmittedBundleForm.fromFirestore(doc.id, doc.data()),
-          )
-          .toList()
-        ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
-      return forms;
-    });
+        .map(_mapPersonalSubmissionBundleForms);
   }
 
   Stream<List<LotteryForm>> watchSavedForms(String userId) {
-    return _formsRef(userId).snapshots().map(
-          (snapshot) => _mapForms(snapshot)
-            ..retainWhere(
-              (form) => form.status == LotteryFormStatus.saved,
-            )
-            ..sort(
-                (a, b) => (b.savedAt ?? b.updatedAt ?? DateTime(0)).compareTo(
-                      a.savedAt ?? a.updatedAt ?? DateTime(0),
-                    )),
+    debugPrint(
+      '[PersonalFormsUiDebug] watchSavedForms listen path=users/$userId/forms filter=status==saved',
+    );
+    return _formsRef(userId).snapshots().map((snapshot) {
+      final List<LotteryForm> allForms = _mapForms(snapshot);
+      debugPrint(
+        '[PersonalFormsUiDebug] watchSavedForms snapshot path=users/$userId/forms docs=${snapshot.docs.length}',
+      );
+      for (final LotteryForm form in allForms) {
+        final bool isSaved = form.status == LotteryFormStatus.saved;
+        final String filteredOutReason =
+            isSaved ? 'included' : 'status=${form.status.value}';
+        debugPrint(
+          '[PersonalFormsUiDebug] doc formId=${form.formId ?? 'null'} status=${form.status.value} mode=${form.mode.value} submissionType=${form.mode.value} source=${form.source} submissionId=${_debugSubmissionId(snapshot, form.formId)} parentSubmissionId=${_debugParentSubmissionId(snapshot, form.formId)} userId=${form.userId} isComplete=${form.isComplete} createdAt=${form.createdAt?.toIso8601String() ?? 'null'} updatedAt=${form.updatedAt?.toIso8601String() ?? 'null'} filteredOutReason=$filteredOutReason',
         );
+      }
+      final List<LotteryForm> savedForms = allForms
+          .where((form) => form.status == LotteryFormStatus.saved)
+          .toList()
+        ..sort(
+          (a, b) => (b.savedAt ?? b.updatedAt ?? DateTime(0)).compareTo(
+            a.savedAt ?? a.updatedAt ?? DateTime(0),
+          ),
+        );
+      debugPrint(
+        '[PersonalFormsUiDebug] watchSavedForms returned=${savedForms.length} ids=${savedForms.map((form) => form.formId ?? 'null').join(',')}',
+      );
+      return savedForms;
+    });
+  }
+
+  String _debugSubmissionId(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+    String? formId,
+  ) {
+    if (formId == null) {
+      return 'null';
+    }
+    final Map<String, dynamic>? data = snapshot.docs
+        .cast<QueryDocumentSnapshot<Map<String, dynamic>>?>()
+        .firstWhere(
+          (doc) => doc?.id == formId,
+          orElse: () => null,
+        )
+        ?.data();
+    return (data?['submissionId'] as String?) ?? 'null';
+  }
+
+  String _debugParentSubmissionId(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+    String? formId,
+  ) {
+    if (formId == null) {
+      return 'null';
+    }
+    final Map<String, dynamic>? data = snapshot.docs
+        .cast<QueryDocumentSnapshot<Map<String, dynamic>>?>()
+        .firstWhere(
+          (doc) => doc?.id == formId,
+          orElse: () => null,
+        )
+        ?.data();
+    return (data?['parentSubmissionId'] as String?) ?? 'null';
   }
 
   Stream<List<LotteryForm>> watchCancelledForms(String userId) {
@@ -430,10 +565,16 @@ class LotteryFormRepository {
       throw StateError('לא נמצאו טפסים לשליחה.');
     }
 
+    final _UpcomingLotteryMetadataPayload upcomingLottery =
+        await _fetchUpcomingLotteryMetadata();
     final DateTime now = DateTime.now();
     final DocumentReference<Map<String, dynamic>> submissionRef =
         _submissionsRef(userId).doc();
     final WriteBatch batch = _firestore.batch();
+    const String waitingResultStatus = 'waiting_for_results';
+    final int? effectiveLotteryId =
+        _normalizePositiveLotteryId(upcomingLottery.lotteryId);
+    final DateTime? effectiveSalesCloseAt = upcomingLottery.salesCloseAt;
 
     batch.set(
       submissionRef,
@@ -447,12 +588,21 @@ class LotteryFormRepository {
         'createdAt': now,
         'updatedAt': now,
         'submittedAt': now,
+        'lotteryId': effectiveLotteryId,
+        'drawNumber': effectiveLotteryId,
+        'salesCloseAt': effectiveSalesCloseAt,
+        'drawDate': effectiveSalesCloseAt,
       },
     );
 
     for (final PersonalSubmissionDraftPayload draft in drafts) {
       final DocumentReference<Map<String, dynamic>> formRef =
-          submissionRef.collection('forms').doc();
+          _formsRef(userId).doc();
+      final int? draftLotteryId = _normalizePositiveLotteryId(
+        draft.form.lotteryId ?? effectiveLotteryId,
+      );
+      final DateTime? draftSalesCloseAt =
+          draft.form.salesCloseAt ?? effectiveSalesCloseAt;
       batch.set(
         formRef,
         <String, dynamic>{
@@ -461,6 +611,7 @@ class LotteryFormRepository {
           'userId': userId,
           'displayOrder': draft.displayOrder,
           'status': LotteryFormStatus.submitted.value,
+          'submissionType': LotteryFormMode.personal.value,
           'mode': LotteryFormMode.personal.value,
           'isDoubleMode': draft.isDoubleMode,
           'tableCount': draft.tableCount,
@@ -471,11 +622,18 @@ class LotteryFormRepository {
           'updatedAt': now,
           'submittedAt': now,
           'savedAt': draft.form.savedAt,
-          'source': draft.form.source,
+          'source': 'personal_submission_bundle',
           'version': draft.form.version,
-          'lotteryId': draft.form.lotteryId,
-          'salesCloseAt': draft.form.salesCloseAt,
+          'lotteryId': draftLotteryId,
+          'drawNumber': draftLotteryId,
+          'salesCloseAt': draftSalesCloseAt,
+          'drawDate': draftSalesCloseAt,
+          'resultStatus': draft.form.resultStatus?.value ?? waitingResultStatus,
+          'resultPublishedAt': draft.form.resultPublishedAt,
+          'winAmount': draft.form.winAmount,
+          'checkedAt': draft.form.checkedAt,
           'balanceApplied': draft.form.balanceApplied,
+          'isEditable': false,
         },
       );
     }
@@ -484,8 +642,33 @@ class LotteryFormRepository {
     return submissionRef.id;
   }
 
+  Future<_UpcomingLotteryMetadataPayload>
+      _fetchUpcomingLotteryMetadata() async {
+    final HttpsCallable callable =
+        _functions.httpsCallable(_upcomingLotteryMetadataFunctionName);
+    final HttpsCallableResult<dynamic> result = await callable.call();
+    final Map<String, dynamic> data =
+        Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
+    return _UpcomingLotteryMetadataPayload(
+      lotteryId: _normalizePositiveLotteryId(
+        (data['lotteryId'] as num?)?.toInt() ??
+            (data['drawNumber'] as num?)?.toInt(),
+      ),
+      salesCloseAt: _repositoryAsDateTime(data['salesCloseAt']) ??
+          _repositoryAsDateTime(data['drawDate']),
+    );
+  }
+
+  int? _normalizePositiveLotteryId(int? value) {
+    if (value == null || value <= 0) {
+      return null;
+    }
+    return value;
+  }
+
   num calculateTicketCost(List<LotteryTable> tables) {
-    final int populatedTableCount = tables.where((table) => !table.isEmpty).length;
+    final int populatedTableCount =
+        tables.where((table) => !table.isEmpty).length;
     return _calculateRegularLottoBaseTicketCost(populatedTableCount);
   }
 
@@ -511,6 +694,45 @@ class LotteryFormRepository {
     required String formId,
   }) {
     return _formsRef(userId).doc(formId).delete();
+  }
+
+  Future<List<PersonalSubmittedBundleForm>>
+      _loadPersonalSubmissionBundleFormsOnce({
+    required String userId,
+    required String submissionId,
+    required DocumentReference<Map<String, dynamic>> fallbackSubmissionRef,
+  }) async {
+    final QuerySnapshot<Map<String, dynamic>> canonicalSnapshot =
+        await _formsRef(userId)
+            .where('submissionId', isEqualTo: submissionId)
+            .get();
+    final List<PersonalSubmittedBundleForm> canonicalForms =
+        _mapPersonalSubmissionBundleForms(canonicalSnapshot);
+    if (canonicalForms.isNotEmpty) {
+      return canonicalForms;
+    }
+
+    final QuerySnapshot<Map<String, dynamic>> legacySnapshot =
+        await fallbackSubmissionRef.collection('forms').get();
+    return _mapPersonalSubmissionBundleForms(legacySnapshot);
+  }
+
+  List<PersonalSubmittedBundleForm> _mapPersonalSubmissionBundleForms(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    final List<PersonalSubmittedBundleForm> forms = snapshot.docs
+        .where(
+          (doc) =>
+              (doc.data()['status'] as String?) ==
+              LotteryFormStatus.submitted.value,
+        )
+        .map(
+          (doc) =>
+              PersonalSubmittedBundleForm.fromFirestore(doc.id, doc.data()),
+        )
+        .toList()
+      ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    return forms;
   }
 
   Future<void> cancelSavedForm({
@@ -600,6 +822,8 @@ class LotteryFormRepository {
     final DocumentReference<Map<String, dynamic>> groupRef = _groupsRef().doc();
     final DocumentReference<Map<String, dynamic>> membershipRef =
         groupRef.collection('memberships').doc(form.userId);
+    final DocumentReference<Map<String, dynamic>> groupFormRef =
+        groupRef.collection('forms').doc(sourceFormRef.id);
 
     final LotteryForm lockedForm = form.copyWith(
       formId: sourceFormRef.id,
@@ -623,6 +847,10 @@ class LotteryFormRepository {
     final Map<String, dynamic> snapshot = <String, dynamic>{
       'tables': lockedForm.tables.map((table) => table.toMap()).toList(),
       'isComplete': lockedForm.isComplete,
+      'lotteryId': lockedForm.lotteryId,
+      'drawNumber': lockedForm.lotteryId,
+      'salesCloseAt': lockedForm.salesCloseAt,
+      'drawDate': lockedForm.salesCloseAt,
     };
     debugPrint(
       '[CreateGroupFlow] repository.createGroupFromForm refs ready +${stopwatch.elapsedMilliseconds}ms sourceFormId=${sourceFormRef.id} groupId=${groupRef.id}',
@@ -647,7 +875,9 @@ class LotteryFormRepository {
         'source': lockedForm.source,
         'version': lockedForm.version,
         'lotteryId': lockedForm.lotteryId,
+        'drawNumber': lockedForm.lotteryId,
         'salesCloseAt': lockedForm.salesCloseAt,
+        'drawDate': lockedForm.salesCloseAt,
         'resultStatus': lockedForm.resultStatus?.value,
         'resultPublishedAt': lockedForm.resultPublishedAt,
         'winAmount': lockedForm.winAmount,
@@ -665,12 +895,43 @@ class LotteryFormRepository {
       'status': LotteryGroupStatus.collectingResponses.value,
       'inviteToken': inviteToken,
       'formSnapshot': snapshot,
+      'lotteryId': lockedForm.lotteryId,
+      'drawNumber': lockedForm.lotteryId,
+      'salesCloseAt': lockedForm.salesCloseAt,
+      'drawDate': lockedForm.salesCloseAt,
       'baseTicketCost': baseTicketCost,
       'currentPerParticipantCost': 0,
       'finalizedParticipantCount': 0,
       'dispatchStatus': null,
       'createdAt': now,
       'updatedAt': now,
+    });
+
+    batch.set(groupFormRef, <String, dynamic>{
+      'formId': groupFormRef.id,
+      'groupId': groupRef.id,
+      'displayOrder': 1,
+      'sourceUserId': form.userId,
+      'sourceDraftNumber': 1,
+      'status': LotteryFormStatus.lockedForGroup.value,
+      'submissionType': LotteryFormMode.group.value,
+      'mode': LotteryFormMode.group.value,
+      'isDoubleMode': false,
+      'lotteryId': lockedForm.lotteryId,
+      'drawNumber': lockedForm.lotteryId,
+      'salesCloseAt': lockedForm.salesCloseAt,
+      'drawDate': lockedForm.salesCloseAt,
+      'tableCount': populatedTableCount,
+      'cost': baseTicketCost,
+      'tables': lockedForm.tables.map((table) => table.toMap()).toList(),
+      'isComplete': lockedForm.isComplete,
+      'createdAt': lockedForm.createdAt,
+      'updatedAt': lockedForm.updatedAt,
+      'resultStatus': lockedForm.resultStatus?.value,
+      'resultPublishedAt': lockedForm.resultPublishedAt,
+      'winAmount': lockedForm.winAmount,
+      'checkedAt': lockedForm.checkedAt,
+      'balanceApplied': lockedForm.balanceApplied,
     });
 
     batch.set(membershipRef, <String, dynamic>{
@@ -701,7 +962,198 @@ class LotteryFormRepository {
       'status': LotteryGroupStatus.collectingResponses.value,
       'inviteToken': inviteToken,
       'formSnapshot': snapshot,
+      'lotteryId': lockedForm.lotteryId,
+      'drawNumber': lockedForm.lotteryId,
+      'salesCloseAt': lockedForm.salesCloseAt,
+      'drawDate': lockedForm.salesCloseAt,
       'baseTicketCost': baseTicketCost,
+      'currentPerParticipantCost': 0,
+      'finalizedParticipantCount': 0,
+      'dispatchStatus': null,
+      'createdAt': now,
+      'updatedAt': now,
+    });
+  }
+
+  Future<LotteryGroup> createGroupFromFormsBundle({
+    required String userId,
+    required String groupName,
+    required List<GroupDraftPayload> drafts,
+  }) async {
+    if (drafts.isEmpty) {
+      throw StateError('לא נמצאו טפסים ליצירת קבוצה.');
+    }
+
+    final DateTime now = DateTime.now();
+    final DocumentReference<Map<String, dynamic>> groupRef = _groupsRef().doc();
+    final DocumentReference<Map<String, dynamic>> membershipRef =
+        groupRef.collection('memberships').doc(userId);
+
+    final GroupDraftPayload firstDraft = drafts.first;
+    final DocumentReference<Map<String, dynamic>> sourceFormRef =
+        firstDraft.form.formId == null
+            ? _formsRef(userId).doc()
+            : _formsRef(userId).doc(firstDraft.form.formId);
+
+    final LotteryForm lockedSourceForm = firstDraft.form.copyWith(
+      formId: sourceFormRef.id,
+      createdAt: firstDraft.form.createdAt ?? now,
+      updatedAt: now,
+      status: LotteryFormStatus.lockedForGroup,
+      mode: LotteryFormMode.group,
+      groupId: groupRef.id,
+      isEditable: false,
+    );
+
+    final num totalCost = drafts.fold<num>(
+      0,
+      (num total, GroupDraftPayload draft) => total + draft.cost,
+    );
+    final int totalTableCount = drafts.fold<int>(
+      0,
+      (int total, GroupDraftPayload draft) => total + draft.tableCount,
+    );
+    final String inviteToken = groupRef.id;
+    final String creatorDisplayName = _auth.currentUser?.uid == userId &&
+            (_auth.currentUser?.displayName?.trim().isNotEmpty ?? false)
+        ? _auth.currentUser!.displayName!.trim()
+        : userId;
+    final Map<String, dynamic> snapshot = <String, dynamic>{
+      'tables': lockedSourceForm.tables.map((table) => table.toMap()).toList(),
+      'isComplete': lockedSourceForm.isComplete,
+      'lotteryId': lockedSourceForm.lotteryId,
+      'drawNumber': lockedSourceForm.lotteryId,
+      'salesCloseAt': lockedSourceForm.salesCloseAt,
+      'drawDate': lockedSourceForm.salesCloseAt,
+    };
+
+    final WriteBatch batch = _firestore.batch();
+    batch.set(
+      sourceFormRef,
+      <String, dynamic>{
+        'formId': sourceFormRef.id,
+        'userId': lockedSourceForm.userId,
+        'status': lockedSourceForm.status.value,
+        'mode': lockedSourceForm.mode.value,
+        'groupId': lockedSourceForm.groupId,
+        'isEditable': lockedSourceForm.isEditable,
+        'tables':
+            lockedSourceForm.tables.map((table) => table.toMap()).toList(),
+        'isComplete': lockedSourceForm.isComplete,
+        'createdAt': lockedSourceForm.createdAt,
+        'updatedAt': lockedSourceForm.updatedAt,
+        'submittedAt': lockedSourceForm.submittedAt,
+        'savedAt': lockedSourceForm.savedAt,
+        'source': lockedSourceForm.source,
+        'version': lockedSourceForm.version,
+        'lotteryId': lockedSourceForm.lotteryId,
+        'drawNumber': lockedSourceForm.lotteryId,
+        'salesCloseAt': lockedSourceForm.salesCloseAt,
+        'drawDate': lockedSourceForm.salesCloseAt,
+        'resultStatus': lockedSourceForm.resultStatus?.value,
+        'resultPublishedAt': lockedSourceForm.resultPublishedAt,
+        'winAmount': lockedSourceForm.winAmount,
+        'checkedAt': lockedSourceForm.checkedAt,
+        'balanceApplied': lockedSourceForm.balanceApplied,
+      },
+      SetOptions(merge: true),
+    );
+
+    batch.set(
+      groupRef,
+      <String, dynamic>{
+        'groupId': groupRef.id,
+        'groupName': groupName,
+        'creatorUserId': userId,
+        'sourceFormId': sourceFormRef.id,
+        'status': LotteryGroupStatus.collectingResponses.value,
+        'inviteToken': inviteToken,
+        'formSnapshot': snapshot,
+        'lotteryId': lockedSourceForm.lotteryId,
+        'drawNumber': lockedSourceForm.lotteryId,
+        'salesCloseAt': lockedSourceForm.salesCloseAt,
+        'drawDate': lockedSourceForm.salesCloseAt,
+        'bundleType': 'multi_form',
+        'formCount': drafts.length,
+        'totalTableCount': totalTableCount,
+        'totalCost': totalCost,
+        'baseTicketCost': totalCost,
+        'currentPerParticipantCost': 0,
+        'finalizedParticipantCount': 0,
+        'dispatchStatus': null,
+        'createdAt': now,
+        'updatedAt': now,
+      },
+    );
+
+    batch.set(
+      membershipRef,
+      <String, dynamic>{
+        'userId': userId,
+        'displayName': creatorDisplayName,
+        'groupId': groupRef.id,
+        'responseStatus': 'interested',
+        'minimumParticipantsRequired': 1,
+        'lockedIn': false,
+        'paymentStatus': 'not_applicable',
+        'joinedAt': now,
+        'respondedAt': now,
+      },
+    );
+
+    for (final GroupDraftPayload draft in drafts) {
+      final DocumentReference<Map<String, dynamic>> groupFormRef =
+          groupRef.collection('forms').doc();
+      batch.set(
+        groupFormRef,
+        <String, dynamic>{
+          'formId': groupFormRef.id,
+          'groupId': groupRef.id,
+          'displayOrder': draft.displayOrder,
+          'sourceUserId': userId,
+          'sourceDraftNumber': draft.sourceDraftNumber,
+          'status': LotteryFormStatus.lockedForGroup.value,
+          'submissionType': LotteryFormMode.group.value,
+          'mode': LotteryFormMode.group.value,
+          'isDoubleMode': draft.isDoubleMode,
+          'lotteryId': draft.form.lotteryId,
+          'drawNumber': draft.form.lotteryId,
+          'salesCloseAt': draft.form.salesCloseAt,
+          'drawDate': draft.form.salesCloseAt,
+          'tableCount': draft.tableCount,
+          'cost': draft.cost,
+          'tables': draft.form.tables.map((table) => table.toMap()).toList(),
+          'isComplete': draft.form.isComplete,
+          'createdAt': draft.form.createdAt ?? now,
+          'updatedAt': now,
+          'resultStatus': draft.form.resultStatus?.value,
+          'resultPublishedAt': draft.form.resultPublishedAt,
+          'winAmount': draft.form.winAmount,
+          'checkedAt': draft.form.checkedAt,
+          'balanceApplied': draft.form.balanceApplied,
+        },
+      );
+    }
+
+    await batch.commit();
+
+    return LotteryGroup.fromFirestore(groupRef.id, <String, dynamic>{
+      'groupId': groupRef.id,
+      'groupName': groupName,
+      'creatorUserId': userId,
+      'sourceFormId': sourceFormRef.id,
+      'status': LotteryGroupStatus.collectingResponses.value,
+      'inviteToken': inviteToken,
+      'formSnapshot': snapshot,
+      'lotteryId': lockedSourceForm.lotteryId,
+      'drawNumber': lockedSourceForm.lotteryId,
+      'salesCloseAt': lockedSourceForm.salesCloseAt,
+      'drawDate': lockedSourceForm.salesCloseAt,
+      'bundleType': 'multi_form',
+      'formCount': drafts.length,
+      'totalTableCount': totalTableCount,
+      'totalCost': totalCost,
+      'baseTicketCost': totalCost,
       'currentPerParticipantCost': 0,
       'finalizedParticipantCount': 0,
       'dispatchStatus': null,

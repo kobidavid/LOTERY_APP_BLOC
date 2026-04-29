@@ -100,6 +100,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   int _nextDraftNumber = 2;
   int? _lastAutoScrolledActiveRowIndex;
   int? _lastAutoScrolledSelectedTableCount;
+  Timer? _personalDraftPersistDebounce;
 
   @override
   void initState() {
@@ -110,6 +111,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   @override
   void dispose() {
+    _personalDraftPersistDebounce?.cancel();
     _tablesScrollController.dispose();
     super.dispose();
   }
@@ -135,6 +137,93 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       isGroupMode: _isGroupMode,
       isDoubleMode: _isDoubleMode,
     );
+  }
+
+  bool _shouldPersistPersonalDrafts(LotteryFormState state) {
+    final List<_LocalDraftForm> drafts = _effectiveLocalDrafts(state);
+    return drafts.length > 1 && drafts.every((draft) => !draft.isGroupMode);
+  }
+
+  bool _canPersistDraft(_LocalDraftForm draft) {
+    return draft.formState.form.tables.any((table) => !table.isEmpty);
+  }
+
+  Future<void> _persistLocalDraftAtIndex(int index) async {
+    if (!mounted || index < 0 || index >= _localDrafts.length) {
+      return;
+    }
+    final _LocalDraftForm draft = _localDrafts[index];
+    if (draft.isGroupMode || !_canPersistDraft(draft)) {
+      return;
+    }
+
+    final LotteryForm candidate = draft.formState.form.copyWith(
+      status: LotteryFormStatus.saved,
+      mode: LotteryFormMode.personal,
+      isComplete: _isDraftComplete(draft),
+      savedAt: DateTime.now(),
+      clearSubmittedAt: true,
+      clearGroupId: true,
+      isEditable: true,
+    );
+    debugPrint(
+      '[DraftsDebug] persistLocalDraft start path=users/${candidate.userId}/forms/${candidate.formId ?? '(new)'} localDraft=${draft.number} status=${candidate.status.value} mode=${candidate.mode.value} submissionType=personal userId=${candidate.userId} isComplete=${candidate.isComplete}',
+    );
+    final LotteryForm saved = await _paymentRepository.upsertForm(candidate);
+    debugPrint(
+      '[DraftsDebug] persistLocalDraft success path=users/${saved.userId}/forms/${saved.formId ?? 'null'} formId=${saved.formId ?? 'null'} status=${saved.status.value} mode=${saved.mode.value} submissionType=personal userId=${saved.userId} isComplete=${saved.isComplete} createdAt=${saved.createdAt?.toIso8601String() ?? 'null'} updatedAt=${saved.updatedAt?.toIso8601String() ?? 'null'}',
+    );
+    if (!mounted || index >= _localDrafts.length) {
+      return;
+    }
+
+    final LotteryForm localEditingForm = saved.copyWith(
+      status: LotteryFormStatus.draft,
+      clearSavedAt: true,
+      clearSubmittedAt: true,
+      isEditable: true,
+    );
+    setState(() {
+      _localDrafts[index] = _localDrafts[index].copyWith(
+        formState: _localDrafts[index].formState.copyWith(
+          form: localEditingForm,
+          clearError: true,
+          clearSuccess: true,
+        ),
+      );
+    });
+  }
+
+  Future<void> _deletePersistedDraftIfNeeded(_LocalDraftForm draft) async {
+    final String? formId = draft.formState.form.formId;
+    if (formId == null || formId.isEmpty) {
+      return;
+    }
+    await _paymentRepository.deleteSavedForm(
+      userId: draft.formState.form.userId,
+      formId: formId,
+    );
+  }
+
+  void _schedulePersistActivePersonalDraft(LotteryFormState state) {
+    _personalDraftPersistDebounce?.cancel();
+    if (!_shouldPersistPersonalDrafts(state)) {
+      return;
+    }
+    _personalDraftPersistDebounce = Timer(
+      const Duration(milliseconds: 450),
+      () => unawaited(_persistLocalDraftAtIndex(_activeDraftIndex)),
+    );
+  }
+
+  Future<void> _persistAllPersonalDrafts(LotteryFormState state) async {
+    _syncActiveDraftSnapshot(state);
+    if (!_shouldPersistPersonalDrafts(state)) {
+      return;
+    }
+    for (int index = 0; index < _localDrafts.length; index += 1) {
+      await _persistLocalDraftAtIndex(index);
+    }
   }
 
   void _showDraftMixingMessage() {
@@ -182,6 +271,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
     final LotteryFormState currentState = cubit.state;
     _syncActiveDraftSnapshot(currentState);
+    if (!_isGroupMode) {
+      await _persistLocalDraftAtIndex(_activeDraftIndex);
+    }
     final bool targetGroupMode = _effectiveLocalDrafts(currentState).first.isGroupMode;
     final LotteryFormState draftState = LotteryFormState.initial(
       currentState.form.userId,
@@ -206,12 +298,16 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _isDoubleMode = draft.isDoubleMode;
     });
     cubit.loadLocalDraftState(draft.formState);
+    await _persistAllPersonalDrafts(cubit.state);
   }
 
-  void _switchToLocalDraft(int index) {
+  Future<void> _switchToLocalDraft(int index) async {
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
     final LotteryFormState currentState = cubit.state;
     _syncActiveDraftSnapshot(currentState);
+    if (_shouldPersistPersonalDrafts(currentState)) {
+      await _persistLocalDraftAtIndex(_activeDraftIndex);
+    }
     final _LocalDraftForm draft = _localDrafts[index];
     setState(() {
       _activeDraftIndex = index;
@@ -219,6 +315,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _isDoubleMode = draft.isDoubleMode;
     });
     cubit.loadLocalDraftState(draft.formState);
+    await _persistAllPersonalDrafts(cubit.state);
   }
 
   Future<bool> _deleteLocalDraft(int index) async {
@@ -250,6 +347,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
     _syncActiveDraftSnapshot(cubit.state);
+    await _deletePersistedDraftIfNeeded(draft);
     final List<_LocalDraftForm> updatedDrafts =
         List<_LocalDraftForm>.from(_localDrafts)..removeAt(index);
     final List<_LocalDraftForm> renumberedDrafts =
@@ -346,7 +444,38 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     });
   }
 
+  List<GroupDraftPayload> _buildGroupDraftPayloads(
+    List<_LocalDraftForm> drafts,
+  ) {
+    return List<GroupDraftPayload>.generate(drafts.length, (index) {
+      final _LocalDraftForm draft = drafts[index];
+      final int selectedTableCount = draft.formState.selectedTableCount;
+      final List<LotteryTable> selectedTables =
+          draft.formState.form.tables.take(selectedTableCount).toList();
+      final LotteryForm groupedForm = draft.formState.form.copyWith(
+        clearId: true,
+        tables: selectedTables,
+        status: LotteryFormStatus.lockedForGroup,
+        mode: LotteryFormMode.group,
+        isComplete: true,
+        clearSavedAt: true,
+        isEditable: false,
+      );
+      return GroupDraftPayload(
+        form: groupedForm,
+        cost: _calculateDraftCost(draft),
+        tableCount: selectedTableCount,
+        isDoubleMode: draft.isDoubleMode,
+        displayOrder: index + 1,
+        sourceDraftNumber: draft.number,
+      );
+    });
+  }
+
   void _resetLocalDraftsAfterSubmit(String userId) {
+    for (final _LocalDraftForm draft in _localDrafts) {
+      unawaited(_deletePersistedDraftIfNeeded(draft));
+    }
     final LotteryFormState initialState = LotteryFormState.initial(userId);
     _localDrafts
       ..clear()
@@ -418,36 +547,79 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       return;
     }
 
-    debugPrint(
-      '[CreateGroupFlow] cubit.createGroup start +${stopwatch.elapsedMilliseconds}ms',
-    );
-    final LotteryGroup? group =
-        await context.read<LotteryFormCubit>().createGroup(groupName);
-    debugPrint(
-      '[CreateGroupFlow] cubit.createGroup end +${stopwatch.elapsedMilliseconds}ms groupId=${group?.groupId ?? 'null'}',
-    );
+    final List<_LocalDraftForm> effectiveDrafts =
+        _effectiveLocalDrafts(currentState);
+    LotteryGroup? group;
+    if (effectiveDrafts.length == 1) {
+      debugPrint(
+        '[CreateGroupFlow] cubit.createGroup start +${stopwatch.elapsedMilliseconds}ms',
+      );
+      group = await context.read<LotteryFormCubit>().createGroup(groupName);
+      debugPrint(
+        '[CreateGroupFlow] cubit.createGroup end +${stopwatch.elapsedMilliseconds}ms groupId=${group?.groupId ?? 'null'}',
+      );
+    } else {
+      final bool allGroupDrafts =
+          effectiveDrafts.every((draft) => draft.isGroupMode);
+      if (!allGroupDrafts) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('שליחת כמה טפסים קבוצתיים עדיין לא נתמכת'),
+            ),
+          );
+        return;
+      }
+
+      debugPrint(
+        '[CreateGroupFlow] repository.createGroupFromFormsBundle start +${stopwatch.elapsedMilliseconds}ms draftCount=${effectiveDrafts.length}',
+      );
+      group = await _paymentRepository.createGroupFromFormsBundle(
+        userId: currentState.form.userId,
+        groupName: groupName.trim(),
+        drafts: _buildGroupDraftPayloads(effectiveDrafts),
+      );
+      debugPrint(
+        '[CreateGroupFlow] repository.createGroupFromFormsBundle end +${stopwatch.elapsedMilliseconds}ms groupId=${group.groupId}',
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _resetLocalDraftsAfterSubmit(currentState.form.userId);
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('הקבוצה נוצרה והטפסים ננעלו לעריכה'),
+          ),
+        );
+    }
     if (!mounted || group == null) {
       debugPrint(
         '[CreateGroupFlow] abort after createGroup +${stopwatch.elapsedMilliseconds}ms mounted=$mounted',
-      );
+        );
       return;
     }
+    final LotteryGroup createdGroup = group;
 
     debugPrint(
-      '[CreateGroupFlow] navigation push start +${stopwatch.elapsedMilliseconds}ms groupId=${group.groupId}',
+      '[CreateGroupFlow] navigation push start +${stopwatch.elapsedMilliseconds}ms groupId=${createdGroup.groupId}',
     );
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => GroupDetailsPage(
-          groupId: group.groupId,
-          currentUserId: group.creatorUserId,
+          groupId: createdGroup.groupId,
+          currentUserId: createdGroup.creatorUserId,
           inviteLinkService: widget.inviteLinkService,
           repository: _groupRepository,
         ),
       ),
     );
     debugPrint(
-      '[CreateGroupFlow] navigation pop/end +${stopwatch.elapsedMilliseconds}ms groupId=${group.groupId}',
+      '[CreateGroupFlow] navigation pop/end +${stopwatch.elapsedMilliseconds}ms groupId=${createdGroup.groupId}',
     );
   }
 
@@ -899,13 +1071,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       final bool hasAnyGroupDraft =
           effectiveDrafts.any((draft) => draft.isGroupMode);
       if (hasAnyGroupDraft) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text('שליחת כמה טפסים קבוצתיים עדיין לא נתמכת'),
-            ),
-          );
+        await _promptCreateGroup();
         return;
       }
       await _startPersonalMultiDraftSubmitFlow(effectiveDrafts);
@@ -1059,6 +1225,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       listenWhen: (_, __) => true,
       listener: (context, state) {
         _syncActiveDraftSnapshot(state);
+        _schedulePersistActivePersonalDraft(state);
         final String? message = state.errorMessage ?? state.successMessage;
         if (message == null) {
           return;

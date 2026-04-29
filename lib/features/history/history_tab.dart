@@ -32,10 +32,23 @@ class HistoryTab extends StatefulWidget {
   State<HistoryTab> createState() => _HistoryTabState();
 }
 
-class _HistoryTabState extends State<HistoryTab> {
-  int? _expandedSectionIndex = 0;
+class _HistoryTabState extends State<HistoryTab>
+    with SingleTickerProviderStateMixin {
   final Set<String> _hiddenDraftItemKeys = <String>{};
   int _draftDismissGeneration = 0;
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,203 +56,240 @@ class _HistoryTabState extends State<HistoryTab> {
       stream: widget.repository.watchSubmittedForms(widget.userId),
       builder: (context, submittedFormsSnapshot) {
         return StreamBuilder<List<PersonalSubmittedBundle>>(
-          stream: widget.repository.watchPersonalSubmissionBundles(widget.userId),
+          stream:
+              widget.repository.watchPersonalSubmissionBundles(widget.userId),
           builder: (context, personalBundlesSnapshot) {
             return StreamBuilder<List<SubmittedGroupHistoryItem>>(
-              stream:
-                  widget.groupRepository.watchSubmittedGroupsForUser(widget.userId),
+              stream: widget.groupRepository
+                  .watchSubmittedGroupsForUser(widget.userId),
               builder: (context, submittedGroupsSnapshot) {
                 return StreamBuilder<List<LotteryForm>>(
                   stream: widget.repository.watchSavedForms(widget.userId),
                   builder: (context, savedFormsSnapshot) {
                     return StreamBuilder<List<UserGroupListItem>>(
-                      stream:
-                          widget.groupRepository.watchGroupsForUser(widget.userId),
+                      stream: widget.groupRepository
+                          .watchGroupsForUser(widget.userId),
                       builder: (context, activeGroupsSnapshot) {
                         return StreamBuilder<List<CancelledGroupHistoryItem>>(
                           stream: widget.groupRepository
                               .watchCancelledGroupsForUser(widget.userId),
                           builder: (context, cancelledGroupsSnapshot) {
-                        final List<SubmittedGroupHistoryItem> submittedGroups =
-                            submittedGroupsSnapshot.data ??
-                                const <SubmittedGroupHistoryItem>[];
-                        final List<CancelledGroupHistoryItem> cancelledGroups =
-                            cancelledGroupsSnapshot.data ??
-                                const <CancelledGroupHistoryItem>[];
-                        final Set<String> submittedGroupIds =
-                            submittedGroups.map((item) => item.groupId).toSet();
-                        final Set<String> cancelledGroupIds =
-                            cancelledGroups.map((item) => item.groupId).toSet();
+                            final List<SubmittedGroupHistoryItem>
+                                submittedGroups =
+                                submittedGroupsSnapshot.data ??
+                                    const <SubmittedGroupHistoryItem>[];
+                            final List<CancelledGroupHistoryItem>
+                                cancelledGroups =
+                                cancelledGroupsSnapshot.data ??
+                                    const <CancelledGroupHistoryItem>[];
+                            final Set<String> submittedGroupIds =
+                                submittedGroups
+                                    .map((item) => item.groupId)
+                                    .toSet();
+                            final Set<String> cancelledGroupIds =
+                                cancelledGroups
+                                    .map((item) => item.groupId)
+                                    .toSet();
 
-                        final List<_FormsListItem> submittedItems = [
-                          ...(submittedFormsSnapshot.data ??
-                                  const <LotteryForm>[])
-                              .where(
-                                (form) =>
-                                    form.status == LotteryFormStatus.submitted,
-                              )
-                              .map(
-                                (form) =>
-                                    _FormsListItem.personalSubmitted(form),
+                            final List<_FormsListItem> submittedItems = [
+                              ..._buildPersonalSubmittedItems(
+                                submittedForms: submittedFormsSnapshot.data ??
+                                    const <LotteryForm>[],
+                                personalBundles: personalBundlesSnapshot.data ??
+                                    const <PersonalSubmittedBundle>[],
                               ),
-                          ...(personalBundlesSnapshot.data ??
-                                  const <PersonalSubmittedBundle>[])
-                              .map(
-                                (bundle) =>
-                                    _FormsListItem.personalSubmissionBundle(bundle),
+                              ...submittedGroups.map(
+                                (item) => _FormsListItem.groupSubmitted(item),
                               ),
-                          ...submittedGroups.map(
-                            (item) => _FormsListItem.groupSubmitted(item),
-                          ),
-                        ]..sort(
-                            (a, b) => b.sortDate.compareTo(a.sortDate),
-                          );
+                            ]..sort(
+                                (a, b) => b.sortDate.compareTo(a.sortDate),
+                              );
 
-                        final List<_FormsListItem> draftItems = [
-                          ...(savedFormsSnapshot.data ?? const <LotteryForm>[])
-                              .where(
-                                (form) =>
-                                    form.status == LotteryFormStatus.saved,
-                              )
-                              .map(
-                                (form) => _FormsListItem.personalDraft(form),
+                            final List<_FormsListItem> draftItems = [
+                              ...(savedFormsSnapshot.data ??
+                                      const <LotteryForm>[])
+                                  .where(
+                                    (form) =>
+                                        form.status == LotteryFormStatus.saved,
+                                  )
+                                  .map(
+                                    (form) =>
+                                        _FormsListItem.personalDraft(form),
+                                  ),
+                              ...(activeGroupsSnapshot.data ??
+                                      const <UserGroupListItem>[])
+                                  .where(
+                                    (item) =>
+                                        item.groupStatus != 'submitted' &&
+                                        item.groupStatus != 'cancelled' &&
+                                        !submittedGroupIds
+                                            .contains(item.groupId) &&
+                                        !cancelledGroupIds
+                                            .contains(item.groupId),
+                                  )
+                                  .map(
+                                    (item) => _FormsListItem.groupDraft(item),
+                                  ),
+                            ]
+                                .where(
+                                  (item) => !_hiddenDraftItemKeys
+                                      .contains(item.stableKey),
+                                )
+                                .toList()
+                              ..sort(
+                                (a, b) => b.sortDate.compareTo(a.sortDate),
+                              );
+
+                            final List<_FormsListItem> cancelledItems = [
+                              ...cancelledGroups.map(
+                                (item) => _FormsListItem.groupCancelled(item),
                               ),
-                          ...(activeGroupsSnapshot.data ??
-                                  const <UserGroupListItem>[])
-                              .where(
-                                (item) =>
-                                    item.groupStatus != 'submitted' &&
-                                    item.groupStatus != 'cancelled' &&
-                                    !submittedGroupIds.contains(item.groupId) &&
-                                    !cancelledGroupIds.contains(item.groupId),
-                              )
-                              .map(
-                                (item) => _FormsListItem.groupDraft(item),
-                              ),
-                        ]
-                            .where(
-                              (item) => !_hiddenDraftItemKeys
-                                  .contains(item.stableKey),
-                            )
-                            .toList()
-                          ..sort(
-                            (a, b) => b.sortDate.compareTo(a.sortDate),
-                          );
+                            ]..sort(
+                                (a, b) => b.sortDate.compareTo(a.sortDate),
+                              );
 
-                        final List<_FormsListItem> cancelledItems = [
-                          ...cancelledGroups.map(
-                            (item) => _FormsListItem.groupCancelled(item),
-                          ),
-                        ]..sort(
-                            (a, b) => b.sortDate.compareTo(a.sortDate),
-                          );
-
-                        return ListView(
-                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                          children: [
-                            _FormsSection(
-                              viewerUserId: widget.userId,
-                              title: 'טפסים שנשלחו / שולמו',
-                              subtitle: 'טפסים אישיים וקבוצתיים שכבר הוגשו',
-                              items: submittedItems,
-                              emptyText: 'אין עדיין טפסים שנשלחו להצגה',
-                              onItemTap: (item) =>
-                                  _handleItemTap(context: context, item: item),
-                              onCancelDraft: null,
-                              dismissGeneration: 0,
-                              isExpanded: _expandedSectionIndex == 0,
-                              onToggle: () {
-                                setState(() {
-                                  _expandedSectionIndex =
-                                      _expandedSectionIndex == 0 ? null : 0;
-                                });
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            _FormsSection(
-                              viewerUserId: widget.userId,
-                              title: 'טיוטות',
-                              subtitle: 'טפסים שמורים או קבוצות שעדיין בתהליך',
-                              items: draftItems,
-                              emptyText: 'אין כרגע טיוטות להצגה',
-                              onItemTap: (item) =>
-                                  _handleItemTap(context: context, item: item),
-                              onCancelDraft: (item) async {
-                                if (item.kind != _FormsItemKind.groupDraft ||
-                                    item.groupId == null) {
-                                  return false;
-                                }
-
-                                final bool confirmed = await showDialog<bool>(
-                                      context: context,
-                                      builder: (dialogContext) => AlertDialog(
-                                        title: const Text('ביטול טופס קבוצתי'),
-                                        content: const Text(
-                                          'האם אתה בטוח? רק מי שכבר שילם על הטופס יזוכה בארנק שלו.',
-                                        ),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.of(
-                                              dialogContext,
-                                            ).pop(false),
-                                            child: const Text('חזרה'),
-                                          ),
-                                          FilledButton(
-                                            onPressed: () => Navigator.of(
-                                              dialogContext,
-                                            ).pop(true),
-                                            child: const Text('אשר ביטול'),
-                                          ),
-                                        ],
+                            return Directionality(
+                              textDirection: TextDirection.rtl,
+                              child: Column(
+                                children: [
+                                  Material(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                    child: TabBar(
+                                      controller: _tabController,
+                                      indicatorSize: TabBarIndicatorSize.tab,
+                                      dividerColor: Theme.of(context)
+                                          .colorScheme
+                                          .outlineVariant
+                                          .withValues(alpha: 0.35),
+                                      labelPadding:
+                                          const EdgeInsetsDirectional.symmetric(
+                                        horizontal: 8,
+                                        vertical: 12,
                                       ),
-                                    ) ??
-                                    false;
+                                      tabs: const [
+                                        Tab(text: 'טפסים שנשלחו'),
+                                        Tab(text: 'טיוטות'),
+                                        Tab(text: 'טפסים מבוטלים'),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: TabBarView(
+                                      controller: _tabController,
+                                      children: [
+                                        _FormsTabContent(
+                                          viewerUserId: widget.userId,
+                                          title: 'טפסים שנשלחו',
+                                          subtitle:
+                                              'טפסים אישיים וקבוצתיים שכבר הוגשו',
+                                          items: submittedItems,
+                                          emptyText:
+                                              'אין עדיין טפסים שנשלחו להצגה',
+                                          onItemTap: (item) => _handleItemTap(
+                                            context: context,
+                                            item: item,
+                                          ),
+                                          onCancelDraft: null,
+                                          dismissGeneration: 0,
+                                        ),
+                                        _FormsTabContent(
+                                          viewerUserId: widget.userId,
+                                          title: 'טיוטות',
+                                          subtitle:
+                                              'טפסים שמורים או קבוצות שעדיין בתהליך',
+                                          items: draftItems,
+                                          emptyText: 'אין כרגע טיוטות להצגה',
+                                          onItemTap: (item) => _handleItemTap(
+                                            context: context,
+                                            item: item,
+                                          ),
+                                          onCancelDraft: (item) async {
+                                            if (item.kind !=
+                                                    _FormsItemKind.groupDraft ||
+                                                item.groupId == null) {
+                                              return false;
+                                            }
 
-                                if (!confirmed) {
-                                  return false;
-                                }
+                                            final bool confirmed =
+                                                await showDialog<bool>(
+                                                      context: context,
+                                                      builder:
+                                                          (dialogContext) =>
+                                                              AlertDialog(
+                                                        title: const Text(
+                                                          'ביטול טופס קבוצתי',
+                                                        ),
+                                                        content: const Text(
+                                                          'האם אתה בטוח? רק מי שכבר שילם על הטופס יזוכה בארנק שלו.',
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.of(
+                                                              dialogContext,
+                                                            ).pop(false),
+                                                            child: const Text(
+                                                              'חזרה',
+                                                            ),
+                                                          ),
+                                                          FilledButton(
+                                                            onPressed: () =>
+                                                                Navigator.of(
+                                                              dialogContext,
+                                                            ).pop(true),
+                                                            child: const Text(
+                                                              'אשר ביטול',
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ) ??
+                                                    false;
 
-                                final bool cancelled = await widget
-                                    .onCancelGroupDraft(item.groupId!);
-                                if (cancelled && mounted) {
-                                  setState(() {
-                                    _hiddenDraftItemKeys.add(item.stableKey);
-                                    _draftDismissGeneration++;
-                                  });
-                                }
-                                return cancelled;
-                              },
-                              dismissGeneration: _draftDismissGeneration,
-                              isExpanded: _expandedSectionIndex == 1,
-                              onToggle: () {
-                                setState(() {
-                                  _expandedSectionIndex =
-                                      _expandedSectionIndex == 1 ? null : 1;
-                                });
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            _FormsSection(
-                              viewerUserId: widget.userId,
-                              title: 'טפסים שבוטלו',
-                              subtitle:
-                                  'טפסים קבוצתיים שבוטלו כולל זיכויים למי שכבר שילם',
-                              items: cancelledItems,
-                              emptyText: 'אין כרגע טפסים שבוטלו להצגה',
-                              onItemTap: (item) =>
-                                  _handleItemTap(context: context, item: item),
-                              onCancelDraft: null,
-                              dismissGeneration: 0,
-                              isExpanded: _expandedSectionIndex == 2,
-                              onToggle: () {
-                                setState(() {
-                                  _expandedSectionIndex =
-                                      _expandedSectionIndex == 2 ? null : 2;
-                                });
-                              },
-                            ),
-                          ],
-                        );
+                                            if (!confirmed) {
+                                              return false;
+                                            }
+
+                                            final bool cancelled =
+                                                await widget.onCancelGroupDraft(
+                                              item.groupId!,
+                                            );
+                                            if (cancelled && mounted) {
+                                              setState(() {
+                                                _hiddenDraftItemKeys.add(
+                                                  item.stableKey,
+                                                );
+                                                _draftDismissGeneration++;
+                                              });
+                                            }
+                                            return cancelled;
+                                          },
+                                          dismissGeneration:
+                                              _draftDismissGeneration,
+                                        ),
+                                        _FormsTabContent(
+                                          viewerUserId: widget.userId,
+                                          title: 'טפסים מבוטלים',
+                                          subtitle:
+                                              'טפסים קבוצתיים שבוטלו כולל זיכויים למי שכבר שילם',
+                                          items: cancelledItems,
+                                          emptyText:
+                                              'אין כרגע טפסים שבוטלו להצגה',
+                                          onItemTap: (item) => _handleItemTap(
+                                            context: context,
+                                            item: item,
+                                          ),
+                                          onCancelDraft: null,
+                                          dismissGeneration: 0,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
                           },
                         );
                       },
@@ -309,6 +359,165 @@ class _HistoryTabState extends State<HistoryTab> {
           ),
         );
     }
+  }
+
+  List<_FormsListItem> _buildPersonalSubmittedItems({
+    required List<LotteryForm> submittedForms,
+    required List<PersonalSubmittedBundle> personalBundles,
+  }) {
+    final Map<String, PersonalSubmittedBundle> bundlesById =
+        <String, PersonalSubmittedBundle>{
+      for (final PersonalSubmittedBundle bundle in personalBundles)
+        bundle.submissionId: bundle,
+    };
+
+    final Map<String, List<LotteryForm>> formsByBundleId =
+        <String, List<LotteryForm>>{};
+    final List<LotteryForm> standaloneForms = <LotteryForm>[];
+
+    for (final LotteryForm form in submittedForms) {
+      final String? bundleId = form.submissionId ?? form.parentSubmissionId;
+      if (bundleId == null || bundleId.isEmpty) {
+        standaloneForms.add(form);
+        continue;
+      }
+      formsByBundleId.putIfAbsent(bundleId, () => <LotteryForm>[]).add(form);
+    }
+
+    final List<_FormsListItem> items = <_FormsListItem>[
+      ...standaloneForms.map(_FormsListItem.personalSubmitted),
+    ];
+
+    final Set<String> handledBundleIds = <String>{};
+    for (final MapEntry<String, List<LotteryForm>> entry
+        in formsByBundleId.entries) {
+      final String bundleId = entry.key;
+      final PersonalSubmittedBundle? existingBundle = bundlesById[bundleId];
+      if (existingBundle != null) {
+        items.add(_FormsListItem.personalSubmissionBundle(existingBundle));
+        handledBundleIds.add(bundleId);
+        continue;
+      }
+      items.add(
+        _FormsListItem.personalSubmissionBundle(
+          _derivePersonalBundleFromForms(
+            submissionId: bundleId,
+            forms: entry.value,
+          ),
+        ),
+      );
+      handledBundleIds.add(bundleId);
+    }
+
+    for (final PersonalSubmittedBundle bundle in personalBundles) {
+      if (handledBundleIds.contains(bundle.submissionId)) {
+        continue;
+      }
+      items.add(_FormsListItem.personalSubmissionBundle(bundle));
+    }
+
+    return items;
+  }
+
+  PersonalSubmittedBundle _derivePersonalBundleFromForms({
+    required String submissionId,
+    required List<LotteryForm> forms,
+  }) {
+    final List<LotteryForm> sortedForms = List<LotteryForm>.from(forms)
+      ..sort((a, b) {
+        final int left =
+            (a.createdAt ?? a.savedAt ?? a.updatedAt ?? DateTime(0))
+                .millisecondsSinceEpoch;
+        final int right =
+            (b.createdAt ?? b.savedAt ?? b.updatedAt ?? DateTime(0))
+                .millisecondsSinceEpoch;
+        return left.compareTo(right);
+      });
+
+    final List<PersonalSubmittedBundleForm> bundleForms =
+        List<PersonalSubmittedBundleForm>.generate(
+      sortedForms.length,
+      (index) {
+        final LotteryForm form = sortedForms[index];
+        return PersonalSubmittedBundleForm(
+          formId: form.formId ?? '$submissionId-$index',
+          displayOrder: index + 1,
+          tableCount: form.tables.where((table) => !table.isEmpty).length,
+          cost: _calculatePersonalFormCost(form),
+          isDoubleMode: false,
+          lotteryId: form.lotteryId,
+          salesCloseAt: form.salesCloseAt,
+          tables: form.tables,
+          submittedAt: form.submittedAt,
+          printedAt: form.printedAt,
+          submittedToStationAt: form.submittedToStationAt,
+          resultPublishedAt: form.resultPublishedAt,
+          resultStatus: form.resultStatus,
+          winAmount: form.winAmount,
+          receiptUrl: form.printReadyUrl,
+        );
+      },
+    );
+
+    return PersonalSubmittedBundle(
+      submissionId: submissionId,
+      userId: sortedForms.first.userId,
+      formCount: bundleForms.length,
+      totalCost: bundleForms.fold<num>(
+        0,
+        (num total, PersonalSubmittedBundleForm form) => total + form.cost,
+      ),
+      lotteryId: sortedForms.fold<int?>(
+        null,
+        (int? current, LotteryForm form) =>
+            current ??
+            ((form.lotteryId != null && form.lotteryId! > 0)
+                ? form.lotteryId
+                : null),
+      ),
+      salesCloseAt: sortedForms.fold<DateTime?>(
+        null,
+        (DateTime? current, LotteryForm form) => current ?? form.salesCloseAt,
+      ),
+      submittedAt: sortedForms
+          .map((form) => form.submittedAt ?? form.updatedAt)
+          .whereType<DateTime>()
+          .fold<DateTime?>(
+            null,
+            (DateTime? latest, DateTime current) =>
+                latest == null || current.isAfter(latest) ? current : latest,
+          ),
+      resultPublishedAt: sortedForms
+          .map((form) => form.resultPublishedAt)
+          .whereType<DateTime>()
+          .fold<DateTime?>(
+            null,
+            (DateTime? latest, DateTime current) =>
+                latest == null || current.isAfter(latest) ? current : latest,
+          ),
+      totalWinningAmount: sortedForms.fold<num>(
+        0,
+        (num total, LotteryForm form) =>
+            total +
+            ((form.resultPublishedAt != null ||
+                    form.resultStatus == LotteryResultStatus.winner ||
+                    form.resultStatus == LotteryResultStatus.loser ||
+                    form.resultStatus == LotteryResultStatus.checked)
+                ? form.winAmount
+                : 0),
+      ),
+      forms: bundleForms,
+    );
+  }
+
+  num _calculatePersonalFormCost(LotteryForm form) {
+    final int populatedTableCount =
+        form.tables.where((table) => !table.isEmpty).length;
+    if (populatedTableCount <= 0) {
+      return 0;
+    }
+    final int tablePairs = (populatedTableCount / 2).ceil();
+    return tablePairs * 6;
   }
 }
 
@@ -412,8 +621,8 @@ class _FormsListItem {
   }
 }
 
-class _FormsSection extends StatelessWidget {
-  const _FormsSection({
+class _FormsTabContent extends StatelessWidget {
+  const _FormsTabContent({
     required this.viewerUserId,
     required this.title,
     required this.subtitle,
@@ -422,8 +631,6 @@ class _FormsSection extends StatelessWidget {
     required this.onItemTap,
     required this.onCancelDraft,
     required this.dismissGeneration,
-    required this.isExpanded,
-    required this.onToggle,
   });
 
   final String viewerUserId;
@@ -434,93 +641,59 @@ class _FormsSection extends StatelessWidget {
   final ValueChanged<_FormsListItem> onItemTap;
   final Future<bool> Function(_FormsListItem item)? onCancelDraft;
   final int dismissGeneration;
-  final bool isExpanded;
-  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            title,
-            textAlign: TextAlign.right,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
-          ),
-          const SizedBox(height: 6),
-          InkWell(
-            onTap: onToggle,
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                children: [
-                  AnimatedRotation(
-                    turns: isExpanded ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 220),
-                    child: const Icon(Icons.expand_more_rounded),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      subtitle,
-                      textAlign: TextAlign.right,
-                      style: Theme.of(context).textTheme.bodyMedium,
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                title,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
                     ),
-                  ),
-                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              emptyText,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          )
+        else
+          ...items.map(
+            (item) => Padding(
+              key: ValueKey<String>(item.stableKey),
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _FormsSummaryTile(
+                viewerUserId: viewerUserId,
+                item: item,
+                dismissGeneration: dismissGeneration,
+                onTap: () => onItemTap(item),
+                onDelete:
+                    onCancelDraft == null ? null : () => onCancelDraft!(item),
               ),
             ),
           ),
-          AnimatedCrossFade(
-            firstChild: const SizedBox.shrink(),
-            secondChild: Padding(
-              padding: const EdgeInsets.only(top: 14),
-              child: items.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: Text(
-                        emptyText,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    )
-                  : Column(
-                      children: items
-                          .map(
-                            (item) => Padding(
-                              key: ValueKey<String>(item.stableKey),
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: _FormsSummaryTile(
-                                viewerUserId: viewerUserId,
-                                item: item,
-                                dismissGeneration: dismissGeneration,
-                                onTap: () => onItemTap(item),
-                                onDelete: onCancelDraft == null
-                                    ? null
-                                    : () => onCancelDraft!(item),
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    ),
-            ),
-            crossFadeState: isExpanded
-                ? CrossFadeState.showSecond
-                : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 220),
-            sizeCurve: Curves.easeInOut,
-          ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -566,91 +739,93 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       );
     }
 
+    final bool cancellableGroupDraft =
+        widget.item.kind == _FormsItemKind.groupDraft &&
+            widget.item.groupId != null &&
+            widget.item.activeGroup?.creatorUserId == widget.viewerUserId &&
+            widget.onDelete != null;
+
     final Widget tile = Material(
       color: Theme.of(context).colorScheme.primaryContainer,
       borderRadius: BorderRadius.circular(16),
-      child: ListTile(
+      child: InkWell(
         onTap: widget.onTap,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 12),
+          child: Row(
+            textDirection: TextDirection.rtl,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _titleText(),
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildSubtitle(),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (cancellableGroupDraft)
+                    IconButton(
+                      onPressed: () async {
+                        final bool cancelled = await widget.onDelete!();
+                        if (cancelled && mounted) {
+                          setState(() => _isCollapsed = true);
+                        }
+                      },
+                      icon: const Icon(Icons.cancel_outlined),
+                      tooltip: 'ביטול טיוטה קבוצתית',
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  const Padding(
+                    padding: EdgeInsetsDirectional.only(top: 2),
+                    child: Icon(Icons.chevron_left),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-        title: Text(
-          _titleText(),
-          textAlign: TextAlign.right,
-          style: const TextStyle(fontWeight: FontWeight.w900),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: _buildSubtitle(),
-        ),
-        trailing: const Icon(Icons.chevron_left),
       ),
     );
 
-    final bool dismissibleGroupDraft =
-        widget.item.kind == _FormsItemKind.groupDraft &&
-            widget.item.groupId != null &&
-            widget.item.activeGroup?.creatorUserId == widget.viewerUserId;
-
-    if (widget.onDelete == null || !dismissibleGroupDraft) {
-      return tile;
-    }
-
-    return Dismissible(
-      key: ValueKey<String>(
-        'draft-group-${widget.item.groupId}-${widget.dismissGeneration}',
-      ),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.errorContainer,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Icon(
-          Icons.cancel_outlined,
-          color: Theme.of(context).colorScheme.onErrorContainer,
-        ),
-      ),
-      secondaryBackground: Container(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.errorContainer,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Icon(
-          Icons.cancel_outlined,
-          color: Theme.of(context).colorScheme.onErrorContainer,
-        ),
-      ),
-      confirmDismiss: (_) async {
-        final bool cancelled = await widget.onDelete!();
-        if (cancelled && mounted) {
-          setState(() => _isCollapsed = true);
-        }
-        return false;
-      },
-      child: tile,
-    );
+    return tile;
   }
 
   Widget _buildSubtitle() {
     if (widget.item.kind == _FormsItemKind.groupSubmitted ||
         widget.item.kind == _FormsItemKind.groupDraft ||
         widget.item.kind == _FormsItemKind.groupCancelled) {
-      return _GroupSummaryDetails(
-        item: widget.item,
-        viewerUserId: widget.viewerUserId,
+      return SizedBox(
+        width: double.infinity,
+        child: _GroupSummaryDetails(
+          item: widget.item,
+          viewerUserId: widget.viewerUserId,
+        ),
       );
     }
 
-    return Text(
-      _subtitleText(),
-      textAlign: TextAlign.right,
+    return SizedBox(
+      width: double.infinity,
+      child: Text(
+        _subtitleText(),
+        textAlign: TextAlign.right,
+      ),
     );
   }
 
@@ -674,27 +849,36 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
     switch (widget.item.kind) {
       case _FormsItemKind.personalSubmitted:
         final LotteryForm form = widget.item.personalForm!;
+        final DateTime? safeDrawDate =
+            _coerceSafeDrawDate(form.salesCloseAt, form.submittedAt);
         final List<String> lines = [
           'סטטוס: ${_personalStatusLabel(form)}',
+          'מס׳ הגרלה: ${form.lotteryId?.toString() ?? '—'}',
+          'תאריך הגרלה: ${_formatDate(safeDrawDate)}',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
           'זכייה: ${_personalWinningStatusLabel(form)}',
-          'תאריך הגרלה: ${_formatDate(form.salesCloseAt ?? form.submittedAt)}',
           'נשלח: ${_formatDate(form.submittedAt ?? form.updatedAt)}',
         ];
         return lines.join('\n');
       case _FormsItemKind.personalDraft:
         final LotteryForm form = widget.item.personalForm!;
         return [
+          'DEBUG DRAFTS v2',
           'סטטוס: טיוטה',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
           'זכייה: ממתין לתוצאות',
           'נוצר: ${_formatDate(form.createdAt ?? form.savedAt ?? form.updatedAt)}',
         ].join('\n');
       case _FormsItemKind.personalSubmissionBundle:
-        final PersonalSubmittedBundle bundle = widget.item.personalSubmissionBundle!;
+        final PersonalSubmittedBundle bundle =
+            widget.item.personalSubmissionBundle!;
+        final String bundleStatus = _bundleResultStatusLabel(bundle);
         return [
-          'סטטוס: נשלחו כמה טפסים אישיים',
+          'DEBUG PERSONAL BUNDLE v2',
+          'סטטוס: $bundleStatus',
           'מספר טפסים: ${bundle.formCount}',
+          'מס׳ הגרלה: ${_bundleLotteryIdLabel(bundle)}',
+          'תאריך הגרלה: ${_formatDate(_bundleLotteryDate(bundle))}',
           'סה״כ טבלאות: ${bundle.totalTableCount}',
           'עלות כוללת: ${bundle.totalCost} ש״ח',
           'זכייה: ${_bundleWinningStatusLabel(bundle)}',
@@ -710,6 +894,7 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.groupDraft:
         final UserGroupListItem group = widget.item.activeGroup!;
         return [
+          'DEBUG DRAFTS v2',
           'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
           'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
           'עלות שלי: ${_draftGroupCostLabel(group)}',
@@ -743,29 +928,131 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
   }
 
   String _personalWinningStatusLabel(LotteryForm form) {
-    if (form.resultStatus == null && form.winAmount <= 0) {
-      return 'ממתין לתוצאות';
+    if (!_isPersonalFormResultPublished(form)) {
+      return 'טרם פורסם';
     }
     return '${form.winAmount} ש״ח';
   }
 
   String _bundleWinningStatusLabel(PersonalSubmittedBundle bundle) {
     if (bundle.forms.isEmpty) {
-      return 'ממתין לתוצאות';
+      return 'טרם פורסם';
     }
 
-    final bool hasAnyResolvedResult = bundle.forms.any(
-      (form) => form.resultStatus != null || form.winAmount > 0,
+    final bool hasAnyPublishedResult = bundle.forms.any(
+      _isPersonalBundleFormResultPublished,
     );
-    if (!hasAnyResolvedResult) {
-      return 'ממתין לתוצאות';
+    if (!hasAnyPublishedResult) {
+      return 'טרם פורסם';
     }
 
     final num totalWinAmount = bundle.forms.fold<num>(
       0,
-      (num total, PersonalSubmittedBundleForm form) => total + form.winAmount,
+      (num total, PersonalSubmittedBundleForm form) =>
+          total +
+          (_isPersonalBundleFormResultPublished(form) ? form.winAmount : 0),
     );
     return '$totalWinAmount ש״ח';
+  }
+
+  String _bundleResultStatusLabel(PersonalSubmittedBundle bundle) {
+    if (bundle.forms.isEmpty) {
+      return 'נשלחו כמה טפסים אישיים';
+    }
+    final bool hasAnyPublishedResult = bundle.forms.any(
+      _isPersonalBundleFormResultPublished,
+    );
+    if (!hasAnyPublishedResult) {
+      return 'ממתין לתוצאות';
+    }
+    if (bundle.forms
+        .any((form) => form.resultStatus == LotteryResultStatus.winner)) {
+      return 'פורסמו תוצאות';
+    }
+    if (bundle.forms.every(
+      (form) => form.resultStatus == LotteryResultStatus.loser,
+    )) {
+      return 'ללא זכייה';
+    }
+    return 'פורסמו תוצאות';
+  }
+
+  String _bundleLotteryIdLabel(PersonalSubmittedBundle bundle) {
+    String sourceOfLotteryId = 'none';
+    String? resolvedLotteryId;
+    debugPrint(
+      '[PersonalBundleCardDebug] bundleId=${bundle.submissionId} forms=${bundle.forms.length}',
+    );
+    for (final PersonalSubmittedBundleForm form in bundle.forms) {
+      debugPrint(
+        '[PersonalBundleCardDebug] formId=${form.formId} submissionId=${bundle.submissionId} lotteryId=${form.lotteryId?.toString() ?? 'null'} drawNumberAlias=${form.lotteryId?.toString() ?? 'null'} salesCloseAt=${form.salesCloseAt?.toIso8601String() ?? 'null'} drawDateAlias=${form.salesCloseAt?.toIso8601String() ?? 'null'} submittedAt=${form.submittedAt?.toIso8601String() ?? 'null'} resultStatus=${form.resultStatus?.value ?? 'null'} resultPublishedAt=${form.resultPublishedAt?.toIso8601String() ?? 'null'}',
+      );
+      if (form.lotteryId != null && form.lotteryId! > 0) {
+        sourceOfLotteryId = 'childForm';
+        resolvedLotteryId = form.lotteryId!.toString();
+        break;
+      }
+    }
+    if (resolvedLotteryId == null &&
+        bundle.lotteryId != null &&
+        bundle.lotteryId! > 0) {
+      sourceOfLotteryId = 'parentSubmission';
+      resolvedLotteryId = bundle.lotteryId!.toString();
+    }
+    debugPrint(
+      '[PersonalBundleCardDebug] bundleId=${bundle.submissionId} resolvedLotteryId=${resolvedLotteryId ?? 'null'} sourceOfLotteryId=$sourceOfLotteryId',
+    );
+    return resolvedLotteryId ?? '—';
+  }
+
+  DateTime? _bundleLotteryDate(PersonalSubmittedBundle bundle) {
+    String sourceOfDrawDate = 'none';
+    DateTime? resolvedDrawDate;
+    for (final PersonalSubmittedBundleForm form in bundle.forms) {
+      final DateTime? safeChildDrawDate = _coerceSafeDrawDate(
+        form.salesCloseAt,
+        form.submittedAt ?? bundle.submittedAt,
+      );
+      if (safeChildDrawDate != null) {
+        sourceOfDrawDate = 'childForm';
+        resolvedDrawDate = safeChildDrawDate;
+        break;
+      }
+    }
+    final DateTime? safeParentDrawDate =
+        _coerceSafeDrawDate(bundle.salesCloseAt, bundle.submittedAt);
+    if (resolvedDrawDate == null && safeParentDrawDate != null) {
+      sourceOfDrawDate = 'parentSubmission';
+      resolvedDrawDate = safeParentDrawDate;
+    }
+    debugPrint(
+      '[PersonalBundleCardDebug] bundleId=${bundle.submissionId} resolvedDrawDate=${resolvedDrawDate?.toIso8601String() ?? 'null'} sourceOfDrawDate=$sourceOfDrawDate',
+    );
+    return resolvedDrawDate;
+  }
+
+  bool _isPersonalFormResultPublished(LotteryForm form) {
+    return form.resultPublishedAt != null ||
+        form.resultStatus == LotteryResultStatus.winner ||
+        form.resultStatus == LotteryResultStatus.loser ||
+        form.resultStatus == LotteryResultStatus.checked;
+  }
+
+  bool _isPersonalBundleFormResultPublished(PersonalSubmittedBundleForm form) {
+    return form.resultPublishedAt != null ||
+        form.resultStatus == LotteryResultStatus.winner ||
+        form.resultStatus == LotteryResultStatus.loser ||
+        form.resultStatus == LotteryResultStatus.checked;
+  }
+
+  DateTime? _coerceSafeDrawDate(DateTime? drawDate, DateTime? submittedAt) {
+    if (drawDate == null) {
+      return null;
+    }
+    if (submittedAt == null || !drawDate.isBefore(submittedAt)) {
+      return drawDate;
+    }
+    return null;
   }
 
   String _groupStatusLabel(String rawStatus) {
@@ -857,73 +1144,176 @@ class _GroupSummaryDetails extends StatelessWidget {
         final String? creatorUserId = groupData['creatorUserId'] as String?;
         final String? submittedFormId = groupData['submittedFormId'] as String?;
         final String? sourceFormId = groupData['sourceFormId'] as String?;
+        final _GroupHistoryFormMeta directMeta =
+            _extractGroupHistoryMeta(groupData);
+        final _GroupResultDisplay summaryResultDisplay =
+            _resolveGroupResultDisplay(
+          groupData: groupData,
+          submittedGroup: item.submittedGroup,
+        );
+        final String? fallbackFormId = submittedFormId?.isNotEmpty == true
+            ? submittedFormId
+            : sourceFormId;
 
-        if (item.kind == _FormsItemKind.groupSubmitted &&
-            creatorUserId != null &&
-            creatorUserId.isNotEmpty &&
-            submittedFormId != null &&
-            submittedFormId.isNotEmpty) {
-          return Text(
-            _submittedText(
-              submittedAt: submittedAt,
-            ),
-            textAlign: TextAlign.right,
-          );
-        }
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('lottery_groups')
+              .doc(groupId)
+              .collection('forms')
+              .snapshots(),
+          builder: (context, groupFormsSnapshot) {
+            final bool childQueryExecuted =
+                groupFormsSnapshot.connectionState != ConnectionState.none;
+            final String? childQueryError = groupFormsSnapshot.error?.toString();
+            final int loadedChildDocsCount =
+                groupFormsSnapshot.data?.docs.length ?? 0;
+            final List<Map<String, dynamic>> canonicalForms = groupFormsSnapshot
+                    .data?.docs
+                    .map((doc) => doc.data())
+                    .toList() ??
+                const <Map<String, dynamic>>[];
+            final _GroupResultDisplay resultDisplay =
+                _resolveEffectiveGroupResultDisplay(
+              groupData: groupData,
+              submittedGroup: item.submittedGroup,
+              canonicalForms: canonicalForms,
+              viewerUserId: viewerUserId,
+              fallbackDisplay: summaryResultDisplay,
+              hasLoadedCanonicalForms: loadedChildDocsCount > 0,
+            );
+            final _GroupResultDebugInfo debugInfo = _buildGroupResultDebugInfo(
+              groupId: groupId,
+              summaryDisplay: summaryResultDisplay,
+              effectiveDisplay: resultDisplay,
+              canonicalForms: canonicalForms,
+              loadedChildDocsCount: loadedChildDocsCount,
+              childQueryExecuted: childQueryExecuted,
+              childQueryError: childQueryError,
+            );
+            debugPrint(
+              '[GroupCardDebug] groupId=$groupId childFormsCount=${debugInfo.childFormsCount} loadedChildDocsCount=${debugInfo.loadedChildDocsCount} childQueryExecuted=${debugInfo.childQueryExecuted} childQueryError=${debugInfo.childQueryError ?? 'null'} publishedFormsCount=${debugInfo.publishedFormsCount} sumWinAmount=${debugInfo.sumWinAmount} resolvedHasPublishedResults=${debugInfo.resolvedHasPublishedResults} sourceUsed=${debugInfo.sourceUsed} summaryPublished=${summaryResultDisplay.isPublished} summaryGroupWinningAmount=${summaryResultDisplay.groupWinningAmount} effectiveGroupWinningAmount=${resultDisplay.groupWinningAmount} effectiveMyWinningAmount=${resultDisplay.myWinningAmount}',
+            );
 
-        if (item.kind == _FormsItemKind.groupDraft &&
-            creatorUserId != null &&
-            creatorUserId.isNotEmpty &&
-            sourceFormId != null &&
-            sourceFormId.isNotEmpty) {
-          return Text(
-            _draftText(
-              createdAt: createdAt,
-            ),
-            textAlign: TextAlign.right,
-          );
-        }
+            if (directMeta.hasAnyValue) {
+              return Text(
+                _resolvedText(
+                  meta: directMeta,
+                  resultDisplay: resultDisplay,
+                  debugInfo: debugInfo,
+                  createdAt: createdAt,
+                  submittedAt: submittedAt,
+                ),
+                textAlign: TextAlign.right,
+              );
+            }
 
-        if (item.kind == _FormsItemKind.groupCancelled) {
-          return Text(
-            _cancelledText(),
-            textAlign: TextAlign.right,
-          );
-        }
+            if (creatorUserId != null &&
+                creatorUserId.isNotEmpty &&
+                fallbackFormId != null &&
+                fallbackFormId.isNotEmpty) {
+              return FutureBuilder<_GroupHistoryFormMeta>(
+                future: _loadFormMetaFromSourceForm(
+                  creatorUserId: creatorUserId,
+                  formId: fallbackFormId,
+                ),
+                builder: (context, metaSnapshot) {
+                  return Text(
+                    _resolvedText(
+                      meta: metaSnapshot.data ?? const _GroupHistoryFormMeta(),
+                      resultDisplay: resultDisplay,
+                      debugInfo: debugInfo,
+                      createdAt: createdAt,
+                      submittedAt: submittedAt,
+                    ),
+                    textAlign: TextAlign.right,
+                  );
+                },
+              );
+            }
 
-        return Text(
-          _draftText(createdAt: createdAt),
-          textAlign: TextAlign.right,
+            return Text(
+              _resolvedText(
+                meta: const _GroupHistoryFormMeta(),
+                resultDisplay: resultDisplay,
+                debugInfo: debugInfo,
+                createdAt: createdAt,
+                submittedAt: submittedAt,
+              ),
+              textAlign: TextAlign.right,
+            );
+          },
         );
       },
     );
   }
 
+  String _resolvedText({
+    required _GroupHistoryFormMeta meta,
+    required _GroupResultDisplay resultDisplay,
+    required _GroupResultDebugInfo debugInfo,
+    required DateTime? createdAt,
+    required DateTime? submittedAt,
+  }) {
+    if (item.kind == _FormsItemKind.groupSubmitted) {
+      return _submittedText(
+        submittedAt: submittedAt,
+        meta: meta,
+        resultDisplay: resultDisplay,
+        debugInfo: debugInfo,
+      );
+    }
+    if (item.kind == _FormsItemKind.groupCancelled) {
+      return _cancelledText(meta: meta);
+    }
+    return _draftText(
+      createdAt: createdAt,
+      meta: meta,
+    );
+  }
+
   String _submittedText({
     required DateTime? submittedAt,
+    required _GroupHistoryFormMeta meta,
+    required _GroupResultDisplay resultDisplay,
+    required _GroupResultDebugInfo debugInfo,
   }) {
     final SubmittedGroupHistoryItem group = item.submittedGroup!;
 
     final List<String> lines = <String>[
+      'DEBUG GROUP CARD v2',
       'נוצר על ידי: ${group.creatorName}',
       'סטטוס: ${_submittedStatusLabel(group.dispatchStatus)}',
-      'מס׳ הגרלה: —',
+      'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
+      'תאריך הגרלה: ${formatPresentationDateTime(meta.lotteryDate ?? submittedAt ?? group.submittedAt)}',
       'העלות שלי: ${group.myEffectiveShare} ש״ח',
       'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
-      'הזכייה שלי: טרם פורסם',
+      'זכייה קבוצתית: ${resultDisplay.groupLabel}',
+      'הזכייה שלי: ${resultDisplay.myLabel}',
+      '',
+      '[debug] groupId: ${debugInfo.groupId}',
+      '[debug] childFormsCount: ${debugInfo.childFormsCount}',
+      '[debug] loadedChildDocsCount: ${debugInfo.loadedChildDocsCount}',
+      '[debug] childQueryExecuted: ${debugInfo.childQueryExecuted}',
+      '[debug] childQueryError: ${debugInfo.childQueryError ?? 'null'}',
+      '[debug] publishedFormsCount: ${debugInfo.publishedFormsCount}',
+      '[debug] sumWinAmount: ${debugInfo.sumWinAmount}',
+      '[debug] resolvedHasPublishedResults: ${debugInfo.resolvedHasPublishedResults}',
+      '[debug] source used: ${debugInfo.sourceUsed}',
     ];
     return lines.join('\n');
   }
 
   String _draftText({
     required DateTime? createdAt,
+    required _GroupHistoryFormMeta meta,
   }) {
     if (item.kind == _FormsItemKind.groupDraft) {
       final UserGroupListItem group = item.activeGroup!;
       return [
         'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
         'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-        'מס׳ הגרלה: —',
+        'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
+        'תאריך הגרלה: ${formatPresentationDateTime(meta.lotteryDate ?? createdAt ?? group.updatedAt)}',
         'עלות שלי: ${_draftGroupCostLabel(group)}',
         'נוצר: ${formatPresentationDateTime(createdAt ?? group.updatedAt)}',
         'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
@@ -933,11 +1323,15 @@ class _GroupSummaryDetails extends StatelessWidget {
     return _fallbackText();
   }
 
-  String _cancelledText() {
+  String _cancelledText({
+    required _GroupHistoryFormMeta meta,
+  }) {
     final CancelledGroupHistoryItem group = item.cancelledGroup!;
     return [
       'נוצר על ידי: ${group.creatorName}',
       'סטטוס: בוטל',
+      'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
+      'תאריך הגרלה: ${formatPresentationDateTime(meta.lotteryDate ?? group.cancelledAt)}',
       'בוטל על ידי: ${group.cancelledByDisplayName}',
       'מועד ביטול: ${formatPresentationDateTime(group.cancelledAt)}',
       'זיכוי לארנק: ${group.myRefundAmount} ש״ח',
@@ -970,7 +1364,7 @@ class _GroupSummaryDetails extends StatelessWidget {
     }
 
     if (item.kind == _FormsItemKind.groupCancelled) {
-      return _cancelledText();
+      return _cancelledText(meta: const _GroupHistoryFormMeta());
     }
 
     final UserGroupListItem group = item.activeGroup!;
@@ -1024,4 +1418,326 @@ class _GroupSummaryDetails extends StatelessWidget {
     }
     return 'ייקבע בהמשך';
   }
+
+  _GroupHistoryFormMeta _extractGroupHistoryMeta(
+      Map<String, dynamic> groupData) {
+    final int? directLotteryId = (groupData['lotteryId'] as num?)?.toInt();
+    final DateTime? directLotteryDate =
+        presentationAsDateTime(groupData['salesCloseAt']);
+    final Map<String, dynamic> snapshot = Map<String, dynamic>.from(
+      groupData['formSnapshot'] as Map? ?? const <String, dynamic>{},
+    );
+    return _GroupHistoryFormMeta(
+      lotteryIdLabel:
+          (directLotteryId ?? (snapshot['lotteryId'] as num?)?.toInt())
+              ?.toString(),
+      lotteryDate:
+          directLotteryDate ?? presentationAsDateTime(snapshot['salesCloseAt']),
+    );
+  }
+
+  Future<_GroupHistoryFormMeta> _loadFormMetaFromSourceForm({
+    required String creatorUserId,
+    required String formId,
+  }) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> formSnapshot =
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(creatorUserId)
+              .collection('forms')
+              .doc(formId)
+              .get();
+      final Map<String, dynamic> data =
+          formSnapshot.data() ?? const <String, dynamic>{};
+      final int? lotteryId = (data['lotteryId'] as num?)?.toInt();
+      return _GroupHistoryFormMeta(
+        lotteryIdLabel: lotteryId?.toString(),
+        lotteryDate: presentationAsDateTime(data['salesCloseAt']),
+      );
+    } catch (_) {
+      return const _GroupHistoryFormMeta();
+    }
+  }
+}
+
+class _GroupHistoryFormMeta {
+  const _GroupHistoryFormMeta({
+    this.lotteryIdLabel,
+    this.lotteryDate,
+  });
+
+  final String? lotteryIdLabel;
+  final DateTime? lotteryDate;
+
+  bool get hasAnyValue => lotteryIdLabel != null || lotteryDate != null;
+}
+
+class _GroupResultDisplay {
+  const _GroupResultDisplay({
+    required this.isPublished,
+    required this.groupWinningAmount,
+    required this.myWinningAmount,
+  });
+
+  final bool isPublished;
+  final num groupWinningAmount;
+  final num myWinningAmount;
+
+  String get groupLabel =>
+      isPublished ? '$groupWinningAmount ש״ח' : 'טרם פורסם';
+  String get myLabel => isPublished ? '$myWinningAmount ש״ח' : 'טרם פורסם';
+}
+
+class _GroupResultDebugInfo {
+  const _GroupResultDebugInfo({
+    required this.groupId,
+    required this.childFormsCount,
+    required this.loadedChildDocsCount,
+    required this.childQueryExecuted,
+    required this.childQueryError,
+    required this.publishedFormsCount,
+    required this.sumWinAmount,
+    required this.resolvedHasPublishedResults,
+    required this.sourceUsed,
+  });
+
+  final String groupId;
+  final int childFormsCount;
+  final int loadedChildDocsCount;
+  final bool childQueryExecuted;
+  final String? childQueryError;
+  final int publishedFormsCount;
+  final num sumWinAmount;
+  final bool resolvedHasPublishedResults;
+  final String sourceUsed;
+}
+
+_GroupResultDisplay _resolveGroupResultDisplay({
+  required Map<String, dynamic> groupData,
+  required SubmittedGroupHistoryItem? submittedGroup,
+}) {
+  final DateTime? resultPublishedAt =
+      presentationAsDateTime(groupData['resultPublishedAt']) ??
+          submittedGroup?.resultPublishedAt;
+  final String resultStatus =
+      (groupData['resultStatus'] as String?)?.trim() ?? '';
+  final bool hasAmount = _hasFiniteNumericValue(
+    <dynamic>[
+      groupData['groupWinningAmount'],
+      submittedGroup?.groupWinningAmount,
+      groupData['winAmount'],
+      groupData['winningAmount'],
+      groupData['myWinningAmount'],
+      submittedGroup?.myWinningAmount,
+    ],
+  );
+  final bool isPublished = resultPublishedAt != null ||
+      resultStatus == 'winner' ||
+      resultStatus == 'loser' ||
+      resultStatus == 'checked' ||
+      (hasAmount && !_isPendingGroupResultStatus(resultStatus));
+
+  final num groupWinningAmount = _firstNumericValue(
+    <dynamic>[
+      groupData['groupWinningAmount'],
+      submittedGroup?.groupWinningAmount,
+      groupData['winAmount'],
+      groupData['winningAmount'],
+    ],
+  );
+
+  num myWinningAmount = _firstNumericValue(
+    <dynamic>[
+      groupData['myWinningAmount'],
+      submittedGroup?.myWinningAmount,
+    ],
+  );
+
+  final int effectiveParticipantCount =
+      (groupData['effectiveParticipantCount'] as num?)?.toInt() ??
+          (groupData['finalizedParticipantCount'] as num?)?.toInt() ??
+          ((groupData['paidParticipants'] as List<dynamic>?)?.length ?? 0);
+  if (myWinningAmount == 0 &&
+      groupWinningAmount >= 0 &&
+      effectiveParticipantCount == 1) {
+    myWinningAmount = groupWinningAmount;
+  }
+
+  return _GroupResultDisplay(
+    isPublished: isPublished,
+    groupWinningAmount: groupWinningAmount,
+    myWinningAmount: myWinningAmount,
+  );
+}
+
+_GroupResultDisplay _resolveEffectiveGroupResultDisplay({
+  required Map<String, dynamic> groupData,
+  required SubmittedGroupHistoryItem? submittedGroup,
+  required List<Map<String, dynamic>> canonicalForms,
+  required String viewerUserId,
+  required _GroupResultDisplay fallbackDisplay,
+  required bool hasLoadedCanonicalForms,
+}) {
+  final _GroupResultDisplay canonicalDisplay =
+      _resolveGroupResultDisplayFromForms(
+    canonicalForms: canonicalForms,
+    viewerUserId: viewerUserId,
+  );
+  if (hasLoadedCanonicalForms) {
+    return canonicalDisplay;
+  }
+  return fallbackDisplay;
+}
+
+_GroupResultDebugInfo _buildGroupResultDebugInfo({
+  required String groupId,
+  required _GroupResultDisplay summaryDisplay,
+  required _GroupResultDisplay effectiveDisplay,
+  required List<Map<String, dynamic>> canonicalForms,
+  required int loadedChildDocsCount,
+  required bool childQueryExecuted,
+  required String? childQueryError,
+}) {
+  final int publishedFormsCount =
+      canonicalForms.where(_isCanonicalGroupFormPublished).length;
+  final num sumWinAmount = canonicalForms.fold<num>(
+    0,
+    (num total, Map<String, dynamic> form) => total + _groupFormAmount(form),
+  );
+  final String sourceUsed =
+      loadedChildDocsCount > 0 ? 'canonical forms' : 'summary';
+  return _GroupResultDebugInfo(
+    groupId: groupId,
+    childFormsCount: canonicalForms.length,
+    loadedChildDocsCount: loadedChildDocsCount,
+    childQueryExecuted: childQueryExecuted,
+    childQueryError: childQueryError,
+    publishedFormsCount: publishedFormsCount,
+    sumWinAmount: sumWinAmount,
+    resolvedHasPublishedResults: effectiveDisplay.isPublished,
+    sourceUsed: sourceUsed,
+  );
+}
+
+_GroupResultDisplay _resolveGroupResultDisplayFromForms({
+  required List<Map<String, dynamic>> canonicalForms,
+  required String viewerUserId,
+}) {
+  if (canonicalForms.isEmpty) {
+    return const _GroupResultDisplay(
+      isPublished: false,
+      groupWinningAmount: 0,
+      myWinningAmount: 0,
+    );
+  }
+
+  final bool isPublished = canonicalForms.any(_isCanonicalGroupFormPublished);
+
+  final num groupWinningAmount = canonicalForms.fold<num>(
+    0,
+    (num total, Map<String, dynamic> form) => total + _groupFormAmount(form),
+  );
+
+  final num myWinningAmount = canonicalForms.fold<num>(
+    0,
+    (num total, Map<String, dynamic> form) =>
+        total + _resolveViewerWinningAmountFromGroupForm(form, viewerUserId),
+  );
+
+  return _GroupResultDisplay(
+    isPublished: isPublished,
+    groupWinningAmount: groupWinningAmount,
+    myWinningAmount: myWinningAmount,
+  );
+}
+
+bool _isCanonicalGroupFormPublished(Map<String, dynamic> form) {
+  final String resultStatus = (form['resultStatus'] as String?)?.trim() ?? '';
+  final bool hasAmount = _hasFiniteNumericValue(
+    <dynamic>[
+      form['groupWinningAmount'],
+      form['winAmount'],
+      form['winningAmount'],
+    ],
+  );
+  final bool isWaitingStatus = _isPendingGroupResultStatus(resultStatus);
+  return presentationAsDateTime(form['resultPublishedAt']) != null ||
+      resultStatus == 'winner' ||
+      resultStatus == 'loser' ||
+      resultStatus == 'checked' ||
+      (hasAmount && !isWaitingStatus);
+}
+
+bool _isPendingGroupResultStatus(String status) {
+  final String normalized = status.trim().toLowerCase();
+  return normalized.isEmpty ||
+      normalized == 'waiting_for_results' ||
+      normalized == 'waitingforresults' ||
+      normalized == 'pending';
+}
+
+bool _hasFiniteNumericValue(List<dynamic> values) {
+  for (final dynamic value in values) {
+    if (value is num && value.isFinite) {
+      return true;
+    }
+  }
+  return false;
+}
+
+num _groupFormAmount(Map<String, dynamic> form) {
+  if (form.containsKey('groupWinningAmount') &&
+      form['groupWinningAmount'] is num) {
+    return form['groupWinningAmount'] as num;
+  }
+  if (form.containsKey('winAmount') && form['winAmount'] is num) {
+    return form['winAmount'] as num;
+  }
+  if (form.containsKey('winningAmount') && form['winningAmount'] is num) {
+    return form['winningAmount'] as num;
+  }
+  return 0;
+}
+
+num _resolveViewerWinningAmountFromGroupForm(
+  Map<String, dynamic> form,
+  String viewerUserId,
+) {
+  final num explicit = _firstNumericValue(<dynamic>[form['myWinningAmount']]);
+  if (explicit > 0) {
+    return explicit;
+  }
+
+  final dynamic winAllocations = form['winAllocations'];
+  if (winAllocations is List) {
+    for (final dynamic entry in winAllocations) {
+      if (entry is Map &&
+          (entry['userId'] as String?)?.trim() == viewerUserId) {
+        return _firstNumericValue(<dynamic>[entry['amount']]);
+      }
+    }
+  } else if (winAllocations is Map) {
+    final dynamic direct = winAllocations[viewerUserId];
+    if (direct is num) {
+      return direct;
+    }
+  }
+
+  final int effectiveParticipantCount =
+      (form['effectiveParticipantCount'] as num?)?.toInt() ??
+          ((form['paidParticipants'] as List<dynamic>?)?.length ?? 0);
+  if (effectiveParticipantCount == 1) {
+    return _groupFormAmount(form);
+  }
+  return 0;
+}
+
+num _firstNumericValue(List<dynamic> candidates) {
+  for (final dynamic candidate in candidates) {
+    if (candidate is num) {
+      return candidate;
+    }
+  }
+  return 0;
 }

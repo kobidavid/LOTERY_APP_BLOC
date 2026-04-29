@@ -11,6 +11,11 @@ enum LotteryGroupStatus {
   cancelled,
 }
 
+enum LotteryGroupBundleType {
+  singleForm,
+  multiForm,
+}
+
 extension LotteryGroupStatusX on LotteryGroupStatus {
   String get value {
     switch (this) {
@@ -55,6 +60,14 @@ class LotteryGroup extends Equatable {
     required this.printReadyGeneratedAt,
     required this.printedAt,
     required this.submittedToStationAt,
+    required this.lotteryId,
+    required this.salesCloseAt,
+    required this.resultPublishedAt,
+    required this.groupWinningAmount,
+    required this.bundleType,
+    required this.formCount,
+    required this.totalTableCount,
+    required this.totalCost,
   });
 
   final String groupId;
@@ -82,8 +95,17 @@ class LotteryGroup extends Equatable {
   final DateTime? printReadyGeneratedAt;
   final DateTime? printedAt;
   final DateTime? submittedToStationAt;
+  final int? lotteryId;
+  final DateTime? salesCloseAt;
+  final DateTime? resultPublishedAt;
+  final num groupWinningAmount;
+  final LotteryGroupBundleType bundleType;
+  final int formCount;
+  final int totalTableCount;
+  final num totalCost;
 
   int get populatedTableCount => tables.where((table) => !table.isEmpty).length;
+  bool get isMultiFormBundle => bundleType == LotteryGroupBundleType.multiForm;
 
   static DateTime? _asDateTime(dynamic value) {
     if (value is Timestamp) {
@@ -133,6 +155,22 @@ class LotteryGroup extends Equatable {
       printReadyGeneratedAt: _asDateTime(map['printReadyGeneratedAt']),
       printedAt: _asDateTime(map['printedAt']),
       submittedToStationAt: _asDateTime(map['submittedToStationAt']),
+      lotteryId: (map['lotteryId'] as num?)?.toInt() ??
+          (map['drawNumber'] as num?)?.toInt() ??
+          (snapshot['lotteryId'] as num?)?.toInt(),
+      salesCloseAt: _asDateTime(map['salesCloseAt']) ??
+          _asDateTime(map['drawDate']) ??
+          _asDateTime(snapshot['salesCloseAt']),
+      resultPublishedAt: _asDateTime(map['resultPublishedAt']),
+      groupWinningAmount: (map['groupWinningAmount'] as num?) ?? 0,
+      bundleType: _bundleTypeFromString(map['bundleType'] as String?),
+      formCount: (map['formCount'] as num?)?.toInt() ?? 1,
+      totalTableCount: (map['totalTableCount'] as num?)?.toInt() ??
+          rawTables
+              .map((item) => LotteryTable.fromMap(item as Map<String, dynamic>))
+              .where((table) => !table.isEmpty)
+              .length,
+      totalCost: (map['totalCost'] as num?) ?? (map['baseTicketCost'] as num?) ?? 0,
     );
   }
 
@@ -148,6 +186,15 @@ class LotteryGroup extends Equatable {
         return LotteryGroupStatus.cancelled;
       default:
         return LotteryGroupStatus.collectingResponses;
+    }
+  }
+
+  static LotteryGroupBundleType _bundleTypeFromString(String? value) {
+    switch (value) {
+      case 'multi_form':
+        return LotteryGroupBundleType.multiForm;
+      default:
+        return LotteryGroupBundleType.singleForm;
     }
   }
 
@@ -178,5 +225,149 @@ class LotteryGroup extends Equatable {
         printReadyGeneratedAt,
         printedAt,
         submittedToStationAt,
+        lotteryId,
+        salesCloseAt,
+        resultPublishedAt,
+        groupWinningAmount,
+        bundleType,
+        formCount,
+        totalTableCount,
+        totalCost,
       ];
+}
+
+class LotteryGroupForm extends Equatable {
+  const LotteryGroupForm({
+    required this.formId,
+    required this.groupId,
+    required this.displayOrder,
+    required this.sourceUserId,
+    required this.sourceDraftNumber,
+    required this.status,
+    required this.mode,
+    required this.isDoubleMode,
+    required this.tableCount,
+    required this.cost,
+    required this.tables,
+    required this.isComplete,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.dispatchStatus,
+    required this.printReadyUrl,
+    required this.printedAt,
+    required this.submittedToStationAt,
+    required this.resultStatus,
+    required this.winAmount,
+    required this.receiptUrl,
+    required this.lotteryId,
+    required this.salesCloseAt,
+    required this.rawData,
+  });
+
+  final String formId;
+  final String groupId;
+  final int displayOrder;
+  final String sourceUserId;
+  final int sourceDraftNumber;
+  final String status;
+  final String mode;
+  final bool isDoubleMode;
+  final int tableCount;
+  final num cost;
+  final List<LotteryTable> tables;
+  final bool isComplete;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+  final String? dispatchStatus;
+  final String? printReadyUrl;
+  final DateTime? printedAt;
+  final DateTime? submittedToStationAt;
+  final String? resultStatus;
+  final num? winAmount;
+  final String? receiptUrl;
+  final int? lotteryId;
+  final DateTime? salesCloseAt;
+  final Map<String, dynamic> rawData;
+
+  factory LotteryGroupForm.fromFirestore(
+    String formId,
+    Map<String, dynamic> map,
+  ) {
+    final List<dynamic> rawTables = map['tables'] as List<dynamic>? ?? <dynamic>[];
+    return LotteryGroupForm(
+      formId: formId,
+      groupId: map['groupId'] as String? ?? '',
+      displayOrder: (map['displayOrder'] as num?)?.toInt() ?? 0,
+      sourceUserId: map['sourceUserId'] as String? ?? '',
+      sourceDraftNumber: (map['sourceDraftNumber'] as num?)?.toInt() ?? 0,
+      status: map['status'] as String? ?? '',
+      mode: map['mode'] as String? ?? '',
+      isDoubleMode: map['isDoubleMode'] as bool? ?? false,
+      tableCount: (map['tableCount'] as num?)?.toInt() ?? rawTables.length,
+      cost: (map['cost'] as num?) ?? 0,
+      tables: rawTables
+          .map((item) => LotteryTable.fromMap(item as Map<String, dynamic>))
+          .toList(),
+      isComplete: map['isComplete'] as bool? ?? false,
+      createdAt: LotteryGroup._asDateTime(map['createdAt']),
+      updatedAt: LotteryGroup._asDateTime(map['updatedAt']),
+      dispatchStatus: map['dispatchStatus'] as String?,
+      printReadyUrl: map['printReadyUrl'] as String?,
+      printedAt: LotteryGroup._asDateTime(map['printedAt']),
+      submittedToStationAt: LotteryGroup._asDateTime(map['submittedToStationAt']),
+      resultStatus: map['resultStatus'] as String?,
+      winAmount: map['winAmount'] as num?,
+      receiptUrl: _extractLotteryGroupFormReceiptUrl(map),
+      lotteryId:
+          (map['lotteryId'] as num?)?.toInt() ??
+          (map['drawNumber'] as num?)?.toInt(),
+      salesCloseAt:
+          LotteryGroup._asDateTime(map['salesCloseAt']) ??
+          LotteryGroup._asDateTime(map['drawDate']),
+      rawData: Map<String, dynamic>.from(map),
+    );
+  }
+
+  @override
+  List<Object?> get props => [
+        formId,
+        groupId,
+        displayOrder,
+        sourceUserId,
+        sourceDraftNumber,
+        status,
+        mode,
+        isDoubleMode,
+        tableCount,
+        cost,
+        tables,
+        isComplete,
+        createdAt,
+        updatedAt,
+        dispatchStatus,
+        printReadyUrl,
+        printedAt,
+        submittedToStationAt,
+        resultStatus,
+        winAmount,
+        receiptUrl,
+        lotteryId,
+        salesCloseAt,
+        rawData,
+      ];
+}
+
+String? _extractLotteryGroupFormReceiptUrl(Map<String, dynamic> data) {
+  final List<String> candidateKeys = <String>[
+    'stationReceiptUrl',
+    'receiptUrl',
+    'uploadedReceiptUrl',
+  ];
+  for (final String key in candidateKeys) {
+    final dynamic value = data[key];
+    if (value is String && value.trim().isNotEmpty) {
+      return value.trim();
+    }
+  }
+  return null;
 }

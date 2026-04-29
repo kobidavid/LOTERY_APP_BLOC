@@ -95,10 +95,12 @@ class LotteryTicketPreviewPage extends StatelessWidget {
     required this.tables,
     required this.showDebug,
     this.subtitle,
+    this.lotteryId,
   });
 
   final String title;
   final String? subtitle;
+  final int? lotteryId;
   final List<LotteryTable> tables;
   final bool showDebug;
 
@@ -108,17 +110,33 @@ class LotteryTicketPreviewPage extends StatelessWidget {
       appBar: AppBar(title: Text(title)),
       body: Column(
         children: [
-          if (subtitle != null)
+          if (subtitle != null || lotteryId != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Align(
                 alignment: Alignment.centerRight,
-                child: Text(
-                  subtitle!,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (subtitle != null)
+                      Text(
+                        subtitle!,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                        textAlign: TextAlign.right,
                       ),
-                  textAlign: TextAlign.right,
+                    if (lotteryId != null) ...[
+                      if (subtitle != null) const SizedBox(height: 4),
+                      Text(
+                        'מס׳ הגרלה: $lotteryId',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),

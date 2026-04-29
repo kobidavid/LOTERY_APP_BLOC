@@ -58,6 +58,9 @@ class SubmittedGroupHistoryItem {
     required this.dispatchStatus,
     required this.submittedAt,
     required this.myEffectiveShare,
+    required this.myWinningAmount,
+    required this.groupWinningAmount,
+    required this.resultPublishedAt,
   });
 
   final String groupId;
@@ -67,6 +70,9 @@ class SubmittedGroupHistoryItem {
   final String dispatchStatus;
   final DateTime? submittedAt;
   final num myEffectiveShare;
+  final num myWinningAmount;
+  final num groupWinningAmount;
+  final DateTime? resultPublishedAt;
 }
 
 class CancelledGroupHistoryItem {
@@ -188,6 +194,74 @@ class LotteryGroupRepository {
         );
   }
 
+  Stream<List<LotteryGroupForm>> watchGroupForms({
+    required String groupId,
+    required String userId,
+  }) async* {
+    await _stabilizeAuthForInviteRead(expectedUserId: userId);
+
+    yield* _groupRef(groupId)
+        .collection('forms')
+        .orderBy('displayOrder')
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(
+                (doc) => LotteryGroupForm.fromFirestore(doc.id, doc.data()),
+              )
+              .toList(),
+        );
+  }
+
+  Future<void> markGroupFormPrinted({
+    required String groupId,
+    required String formId,
+    required String creatorUserId,
+  }) async {
+    final User? currentUser = _auth.currentUser;
+    if (currentUser == null || currentUser.uid != creatorUserId) {
+      throw FirebaseFunctionsException(
+        code: 'permission-denied',
+        message: 'Authenticated user does not match the group creator.',
+      );
+    }
+
+    final DateTime now = DateTime.now();
+    await _groupRef(groupId).collection('forms').doc(formId).set(
+      <String, dynamic>{
+        'dispatchStatus': dispatchStatusPrinted,
+        'printedAt': now,
+        'updatedAt': now,
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  Future<void> markGroupFormSubmittedToStation({
+    required String groupId,
+    required String formId,
+    required String creatorUserId,
+  }) async {
+    final User? currentUser = _auth.currentUser;
+    if (currentUser == null || currentUser.uid != creatorUserId) {
+      throw FirebaseFunctionsException(
+        code: 'permission-denied',
+        message: 'Authenticated user does not match the group creator.',
+      );
+    }
+
+    final DateTime now = DateTime.now();
+    await _groupRef(groupId).collection('forms').doc(formId).set(
+      <String, dynamic>{
+        'dispatchStatus': dispatchStatusSubmittedToStation,
+        'submittedToStationAt': now,
+        'printedAt': now,
+        'updatedAt': now,
+      },
+      SetOptions(merge: true),
+    );
+  }
+
   Stream<List<UserGroupListItem>> watchGroupsForUser(String userId) async* {
     await _stabilizeAuthForInviteRead(expectedUserId: userId);
 
@@ -244,6 +318,9 @@ class LotteryGroupRepository {
           dispatchStatus: data['dispatchStatus'] as String? ?? '',
           submittedAt: _asDateTime(data['submittedAt']),
           myEffectiveShare: (data['myEffectiveShare'] as num?) ?? 0,
+          myWinningAmount: (data['myWinningAmount'] as num?) ?? 0,
+          groupWinningAmount: (data['groupWinningAmount'] as num?) ?? 0,
+          resultPublishedAt: _asDateTime(data['resultPublishedAt']),
         );
       }).toList();
 
@@ -774,9 +851,15 @@ class LotteryGroupRepository {
           tempFormData['ticketFingerprintSource'] as String?;
       final int? lotteryId = (tempFormData['lotteryId'] as num?)?.toInt();
       final dynamic salesCloseAt = tempFormData['salesCloseAt'];
+      final int? drawNumber =
+          (tempFormData['drawNumber'] as num?)?.toInt() ?? lotteryId;
+      final dynamic drawDate = tempFormData['drawDate'] ?? salesCloseAt;
       final int? fingerprintVersion =
           (tempFormData['fingerprintVersion'] as num?)?.toInt();
       final String? resultStatus = tempFormData['resultStatus'] as String?;
+      final String resolvedResultStatus =
+          resultStatus ?? LotteryResultStatus.waitingForResults.value;
+      final num winAmount = (tempFormData['winAmount'] as num?) ?? 0;
 
       final DocumentReference<Map<String, dynamic>> sourceFormRef = _firestore
           .collection('users')
@@ -786,6 +869,10 @@ class LotteryGroupRepository {
 
       List<String> submittedParticipantUserIds = <String>[];
       String creatorDisplayName = creatorUserId;
+      final QuerySnapshot<Map<String, dynamic>>? prefetchedGroupForms =
+          initialGroup.isMultiFormBundle
+              ? await _groupRef(groupId).collection('forms').get()
+              : null;
 
       try {
         await _firestore.runTransaction((transaction) async {
@@ -795,6 +882,14 @@ class LotteryGroupRepository {
               await transaction.get(groupRef);
           final DocumentSnapshot<Map<String, dynamic>> sourceFormSnapshot =
               await transaction.get(sourceFormRef);
+          final List<DocumentSnapshot<Map<String, dynamic>>> groupFormsDocs =
+              prefetchedGroupForms == null
+                  ? <DocumentSnapshot<Map<String, dynamic>>>[]
+                  : await Future.wait(
+                      prefetchedGroupForms.docs.map(
+                        (doc) => transaction.get(doc.reference),
+                      ),
+                    );
 
           final Map<String, dynamic>? groupData = groupSnapshot.data();
           if (!groupSnapshot.exists || groupData == null) {
@@ -876,47 +971,144 @@ class LotteryGroupRepository {
                   )
                   .toList();
 
-          // Update the original locked form in-place.
-          // 'source: group_snapshot' keeps it out of watchSubmittedForms
-          // (personal submissions list), while still appearing in the operator
-          // console collectionGroup('forms') query (no source filter there).
-          // All server-computed fields are copied from the temp doc so nothing
-          // is lost (lotteryId, salesCloseAt, fingerprint, resultStatus, etc.).
+          final Map<String, dynamic> sharedLotteryMetadata =
+              <String, dynamic>{
+                if (lotteryId != null) 'lotteryId': lotteryId,
+                if (drawNumber != null) 'drawNumber': drawNumber,
+                if (salesCloseAt != null) 'salesCloseAt': salesCloseAt,
+                if (drawDate != null) 'drawDate': drawDate,
+                if (fingerprintVersion != null)
+                  'fingerprintVersion': fingerprintVersion,
+                'resultStatus': resolvedResultStatus,
+              };
+
           transaction.set(
             sourceFormRef,
             <String, dynamic>{
               'formId': sourceFormId,
-              'status': 'submitted',
-              'source': 'group_snapshot',
-              'submittedAt': now,
               'groupId': group.groupId,
-              'submissionType': 'group',
               'creatorUserId': creatorUserId,
               'creatorDisplayName': creatorDisplayName,
               'userId': creatorUserId,
               'groupName': group.groupName,
               'isEditable': false,
               'updatedAt': now,
-              'dispatchStatus': dispatchStatusQueuedForPrint,
-              'baseTicketCost': group.baseTicketCost,
-              'effectiveParticipantCount': effectiveParticipantCount,
-              'effectiveCostPerPaidParticipant':
-                  effectiveCostPerPaidParticipant,
-              'submittedParticipantUserIds': submittedParticipantUserIds,
-              'paidParticipants': paidParticipants,
-              // ── Fields copied from the Cloud Function's temp doc ──────────
+              ...sharedLotteryMetadata,
               if (ticketFingerprint != null)
                 'ticketFingerprint': ticketFingerprint,
               if (ticketFingerprintSource != null)
                 'ticketFingerprintSource': ticketFingerprintSource,
-              if (lotteryId != null) 'lotteryId': lotteryId,
-              if (salesCloseAt != null) 'salesCloseAt': salesCloseAt,
-              if (fingerprintVersion != null)
-                'fingerprintVersion': fingerprintVersion,
-              if (resultStatus != null) 'resultStatus': resultStatus,
+              if (!initialGroup.isMultiFormBundle) ...<String, dynamic>{
+                'status': 'submitted',
+                'source': 'group_snapshot',
+                'submittedAt': now,
+                'submissionType': 'group',
+                'dispatchStatus': dispatchStatusQueuedForPrint,
+                'baseTicketCost': group.baseTicketCost,
+                'effectiveParticipantCount': effectiveParticipantCount,
+                'effectiveCostPerPaidParticipant':
+                    effectiveCostPerPaidParticipant,
+                'submittedParticipantUserIds': submittedParticipantUserIds,
+                'paidParticipants': paidParticipants,
+              },
             },
             SetOptions(merge: true),
           );
+
+          if (!initialGroup.isMultiFormBundle) {
+            final DocumentReference<Map<String, dynamic>> canonicalGroupFormRef =
+                _groupRef(groupId).collection('forms').doc(sourceFormId);
+            transaction.set(
+              canonicalGroupFormRef,
+              <String, dynamic>{
+                'formId': sourceFormId,
+                'groupId': group.groupId,
+                'displayOrder': 1,
+                'sourceUserId': creatorUserId,
+                'sourceDraftNumber': 1,
+                'status': 'submitted',
+                'submittedAt': now,
+                'submissionType': 'group',
+                'mode': 'group',
+                'userId': creatorUserId,
+                'creatorUserId': creatorUserId,
+                'creatorDisplayName': creatorDisplayName,
+                'groupName': group.groupName,
+                'dispatchStatus': dispatchStatusQueuedForPrint,
+                'baseTicketCost': group.baseTicketCost,
+                'effectiveParticipantCount': effectiveParticipantCount,
+                'effectiveCostPerPaidParticipant':
+                    effectiveCostPerPaidParticipant,
+                'submittedParticipantUserIds': submittedParticipantUserIds,
+                'paidParticipants': paidParticipants,
+                'balanceApplied': false,
+                'winAmount': winAmount,
+                'checkedAt': tempFormData['checkedAt'],
+                'resultPublishedAt': tempFormData['resultPublishedAt'],
+                'updatedAt': now,
+                if (lotteryId != null) 'lotteryId': lotteryId,
+                if (drawNumber != null) 'drawNumber': drawNumber,
+                if (salesCloseAt != null) 'salesCloseAt': salesCloseAt,
+                if (drawDate != null) 'drawDate': drawDate,
+                if (resultStatus != null) 'resultStatus': resultStatus,
+                if (ticketFingerprint != null)
+                  'ticketFingerprint': ticketFingerprint,
+                if (ticketFingerprintSource != null)
+                  'ticketFingerprintSource': ticketFingerprintSource,
+                if (fingerprintVersion != null)
+                  'fingerprintVersion': fingerprintVersion,
+                'resultStatus': resolvedResultStatus,
+              },
+              SetOptions(merge: true),
+            );
+          }
+
+          if (initialGroup.isMultiFormBundle) {
+            for (final DocumentSnapshot<Map<String, dynamic>> groupFormDoc
+                in groupFormsDocs) {
+              final Map<String, dynamic> groupFormData =
+                  groupFormDoc.data() ?? <String, dynamic>{};
+              transaction.set(
+                groupFormDoc.reference,
+                <String, dynamic>{
+                  'status': 'submitted',
+                  'submittedAt': now,
+                  'submissionType': 'group',
+                  'creatorUserId': creatorUserId,
+                  'creatorDisplayName': creatorDisplayName,
+                  'userId': creatorUserId,
+                  'groupName': group.groupName,
+                  'dispatchStatus': dispatchStatusQueuedForPrint,
+                  'baseTicketCost': group.baseTicketCost,
+                  'effectiveParticipantCount': effectiveParticipantCount,
+                  'effectiveCostPerPaidParticipant':
+                      effectiveCostPerPaidParticipant,
+                  'submittedParticipantUserIds': submittedParticipantUserIds,
+                  'paidParticipants': paidParticipants,
+                  'balanceApplied': false,
+                  'winAmount': (groupFormData['winAmount'] as num?) ?? winAmount,
+                  'checkedAt': groupFormData['checkedAt'],
+                  'resultPublishedAt': groupFormData['resultPublishedAt'],
+                  'updatedAt': now,
+                  'lotteryId':
+                      (groupFormData['lotteryId'] as num?)?.toInt() ?? lotteryId,
+                  'drawNumber':
+                      (groupFormData['drawNumber'] as num?)?.toInt() ??
+                      (groupFormData['lotteryId'] as num?)?.toInt() ??
+                      drawNumber,
+                  'salesCloseAt':
+                      groupFormData['salesCloseAt'] ?? salesCloseAt,
+                  'drawDate': groupFormData['drawDate'] ??
+                      groupFormData['salesCloseAt'] ??
+                      drawDate,
+                  'resultStatus':
+                      (groupFormData['resultStatus'] as String?) ??
+                      resolvedResultStatus,
+                },
+                SetOptions(merge: true),
+              );
+            }
+          }
 
           transaction.set(
             groupRef,
@@ -927,6 +1119,10 @@ class LotteryGroupRepository {
               'dispatchStatus': dispatchStatusQueuedForPrint,
               'updatedAt': now,
               'currentPerParticipantCost': effectiveCostPerPaidParticipant,
+              ...sharedLotteryMetadata,
+              'resultStatus': resolvedResultStatus,
+              'groupWinningAmount': 0,
+              'resultPublishedAt': null,
             },
             SetOptions(merge: true),
           );
@@ -944,7 +1140,15 @@ class LotteryGroupRepository {
                 'dispatchStatus': dispatchStatusQueuedForPrint,
                 'submittedAt': now,
                 'submittedFormId': sourceFormId,
+                if (lotteryId != null) 'lotteryId': lotteryId,
+                if (drawNumber != null) 'drawNumber': drawNumber,
+                if (salesCloseAt != null) 'salesCloseAt': salesCloseAt,
+                if (drawDate != null) 'drawDate': drawDate,
                 'myEffectiveShare': effectiveCostPerPaidParticipant,
+                'myWinningAmount': 0,
+                'groupWinningAmount': 0,
+                'resultStatus': resolvedResultStatus,
+                'resultPublishedAt': null,
                 'updatedAt': now,
               },
             );

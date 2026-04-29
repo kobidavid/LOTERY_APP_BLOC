@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../form_presentation_utils.dart';
+import '../../models/lottery_form.dart';
 import '../../models/lottery_group.dart';
 import '../../models/lottery_group_membership.dart';
 import '../../repositories/lottery_group_repository.dart';
@@ -41,6 +42,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _isPaying = false;
   bool _isSubmitting = false;
   bool _isUpdatingDispatch = false;
+  String? _updatingGroupFormId;
+  String? _updatingGroupFormAction;
   bool _isCancelling = false;
   bool _showDebug = false;
   String? _receiptLookupCacheKey;
@@ -50,6 +53,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _didLogFirstGroupData = false;
   bool _didLogFirstMembershipsData = false;
   bool _didLogFirstFormData = false;
+  bool _didLogFirstGroupFormsData = false;
 
   @override
   void initState() {
@@ -593,12 +597,87 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
+  Future<void> _markGroupFormPrinted({
+    required LotteryGroup group,
+    required LotteryGroupForm form,
+  }) async {
+    setState(() {
+      _updatingGroupFormId = form.formId;
+      _updatingGroupFormAction = 'printed';
+    });
+    try {
+      await widget.repository.markGroupFormPrinted(
+        groupId: group.groupId,
+        formId: form.formId,
+        creatorUserId: widget.currentUserId,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('טופס ${form.displayOrder} סומן כהודפס.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingGroupFormId = null;
+          _updatingGroupFormAction = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _markGroupFormSubmittedToStation({
+    required LotteryGroup group,
+    required LotteryGroupForm form,
+  }) async {
+    setState(() {
+      _updatingGroupFormId = form.formId;
+      _updatingGroupFormAction = 'submitted_to_station';
+    });
+    try {
+      await widget.repository.markGroupFormSubmittedToStation(
+        groupId: group.groupId,
+        formId: form.formId,
+        creatorUserId: widget.currentUserId,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('טופס ${form.displayOrder} סומן כנמסר לתחנה.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingGroupFormId = null;
+          _updatingGroupFormAction = null;
+        });
+      }
+    }
+  }
+
   void _openGroupSnapshotPreview(LotteryGroup group) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => LotteryTicketPreviewPage(
           title: 'תצוגת טופס: ${group.groupName}',
           subtitle: 'תצוגה לקריאה בלבד מתוך הטופס הקבוצתי הקפוא',
+          lotteryId: group.lotteryId,
           tables: group.tables,
           showDebug: _showDebug,
         ),
@@ -676,6 +755,57 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     required int paidCount,
     required String currentUserDisplayName,
   }) {
+    if (group.isMultiFormBundle) {
+      return StreamBuilder<List<LotteryGroupForm>>(
+        stream: widget.repository.watchGroupForms(
+          groupId: group.groupId,
+          userId: widget.currentUserId,
+        ),
+        builder: (context, groupFormsSnapshot) {
+          if (groupFormsSnapshot.hasError) {
+            debugPrint(
+              '[GroupDetails] group forms stream error: ${groupFormsSnapshot.error}',
+            );
+          }
+          if (groupFormsSnapshot.hasData &&
+              !_didLogFirstGroupFormsData &&
+              groupFormsSnapshot.data != null) {
+            _didLogFirstGroupFormsData = true;
+            debugPrint(
+              '[CreateGroupFlow] GroupDetailsPage group forms first data +${_openStopwatch.elapsedMilliseconds}ms count=${groupFormsSnapshot.data?.length ?? 0}',
+            );
+          }
+          return _buildDetailsContent(
+            group: group,
+            creatorDisplayName: creatorDisplayName,
+            paidParticipantSetIsValid: paidParticipantSetIsValid,
+            currentCostIfSubmittedNowLabel: currentCostIfSubmittedNowLabel,
+            trackerFormState: const _GroupTrackerSubmittedFormState.empty(),
+            formData: const <String, dynamic>{},
+            receiptTarget: null,
+            groupForms: groupFormsSnapshot.data ?? const <LotteryGroupForm>[],
+            showInviteButton: showInviteButton,
+            showFinalizeButton: showFinalizeButton,
+            canFinalize: canFinalize,
+            showSubmitButton: showSubmitButton,
+            canSubmit: canSubmit,
+            showCancelButton: showCancelButton,
+            currentUserCanSimulatePayment: currentUserCanSimulatePayment,
+            myMembership: myMembership,
+            memberships: memberships,
+            canEditResponse: canEditResponse,
+            interestedCount: interestedCount,
+            finalizableCount: finalizableCount,
+            estimatedPerParticipantCost: estimatedPerParticipantCost,
+            paymentReadinessMessage: paymentReadinessMessage,
+            yourShareLabel: yourShareLabel,
+            paidCount: paidCount,
+            currentUserDisplayName: currentUserDisplayName,
+          );
+        },
+      );
+    }
+
     final String formDocumentId = (group.submittedFormId?.isNotEmpty ?? false)
         ? group.submittedFormId!
         : group.sourceFormId;
@@ -887,6 +1017,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     required _GroupTrackerSubmittedFormState trackerFormState,
     required Map<String, dynamic> formData,
     required _ResolvedReceiptOpenTarget? receiptTarget,
+    List<LotteryGroupForm> groupForms = const <LotteryGroupForm>[],
     required bool showInviteButton,
     required bool showFinalizeButton,
     required bool canFinalize,
@@ -905,24 +1036,27 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     required int paidCount,
     required String currentUserDisplayName,
   }) {
+    final bool isMultiFormBundle = group.isMultiFormBundle;
     final String groupStatusLabel = _groupStatusLabel(
       group: group,
       paidParticipantSetIsValid: paidParticipantSetIsValid,
       trackerFormState: trackerFormState,
     );
     final bool showPrintedButton = group.creatorUserId == widget.currentUserId &&
+        !isMultiFormBundle &&
         group.status == LotteryGroupStatus.submitted &&
         trackerFormState.effectiveDispatchStatus ==
             LotteryGroupRepository.dispatchStatusQueuedForPrint;
     final bool showSubmittedToStationButton =
         group.creatorUserId == widget.currentUserId &&
+            !isMultiFormBundle &&
             group.status == LotteryGroupStatus.submitted &&
             trackerFormState.effectiveDispatchStatus ==
                 LotteryGroupRepository.dispatchStatusPrinted;
     final bool showOutcomeCard =
         group.status == LotteryGroupStatus.submitted ||
         group.status == LotteryGroupStatus.cancelled;
-    final bool canOpenReceipt =
+    final bool canOpenReceipt = !isMultiFormBundle &&
         _hasMatchedReceipt(formData) && receiptTarget != null;
 
     return Directionality(
@@ -934,11 +1068,22 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           groupName: group.groupName,
           creatorDisplayName: creatorDisplayName,
           statusLabel: groupStatusLabel,
-          ticketTypeLabel: _ticketTypeLabel(formData),
-          lotteryNumber: formData['lotteryId']?.toString(),
-          tablesCount: group.populatedTableCount,
-          totalCost: group.baseTicketCost,
-          onOpenForm: () => _openPrimaryTicketView(group),
+          ticketTypeLabel:
+              isMultiFormBundle ? null : _ticketTypeLabel(formData),
+          lotteryNumber: isMultiFormBundle
+              ? (group.lotteryId?.toString() ??
+                  _resolveMultiFormLotteryNumber(groupForms))
+              : (group.lotteryId?.toString() ??
+                  formData['lotteryId']?.toString()),
+          lotteryDate: isMultiFormBundle
+              ? group.salesCloseAt ?? _resolveMultiFormLotteryDate(groupForms)
+              : group.salesCloseAt ??
+                  presentationAsDateTime(formData['salesCloseAt']),
+          formCount: isMultiFormBundle ? group.formCount : null,
+          tablesCount:
+              isMultiFormBundle ? group.totalTableCount : group.populatedTableCount,
+          totalCost: isMultiFormBundle ? group.totalCost : group.baseTicketCost,
+          onOpenForm: isMultiFormBundle ? null : () => _openPrimaryTicketView(group),
           onOpenReceipt:
               canOpenReceipt ? () => _openReceiptTarget(receiptTarget) : null,
           showInviteButton: showInviteButton,
@@ -957,8 +1102,39 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           onDelete: () => _confirmAndCancelGroup(group),
         ),
         const SizedBox(height: 12),
-        _buildProgressTracker(group),
+        isMultiFormBundle
+            ? _GroupTicketTracker(
+                group: group,
+                trackerFormState: const _GroupTrackerSubmittedFormState.empty(),
+              )
+            : _buildProgressTracker(group),
         const SizedBox(height: 12),
+        if (!isMultiFormBundle) ...[
+          _OperationalGroupFormTracker(
+            trackerFormState: trackerFormState,
+            title: 'מעקב התקדמות הטופס',
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (isMultiFormBundle) ...[
+          _GroupFormsSection(
+            group: group,
+            forms: groupForms,
+            showDebug: _showDebug,
+            onOpenReceiptTarget: _openReceiptTarget,
+            updatingFormId: _updatingGroupFormId,
+            updatingAction: _updatingGroupFormAction,
+            onMarkPrinted: (form) => _markGroupFormPrinted(
+              group: group,
+              form: form,
+            ),
+            onMarkSubmittedToStation: (form) => _markGroupFormSubmittedToStation(
+              group: group,
+              form: form,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         _WorkflowActionsRow(
           showSubmitButton: showSubmitButton,
           canSubmit: canSubmit,
@@ -983,6 +1159,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             group: group,
             currentUserId: widget.currentUserId,
             creatorDisplayName: creatorDisplayName,
+            groupForms: groupForms,
           ),
         ],
         const SizedBox(height: 12),
@@ -1141,6 +1318,30 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       default:
         return 'רגיל';
     }
+  }
+
+  String? _resolveMultiFormLotteryNumber(List<LotteryGroupForm> groupForms) {
+    for (final LotteryGroupForm form in groupForms) {
+      final String? lotteryId = form.rawData['lotteryId']?.toString();
+      if (lotteryId != null && lotteryId.trim().isNotEmpty) {
+        return lotteryId.trim();
+      }
+    }
+    return null;
+  }
+
+  DateTime? _resolveMultiFormLotteryDate(List<LotteryGroupForm> groupForms) {
+    for (final LotteryGroupForm form in groupForms) {
+      if (form.salesCloseAt != null) {
+        return form.salesCloseAt;
+      }
+      final DateTime? rawDate =
+          presentationAsDateTime(form.rawData['salesCloseAt']);
+      if (rawDate != null) {
+        return rawDate;
+      }
+    }
+    return null;
   }
 
   bool _hasMatchedReceipt(Map<String, dynamic> formData) {
@@ -1457,19 +1658,9 @@ class _GroupTicketTrackerState extends State<_GroupTicketTracker>
       isSystemOwned: false,
     ),
     _GroupTrackerStepData(
-      label: 'הגשת הטופס',
+      label: 'הגשת הטופס/ים',
       icon: Icons.send_rounded,
       isSystemOwned: false,
-    ),
-    _GroupTrackerStepData(
-      label: 'הדפסת הטופס',
-      icon: Icons.print_rounded,
-      isSystemOwned: true,
-    ),
-    _GroupTrackerStepData(
-      label: 'מסירה בתחנה',
-      icon: Icons.storefront_rounded,
-      isSystemOwned: true,
     ),
   ];
 
@@ -1508,7 +1699,7 @@ class _GroupTicketTrackerState extends State<_GroupTicketTracker>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'מעקב התקדמות הטופס הקבוצתי',
+            'מעקב התקדמות שליחת הטופס/ים',
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w900,
             ),
@@ -1564,12 +1755,6 @@ class _GroupTicketTrackerState extends State<_GroupTicketTracker>
   }
 
   int _deriveCompletedStepCount() {
-    if (_isSubmittedToStationCompleted) {
-      return 5;
-    }
-    if (_isPrintedCompleted) {
-      return 4;
-    }
     if (_isGroupSubmissionCompleted) {
       return 3;
     }
@@ -1591,8 +1776,7 @@ class _GroupTicketTrackerState extends State<_GroupTicketTracker>
   bool get _areRequiredPaymentsCompleted {
     return widget.group.status == LotteryGroupStatus.readyForSubmission ||
         widget.group.status == LotteryGroupStatus.submitted ||
-        _isPrintedCompleted ||
-        _isSubmittedToStationCompleted;
+        _isGroupSubmissionCompleted;
   }
 
   bool get _isGroupSubmissionCompleted {
@@ -1601,19 +1785,10 @@ class _GroupTicketTrackerState extends State<_GroupTicketTracker>
         widget.trackerFormState.dispatchStatus ==
             LotteryGroupRepository.dispatchStatusQueuedForPrint ||
         (widget.trackerFormState.printReadyUrl?.isNotEmpty ?? false) ||
-        _isPrintedCompleted ||
-        _isSubmittedToStationCompleted;
-  }
-
-  bool get _isPrintedCompleted {
-    return widget.trackerFormState.printedAt != null ||
+        widget.trackerFormState.printedAt != null ||
+        widget.trackerFormState.submittedToStationAt != null ||
         widget.trackerFormState.dispatchStatus ==
             LotteryGroupRepository.dispatchStatusPrinted ||
-        _isSubmittedToStationCompleted;
-  }
-
-  bool get _isSubmittedToStationCompleted {
-    return widget.trackerFormState.submittedToStationAt != null ||
         widget.trackerFormState.dispatchStatus ==
             LotteryGroupRepository.dispatchStatusSubmittedToStation;
   }
@@ -1746,6 +1921,579 @@ class _TrackerStep extends StatelessWidget {
   }
 }
 
+class _GroupFormsSection extends StatelessWidget {
+  const _GroupFormsSection({
+    required this.group,
+    required this.forms,
+    required this.showDebug,
+    required this.onOpenReceiptTarget,
+    required this.updatingFormId,
+    required this.updatingAction,
+    required this.onMarkPrinted,
+    required this.onMarkSubmittedToStation,
+  });
+
+  final LotteryGroup group;
+  final List<LotteryGroupForm> forms;
+  final bool showDebug;
+  final Future<void> Function(_ResolvedReceiptOpenTarget? receiptTarget)
+      onOpenReceiptTarget;
+  final String? updatingFormId;
+  final String? updatingAction;
+  final Future<void> Function(LotteryGroupForm form) onMarkPrinted;
+  final Future<void> Function(LotteryGroupForm form) onMarkSubmittedToStation;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'הטפסים בקבוצה',
+            textAlign: TextAlign.right,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (forms.isEmpty)
+            Text(
+              'עדיין אין טפסים שמורים תחת הקבוצה.',
+              textAlign: TextAlign.right,
+              style: theme.textTheme.bodyMedium,
+            )
+          else
+            ...List<Widget>.generate(forms.length, (index) {
+              final LotteryGroupForm form = forms[index];
+              return Column(
+                children: [
+                  _GroupBundleFormRow(
+                    group: group,
+                    form: form,
+                    showDebug: showDebug,
+                    onOpenReceiptTarget: onOpenReceiptTarget,
+                    isUpdating:
+                        updatingFormId == form.formId && updatingAction != null,
+                    updatingAction: updatingFormId == form.formId
+                        ? updatingAction
+                        : null,
+                    onMarkPrinted: () => onMarkPrinted(form),
+                    onMarkSubmittedToStation: () =>
+                        onMarkSubmittedToStation(form),
+                  ),
+                  if (index < forms.length - 1)
+                    Divider(
+                      height: 18,
+                      color:
+                          theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                    ),
+                ],
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
+
+class _GroupBundleFormRow extends StatelessWidget {
+  const _GroupBundleFormRow({
+    required this.group,
+    required this.form,
+    required this.showDebug,
+    required this.onOpenReceiptTarget,
+    required this.isUpdating,
+    required this.updatingAction,
+    required this.onMarkPrinted,
+    required this.onMarkSubmittedToStation,
+  });
+
+  final LotteryGroup group;
+  final LotteryGroupForm form;
+  final bool showDebug;
+  final Future<void> Function(_ResolvedReceiptOpenTarget? receiptTarget)
+      onOpenReceiptTarget;
+  final bool isUpdating;
+  final String? updatingAction;
+  final VoidCallback onMarkPrinted;
+  final VoidCallback onMarkSubmittedToStation;
+
+  @override
+  Widget build(BuildContext context) {
+    final _ResolvedReceiptOpenTarget? receiptTarget =
+        _resolvedReceiptTargetFromGroupForm(form);
+    final bool canOpenReceipt = receiptTarget != null;
+    final bool canMarkPrinted = group.creatorUserId == FirebaseAuth.instance.currentUser?.uid &&
+        group.status == LotteryGroupStatus.submitted &&
+        (form.dispatchStatus == null ||
+            form.dispatchStatus ==
+                LotteryGroupRepository.dispatchStatusQueuedForPrint) &&
+        form.printedAt == null;
+    final bool canMarkSubmittedToStation =
+        group.creatorUserId == FirebaseAuth.instance.currentUser?.uid &&
+            group.status == LotteryGroupStatus.submitted &&
+            (form.dispatchStatus ==
+                    LotteryGroupRepository.dispatchStatusPrinted ||
+                form.printedAt != null) &&
+            form.submittedToStationAt == null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'טופס ${form.displayOrder}',
+          textAlign: TextAlign.right,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            _GroupFormMetaText(
+              value: 'סוג טופס: ${form.isDoubleMode ? 'דאבל' : 'רגיל'}',
+            ),
+            _GroupFormMetaText(value: 'מספר טבלאות: ${form.tableCount}'),
+            _GroupFormMetaText(
+              value: 'עלות הטופס: ${_formatGroupAmount(form.cost)} ש״ח',
+            ),
+            _GroupFormMetaText(
+              value:
+                  'מס׳ הגרלה: ${form.lotteryId?.toString() ?? form.rawData['lotteryId']?.toString() ?? '—'}',
+            ),
+            _GroupFormMetaText(
+              value:
+                  'תאריך הגרלה: ${formatPresentationDateTime(form.salesCloseAt ?? presentationAsDateTime(form.rawData['salesCloseAt']))}',
+            ),
+            _GroupFormMetaText(
+              value: 'זכייה: ${_groupFormWinningLabel(form)}',
+            ),
+            if (showDebug)
+              _GroupFormMetaText(value: 'sourceDraft: ${form.sourceDraftNumber}'),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _GroupFormProgressTracker(form: form),
+        const SizedBox(height: 10),
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 10,
+          runSpacing: 8,
+          children: [
+            if (canMarkPrinted)
+              FilledButton.icon(
+                onPressed: isUpdating ? null : onMarkPrinted,
+                icon: isUpdating && updatingAction == 'printed'
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.print_rounded),
+                label: const Text('סמן כהודפס'),
+              ),
+            if (canMarkSubmittedToStation)
+              FilledButton.tonalIcon(
+                onPressed: isUpdating ? null : onMarkSubmittedToStation,
+                icon: isUpdating && updatingAction == 'submitted_to_station'
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.storefront_rounded),
+                label: const Text('נמסר לתחנה'),
+              ),
+            FilledButton.tonalIcon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LotteryTicketPreviewPage(
+                      title: 'טופס ${form.displayOrder}',
+                      subtitle: 'תצוגה לקריאה בלבד של טופס מתוך קבוצה',
+                      lotteryId: form.lotteryId,
+                      tables: form.tables,
+                      showDebug: showDebug,
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.visibility_outlined),
+              label: const Text('צפה בטופס'),
+            ),
+            OutlinedButton.icon(
+              onPressed:
+                  canOpenReceipt ? () => onOpenReceiptTarget(receiptTarget) : null,
+              icon: const Icon(Icons.receipt_long_outlined),
+              label: const Text('צפה בקבלה'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+String _groupFormWinningLabel(LotteryGroupForm form) {
+  final num winAmount = form.winAmount ?? 0;
+  final String? resultStatus = form.resultStatus;
+  final bool isPublished =
+      resultStatus == LotteryResultStatus.checked.name ||
+      resultStatus == LotteryResultStatus.winner.name ||
+      resultStatus == LotteryResultStatus.loser.name ||
+      resultStatus == 'checked' ||
+      resultStatus == 'winner' ||
+      resultStatus == 'loser';
+  if (!isPublished) {
+    return 'טרם פורסם';
+  }
+  return '$winAmount ש״ח';
+}
+
+class _GroupFormProgressTracker extends StatefulWidget {
+  const _GroupFormProgressTracker({
+    required this.form,
+  });
+
+  final LotteryGroupForm form;
+
+  @override
+  State<_GroupFormProgressTracker> createState() =>
+      _GroupFormProgressTrackerState();
+}
+
+class _GroupFormProgressTrackerState extends State<_GroupFormProgressTracker>
+    with SingleTickerProviderStateMixin {
+  static const List<_GroupTrackerStepData> _steps = <_GroupTrackerStepData>[
+    _GroupTrackerStepData(
+      label: 'הדפסת הטופס',
+      icon: Icons.print_rounded,
+      isSystemOwned: true,
+    ),
+    _GroupTrackerStepData(
+      label: 'מסירה בתחנה',
+      icon: Icons.storefront_rounded,
+      isSystemOwned: true,
+    ),
+    _GroupTrackerStepData(
+      label: 'בדיקת תוצאות',
+      icon: Icons.verified_outlined,
+      isSystemOwned: true,
+    ),
+  ];
+
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int completedCount = _deriveCompletedStepCount();
+    final int? currentIndex =
+        completedCount >= _steps.length ? null : completedCount;
+    final Color trackerColor = Theme.of(context).colorScheme.primary;
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: List<Widget>.generate(_steps.length, (stepIndex) {
+          final _GroupTrackerStepData step = _steps[stepIndex];
+          return Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, child) {
+                      return _TrackerStep(
+                        step: step,
+                        isCompleted: stepIndex < completedCount,
+                        isCurrent:
+                            currentIndex != null && stepIndex == currentIndex,
+                        pulseValue: _pulseController.value,
+                        color: trackerColor,
+                      );
+                    },
+                  ),
+                ),
+                if (stepIndex < _steps.length - 1)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: _TrackerConnector(
+                      filled: completedCount > stepIndex,
+                      glow:
+                          currentIndex != null && currentIndex == stepIndex + 1,
+                      color: trackerColor,
+                    ),
+                  ),
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  int _deriveCompletedStepCount() {
+    if (_areResultsChecked) {
+      return 3;
+    }
+    if (_isSubmittedToStation) {
+      return 2;
+    }
+    if (_isPrinted) {
+      return 1;
+    }
+    return 0;
+  }
+
+  bool get _isPrinted {
+    return widget.form.printedAt != null ||
+        widget.form.dispatchStatus == LotteryGroupRepository.dispatchStatusPrinted;
+  }
+
+  bool get _isSubmittedToStation {
+    return widget.form.submittedToStationAt != null ||
+        widget.form.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusSubmittedToStation;
+  }
+
+  bool get _areResultsChecked {
+    final String? resultStatus = widget.form.resultStatus;
+    return resultStatus == LotteryResultStatus.checked.name ||
+        resultStatus == LotteryResultStatus.winner.name ||
+        resultStatus == LotteryResultStatus.loser.name ||
+        resultStatus == 'checked' ||
+        resultStatus == 'winner' ||
+        resultStatus == 'loser';
+  }
+}
+
+class _OperationalGroupFormTracker extends StatefulWidget {
+  const _OperationalGroupFormTracker({
+    required this.trackerFormState,
+    this.title,
+  });
+
+  final _GroupTrackerSubmittedFormState trackerFormState;
+  final String? title;
+
+  @override
+  State<_OperationalGroupFormTracker> createState() =>
+      _OperationalGroupFormTrackerState();
+}
+
+class _OperationalGroupFormTrackerState extends State<_OperationalGroupFormTracker>
+    with SingleTickerProviderStateMixin {
+  static const List<_GroupTrackerStepData> _steps = <_GroupTrackerStepData>[
+    _GroupTrackerStepData(
+      label: 'הדפסת הטופס',
+      icon: Icons.print_rounded,
+      isSystemOwned: true,
+    ),
+    _GroupTrackerStepData(
+      label: 'מסירה בתחנה',
+      icon: Icons.storefront_rounded,
+      isSystemOwned: true,
+    ),
+    _GroupTrackerStepData(
+      label: 'בדיקת תוצאות',
+      icon: Icons.verified_outlined,
+      isSystemOwned: true,
+    ),
+  ];
+
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int completedCount = _deriveCompletedStepCount();
+    final int? currentIndex =
+        completedCount >= _steps.length ? null : completedCount;
+    final ThemeData theme = Theme.of(context);
+    final Color trackerColor = theme.colorScheme.primary;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.title != null) ...[
+            Text(
+              widget.title!,
+              textAlign: TextAlign.right,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+          Directionality(
+            textDirection: TextDirection.rtl,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List<Widget>.generate(_steps.length, (stepIndex) {
+                final _GroupTrackerStepData step = _steps[stepIndex];
+                return Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: AnimatedBuilder(
+                          animation: _pulseController,
+                          builder: (context, child) {
+                            return _TrackerStep(
+                              step: step,
+                              isCompleted: stepIndex < completedCount,
+                              isCurrent: currentIndex != null &&
+                                  stepIndex == currentIndex,
+                              pulseValue: _pulseController.value,
+                              color: trackerColor,
+                            );
+                          },
+                        ),
+                      ),
+                      if (stepIndex < _steps.length - 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: _TrackerConnector(
+                            filled: completedCount > stepIndex,
+                            glow: currentIndex != null &&
+                                currentIndex == stepIndex + 1,
+                            color: trackerColor,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  int _deriveCompletedStepCount() {
+    if (_areResultsChecked) {
+      return 3;
+    }
+    if (_isSubmittedToStation) {
+      return 2;
+    }
+    if (_isPrinted) {
+      return 1;
+    }
+    return 0;
+  }
+
+  bool get _isPrinted {
+    return widget.trackerFormState.printedAt != null ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusPrinted ||
+        _isSubmittedToStation;
+  }
+
+  bool get _isSubmittedToStation {
+    return widget.trackerFormState.submittedToStationAt != null ||
+        widget.trackerFormState.dispatchStatus ==
+            LotteryGroupRepository.dispatchStatusSubmittedToStation;
+  }
+
+  bool get _areResultsChecked {
+    return widget.trackerFormState.hasReceipt;
+  }
+}
+
+class _GroupFormMetaText extends StatelessWidget {
+  const _GroupFormMetaText({
+    required this.value,
+  });
+
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      value,
+      textAlign: TextAlign.right,
+      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+    );
+  }
+}
+
+_ResolvedReceiptOpenTarget? _resolvedReceiptTargetFromGroupForm(
+  LotteryGroupForm form,
+) {
+  final String? receiptUrl = form.receiptUrl;
+  if (receiptUrl == null || receiptUrl.isEmpty) {
+    return null;
+  }
+  final Uri? uri = Uri.tryParse(receiptUrl);
+  if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+    return null;
+  }
+  return _ResolvedReceiptOpenTarget(
+    targetUrl: receiptUrl,
+    targetStoragePath: null,
+    source: 'group_form',
+  );
+}
+
+String _formatGroupAmount(num amount) {
+  final double normalized = amount.toDouble();
+  if ((normalized - normalized.roundToDouble()).abs() < 0.0001) {
+    return normalized.round().toString();
+  }
+  return normalized.toStringAsFixed(1);
+}
+
 List<LotteryGroupMembership> _computeStableValidMemberships(
   List<LotteryGroupMembership> memberships,
 ) {
@@ -1823,11 +2571,13 @@ class _GroupInfoPanel extends StatelessWidget {
     required this.groupName,
     required this.creatorDisplayName,
     required this.statusLabel,
-    required this.ticketTypeLabel,
+    this.ticketTypeLabel,
     required this.lotteryNumber,
+    this.lotteryDate,
+    this.formCount,
     required this.tablesCount,
     required this.totalCost,
-    required this.onOpenForm,
+    this.onOpenForm,
     required this.onOpenReceipt,
     required this.showInviteButton,
     required this.onInvite,
@@ -1843,11 +2593,13 @@ class _GroupInfoPanel extends StatelessWidget {
   final String groupName;
   final String creatorDisplayName;
   final String statusLabel;
-  final String ticketTypeLabel;
+  final String? ticketTypeLabel;
   final String? lotteryNumber;
+  final DateTime? lotteryDate;
+  final int? formCount;
   final int tablesCount;
   final num totalCost;
-  final VoidCallback onOpenForm;
+  final VoidCallback? onOpenForm;
   final VoidCallback? onOpenReceipt;
   final bool showInviteButton;
   final void Function(BuildContext buttonContext)? onInvite;
@@ -1964,6 +2716,15 @@ class _GroupInfoPanel extends StatelessWidget {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'תאריך הגרלה: ${formatPresentationDateTime(lotteryDate)}',
+                              textAlign: TextAlign.right,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ],
                         )
                       else
@@ -1988,6 +2749,14 @@ class _GroupInfoPanel extends StatelessWidget {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
+                            Text(
+                              'תאריך הגרלה: ${formatPresentationDateTime(lotteryDate)}',
+                              textAlign: TextAlign.right,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ],
                         ),
                     ],
@@ -1998,8 +2767,14 @@ class _GroupInfoPanel extends StatelessWidget {
               _InfoPillsGrid(
                 children: [
                   _MetaPill(label: 'יוצר הקבוצה', value: creatorDisplayName),
-                  _MetaPill(label: 'סוג טופס', value: ticketTypeLabel),
-                  _MetaPill(label: 'מספר טבלאות', value: '$tablesCount'),
+                  if (ticketTypeLabel != null)
+                    _MetaPill(label: 'סוג טופס', value: ticketTypeLabel!),
+                  if (formCount != null)
+                    _MetaPill(label: 'מספר טפסים', value: '$formCount'),
+                  _MetaPill(
+                    label: formCount != null ? 'סה״כ טבלאות' : 'מספר טבלאות',
+                    value: '$tablesCount',
+                  ),
                   _MetaPill(label: 'עלות כוללת', value: '$totalCost ש״ח'),
                 ],
               ),
@@ -2009,21 +2784,23 @@ class _GroupInfoPanel extends StatelessWidget {
                 runSpacing: 6,
                 alignment: WrapAlignment.end,
                 children: [
-                  TextButton.icon(
-                    onPressed: onOpenForm,
-                    icon: const Icon(Icons.confirmation_num_outlined),
-                    label: const Text('צפה בטופס'),
-                  ),
-                  Tooltip(
-                    message: onOpenReceipt == null
-                        ? 'הקבלה הותאמה אך עדיין אין קישור לפתיחה'
-                        : 'צפה בקבלה',
-                    child: TextButton.icon(
-                      onPressed: onOpenReceipt,
-                      icon: const Icon(Icons.receipt_long_outlined),
-                      label: const Text('צפה בקבלה'),
+                  if (onOpenForm != null)
+                    TextButton.icon(
+                      onPressed: onOpenForm,
+                      icon: const Icon(Icons.confirmation_num_outlined),
+                      label: const Text('צפה בטופס'),
                     ),
-                  ),
+                  if (onOpenForm != null)
+                    Tooltip(
+                      message: onOpenReceipt == null
+                          ? 'הקבלה הותאמה אך עדיין אין קישור לפתיחה'
+                          : 'צפה בקבלה',
+                      child: TextButton.icon(
+                        onPressed: onOpenReceipt,
+                        icon: const Icon(Icons.receipt_long_outlined),
+                        label: const Text('צפה בקבלה'),
+                      ),
+                    ),
                 ],
               ),
             ],
@@ -2175,11 +2952,13 @@ class _GroupOutcomeCard extends StatelessWidget {
     required this.group,
     required this.currentUserId,
     required this.creatorDisplayName,
+    this.groupForms = const <LotteryGroupForm>[],
   });
 
   final LotteryGroup group;
   final String currentUserId;
   final String creatorDisplayName;
+  final List<LotteryGroupForm> groupForms;
 
   @override
   Widget build(BuildContext context) {
@@ -2222,6 +3001,12 @@ class _GroupOutcomeCard extends StatelessWidget {
 
     final String? submittedFormId = group.submittedFormId;
     if (submittedFormId == null || submittedFormId.isEmpty) {
+      final bool hasPublishedResults = group.resultPublishedAt != null;
+      final num totalWinnings = group.groupWinningAmount;
+      final num myWinnings = _aggregateMyWinningsFromGroupForms(
+        forms: groupForms,
+        currentUserId: currentUserId,
+      );
       return _InfoCard(
         title: 'פרטי הקבוצה',
         rows: [
@@ -2238,6 +3023,57 @@ class _GroupOutcomeCard extends StatelessWidget {
           _InfoRow(
             label: 'מועד שליחה',
             value: formatPresentationDateTime(group.submittedAt),
+          ),
+          _InfoRow(
+            label: 'זכייה כוללת',
+            value:
+                hasPublishedResults ? '$totalWinnings ש״ח' : 'טרם פורסם',
+          ),
+          _InfoRow(
+            label: 'הזכייה שלי',
+            value:
+                hasPublishedResults ? '$myWinnings ש״ח' : 'טרם פורסם',
+          ),
+        ],
+      );
+    }
+
+    if (group.isMultiFormBundle) {
+      final bool hasPublishedResults = group.resultPublishedAt != null ||
+          groupForms.any(
+            (form) => form.resultStatus != null || (form.winAmount ?? 0) > 0,
+          );
+      final num totalWinnings = group.groupWinningAmount > 0
+          ? group.groupWinningAmount
+          : groupForms.fold<num>(
+              0,
+              (num total, LotteryGroupForm form) => total + (form.winAmount ?? 0),
+            );
+      final num myWinnings = _aggregateMyWinningsFromGroupForms(
+        forms: groupForms,
+        currentUserId: currentUserId,
+      );
+
+      return _InfoCard(
+        title: 'פרטי הקבוצה',
+        rows: [
+          _InfoRow(
+            label: 'עלות למשתתף',
+            value: group.currentPerParticipantCost > 0
+                ? '${group.currentPerParticipantCost} ש״ח'
+                : 'לא זמין',
+          ),
+          _InfoRow(
+            label: 'מועד שליחה',
+            value: formatPresentationDateTime(group.submittedAt),
+          ),
+          _InfoRow(
+            label: 'זכייה כוללת',
+            value: hasPublishedResults ? '$totalWinnings ש״ח' : 'טרם פורסם',
+          ),
+          _InfoRow(
+            label: 'הזכייה שלי',
+            value: hasPublishedResults ? '$myWinnings ש״ח' : 'טרם פורסם',
           ),
         ],
       );
@@ -2288,6 +3124,19 @@ class _GroupOutcomeCard extends StatelessWidget {
       },
     );
   }
+}
+
+num _aggregateMyWinningsFromGroupForms({
+  required List<LotteryGroupForm> forms,
+  required String currentUserId,
+}) {
+  return forms.fold<num>(0, (num total, LotteryGroupForm form) {
+    final num? myShare = extractMyWinningShare(
+      winAllocations: form.rawData['winAllocations'],
+      userId: currentUserId,
+    );
+    return total + (myShare ?? 0);
+  });
 }
 
 class _InfoRow {

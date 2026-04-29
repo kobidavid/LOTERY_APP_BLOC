@@ -90,10 +90,23 @@ class _BundleSummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _SummaryRow(label: 'מספר טפסים', value: '${forms.length}'),
+          _SummaryRow(
+            label: 'מס׳ הגרלה',
+            value: _bundleLotteryId(bundle, forms),
+          ),
+          _SummaryRow(
+            label: 'תאריך הגרלה',
+            value:
+                formatPresentationDateTime(_bundleLotteryDate(bundle, forms)),
+          ),
           _SummaryRow(label: 'סה״כ טבלאות', value: '$totalTables'),
           _SummaryRow(
             label: 'עלות כוללת',
             value: '${_formatAmount(bundle.totalCost)} ש״ח',
+          ),
+          _SummaryRow(
+            label: 'זכייה כוללת',
+            value: _bundleWinningStatusLabel(forms),
           ),
           _SummaryRow(
             label: 'נשלח',
@@ -219,8 +232,7 @@ class _PersonalFormTrackerState extends State<_PersonalFormTracker>
 
   bool get _isSubmitted => widget.form.submittedAt != null;
 
-  bool get _areAllPrinted =>
-      widget.form.printedAt != null;
+  bool get _areAllPrinted => widget.form.printedAt != null;
 
   bool get _areAllSubmittedToStation =>
       widget.form.submittedToStationAt != null;
@@ -266,7 +278,8 @@ class _BundleFormsSection extends StatelessWidget {
                 if (index < forms.length - 1)
                   Divider(
                     height: 18,
-                    color: theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.45),
                   ),
               ],
             );
@@ -303,7 +316,13 @@ class _BundleFormRow extends StatelessWidget {
           spacing: 8,
           runSpacing: 6,
           children: [
-            _MetaText(value: 'סוג טופס: ${form.isDoubleMode ? 'דאבל' : 'רגיל'}'),
+            _MetaText(
+                value: 'סוג טופס: ${form.isDoubleMode ? 'דאבל' : 'רגיל'}'),
+            _MetaText(value: 'מס׳ הגרלה: ${form.lotteryId?.toString() ?? '—'}'),
+            _MetaText(
+              value:
+                  'תאריך הגרלה: ${formatPresentationDateTime(_safeBundleFormDrawDate(form, null))}',
+            ),
             _MetaText(value: 'מספר טבלאות: ${form.tableCount}'),
             _MetaText(value: 'עלות הטופס: ${_formatAmount(form.cost)} ש״ח'),
             _MetaText(value: 'זכייה: ${_formWinningStatusLabel(form)}'),
@@ -323,7 +342,9 @@ class _BundleFormRow extends StatelessWidget {
                   MaterialPageRoute<void>(
                     builder: (_) => LotteryTicketPreviewPage(
                       title: 'טופס ${form.displayOrder}',
-                      subtitle: 'תצוגה לקריאה בלבד של טופס מתוך שליחה מרובת טפסים',
+                      subtitle:
+                          'תצוגה לקריאה בלבד של טופס מתוך שליחה מרובת טפסים',
+                      lotteryId: form.lotteryId,
                       tables: form.tables,
                       showDebug: false,
                     ),
@@ -348,6 +369,53 @@ class _BundleFormRow extends StatelessWidget {
       ],
     );
   }
+}
+
+String _bundleLotteryId(
+  PersonalSubmittedBundle bundle,
+  List<PersonalSubmittedBundleForm> forms,
+) {
+  for (final PersonalSubmittedBundleForm form in forms) {
+    if (form.lotteryId != null && form.lotteryId! > 0) {
+      return form.lotteryId!.toString();
+    }
+  }
+  if (bundle.lotteryId != null && bundle.lotteryId! > 0) {
+    return bundle.lotteryId!.toString();
+  }
+  return '—';
+}
+
+DateTime? _bundleLotteryDate(
+  PersonalSubmittedBundle bundle,
+  List<PersonalSubmittedBundleForm> forms,
+) {
+  for (final PersonalSubmittedBundleForm form in forms) {
+    final DateTime? safeDrawDate =
+        _safeBundleFormDrawDate(form, bundle.submittedAt);
+    if (safeDrawDate != null) {
+      return safeDrawDate;
+    }
+  }
+  return _safeBundleDrawDate(bundle.salesCloseAt, bundle.submittedAt);
+}
+
+String _bundleWinningStatusLabel(List<PersonalSubmittedBundleForm> forms) {
+  if (forms.isEmpty) {
+    return 'טרם פורסם';
+  }
+  final bool hasAnyPublishedResult =
+      forms.any(_isPersonalBundleFormResultPublished);
+  if (!hasAnyPublishedResult) {
+    return 'טרם פורסם';
+  }
+  final num totalWinAmount = forms.fold<num>(
+    0,
+    (num total, PersonalSubmittedBundleForm form) =>
+        total +
+        (_isPersonalBundleFormResultPublished(form) ? form.winAmount : 0),
+  );
+  return '${_formatAmount(totalWinAmount)} ש״ח';
 }
 
 class _SummaryRow extends StatelessWidget {
@@ -433,10 +501,8 @@ class _TrackerConnector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color baseColor = Theme.of(context)
-        .colorScheme
-        .outlineVariant
-        .withValues(alpha: 0.45);
+    final Color baseColor =
+        Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.45);
     return Container(
       width: 10,
       height: 4,
@@ -552,7 +618,9 @@ bool _hasOpenableReceiptTarget(String? receiptUrl) {
     return false;
   }
   final Uri? uri = Uri.tryParse(receiptUrl);
-  return uri != null && uri.hasScheme && (uri.host.isNotEmpty || uri.scheme == 'file');
+  return uri != null &&
+      uri.hasScheme &&
+      (uri.host.isNotEmpty || uri.scheme == 'file');
 }
 
 Future<void> _openReceipt({
@@ -583,8 +651,35 @@ String _formatAmount(num value) {
 }
 
 String _formWinningStatusLabel(PersonalSubmittedBundleForm form) {
-  if (form.resultStatus == null && form.winAmount <= 0) {
-    return 'ממתין לתוצאות';
+  if (!_isPersonalBundleFormResultPublished(form)) {
+    return 'טרם פורסם';
   }
   return '${_formatAmount(form.winAmount)} ש״ח';
+}
+
+bool _isPersonalBundleFormResultPublished(PersonalSubmittedBundleForm form) {
+  return form.resultPublishedAt != null ||
+      form.resultStatus == LotteryResultStatus.winner ||
+      form.resultStatus == LotteryResultStatus.loser ||
+      form.resultStatus == LotteryResultStatus.checked;
+}
+
+DateTime? _safeBundleFormDrawDate(
+  PersonalSubmittedBundleForm form,
+  DateTime? bundleSubmittedAt,
+) {
+  return _safeBundleDrawDate(
+    form.salesCloseAt,
+    form.submittedAt ?? bundleSubmittedAt,
+  );
+}
+
+DateTime? _safeBundleDrawDate(DateTime? drawDate, DateTime? submittedAt) {
+  if (drawDate == null) {
+    return null;
+  }
+  if (submittedAt == null || !drawDate.isBefore(submittedAt)) {
+    return drawDate;
+  }
+  return null;
 }
