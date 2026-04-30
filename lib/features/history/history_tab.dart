@@ -10,6 +10,17 @@ import 'personal_form_details_page.dart';
 import 'personal_submission_bundle_details_page.dart';
 import '../lottery_form/group_details_page.dart';
 
+const Color _historyDarkCard = Color(0xFF4C2A35);
+const Color _historyDarkCardEdge = Color(0xFF6A3D4C);
+const Color _historyDarkTextPrimary = Color(0xFFFFF7F9);
+const Color _historyDarkTextSecondary = Color(0xFFE6D7DD);
+const Color _historyDarkTextMuted = Color(0xFFCFBCC4);
+const Color _historyLightCard = Color(0xFFFFFBFC);
+const Color _historyLightCardEdge = Color(0xFFE7D6DC);
+const Color _historyLightTextPrimary = Color(0xFF2E1D24);
+const Color _historyLightTextSecondary = Color(0xFF5B474F);
+const Color _historyLightTextMuted = Color(0xFF7A656D);
+
 class HistoryTab extends StatefulWidget {
   const HistoryTab({
     super.key,
@@ -153,26 +164,67 @@ class _HistoryTabState extends State<HistoryTab>
                               child: Column(
                                 children: [
                                   Material(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    child: TabBar(
-                                      controller: _tabController,
-                                      indicatorSize: TabBarIndicatorSize.tab,
-                                      dividerColor: Theme.of(context)
-                                          .colorScheme
-                                          .outlineVariant
-                                          .withValues(alpha: 0.35),
-                                      labelPadding:
-                                          const EdgeInsetsDirectional.symmetric(
-                                        horizontal: 8,
-                                        vertical: 12,
+                                    color: Colors.transparent,
+                                    child: Container(
+                                      margin: const EdgeInsets.fromLTRB(
+                                        12,
+                                        8,
+                                        12,
+                                        0,
                                       ),
-                                      tabs: const [
-                                        Tab(text: 'טפסים שנשלחו'),
-                                        Tab(text: 'טיוטות'),
-                                        Tab(text: 'טפסים מבוטלים'),
-                                      ],
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: _historyTabShellColor(context),
+                                        borderRadius: BorderRadius.circular(22),
+                                        border: Border.all(
+                                          color: _historyTabShellBorderColor(
+                                            context,
+                                          ),
+                                        ),
+                                      ),
+                                      child: TabBar(
+                                        controller: _tabController,
+                                        isScrollable: true,
+                                        tabAlignment: TabAlignment.start,
+                                        indicatorSize: TabBarIndicatorSize.tab,
+                                        dividerColor: Colors.transparent,
+                                        indicator: BoxDecoration(
+                                          color: _historyTabIndicatorColor(
+                                            context,
+                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                          border: Border.all(
+                                            color:
+                                                _historyTabIndicatorBorderColor(
+                                              context,
+                                            ),
+                                          ),
+                                        ),
+                                        labelColor:
+                                            _historyCardTitleColor(context),
+                                        unselectedLabelColor:
+                                            _historyCardMutedTextColor(context),
+                                        labelStyle: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14,
+                                        ),
+                                        unselectedLabelStyle: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
+                                        labelPadding:
+                                            const EdgeInsetsDirectional
+                                                .symmetric(
+                                          horizontal: 14,
+                                          vertical: 12,
+                                        ),
+                                        tabs: const [
+                                          Tab(text: 'טפסים שנשלחו'),
+                                          Tab(text: 'טיוטות'),
+                                          Tab(text: 'טפסים מבוטלים'),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                   Expanded(
@@ -658,6 +710,8 @@ class _FormsTabContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Color titleColor = _historyCardTitleColor(context);
+    final Color secondaryColor = _historyCardSecondaryTextColor(context);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -671,13 +725,17 @@ class _FormsTabContent extends StatelessWidget {
                 textAlign: TextAlign.right,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w900,
+                      color: titleColor,
                     ),
               ),
               const SizedBox(height: 6),
               Text(
                 subtitle,
                 textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: secondaryColor,
+                      height: 1.35,
+                    ),
               ),
             ],
           ),
@@ -689,7 +747,9 @@ class _FormsTabContent extends StatelessWidget {
             child: Text(
               emptyText,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: secondaryColor,
+                  ),
             ),
           )
         else
@@ -760,13 +820,15 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
             widget.onDelete != null;
     final _HistoryCardVisualState visualState =
         _resolveHistoryCardVisualState(widget.item);
-    final Color baseCardColor =
-        Theme.of(context).colorScheme.primaryContainer;
+    final Color baseCardColor = _historyCardBackgroundColor(context);
+    final Color titleColor = _historyCardTitleColor(context);
+    final Color secondaryColor = _historyCardSecondaryTextColor(context);
+    final Color mutedColor = _historyCardMutedTextColor(context);
 
     final Widget tile = Material(
       color: baseCardColor,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         side: BorderSide(
           color: visualState.accentColor.withValues(alpha: 0.28),
           width: 1,
@@ -774,22 +836,22 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       ),
       child: InkWell(
         onTap: widget.onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 12),
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 16, 14),
           child: Stack(
             children: [
               PositionedDirectional(
-                top: -12,
-                bottom: -12,
+                top: -14,
+                bottom: -14,
                 end: -16,
                 child: Container(
                   width: 7,
                   decoration: BoxDecoration(
                     color: visualState.accentColor.withValues(alpha: 0.92),
                     borderRadius: const BorderRadiusDirectional.only(
-                      topEnd: Radius.circular(16),
-                      bottomEnd: Radius.circular(16),
+                      topEnd: Radius.circular(18),
+                      bottomEnd: Radius.circular(18),
                     ),
                   ),
                 ),
@@ -818,14 +880,17 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
                                 child: Text(
                                   _titleText(),
                                   textAlign: TextAlign.right,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontWeight: FontWeight.w900,
+                                    color: titleColor,
+                                    fontSize: 18,
+                                    height: 1.15,
                                   ),
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 10),
                           _buildSubtitle(),
                         ],
                       ),
@@ -845,12 +910,16 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
                             }
                           },
                           icon: const Icon(Icons.cancel_outlined),
+                          color: mutedColor,
                           tooltip: 'ביטול טיוטה קבוצתית',
                           visualDensity: VisualDensity.compact,
                         ),
-                      const Padding(
-                        padding: EdgeInsetsDirectional.only(top: 2),
-                        child: Icon(Icons.chevron_left),
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(top: 2),
+                        child: Icon(
+                          Icons.chevron_left,
+                          color: secondaryColor,
+                        ),
                       ),
                     ],
                   ),
@@ -880,9 +949,8 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
 
     return SizedBox(
       width: double.infinity,
-      child: Text(
-        _subtitleText(),
-        textAlign: TextAlign.right,
+      child: _HistoryCompactDetails(
+        rows: _subtitleRows(),
       ),
     );
   }
@@ -903,82 +971,88 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
     }
   }
 
-  String _subtitleText() {
+  List<_HistoryRowData> _subtitleRows() {
     switch (widget.item.kind) {
       case _FormsItemKind.personalSubmitted:
         final LotteryForm form = widget.item.personalForm!;
         final DateTime? safeDrawDate =
             _coerceSafeDrawDate(form.salesCloseAt, form.submittedAt);
-        final List<String> lines = [
-          'סטטוס: ${_personalStatusLabel(form)}',
-          'מס׳ הגרלה: ${form.lotteryId?.toString() ?? '—'}',
-          'תאריך הגרלה: ${_formatDate(safeDrawDate)}',
-          'עלות טופס: ${_ticketCost(form)} ש״ח',
-          'זכייה: ${_personalWinningStatusLabel(form)}',
-          'נשלח: ${_formatDate(form.submittedAt ?? form.updatedAt)}',
+        return <_HistoryRowData>[
+          _HistoryRowData(
+            label: 'מס׳ הגרלה',
+            value: form.lotteryId?.toString() ?? '—',
+          ),
+          _HistoryRowData(
+            label: 'תאריך הגרלה',
+            value: _formatDate(safeDrawDate),
+          ),
+          _HistoryRowData(
+            label: 'עלות',
+            value: '${_ticketCost(form)} ש״ח',
+            emphasize: true,
+          ),
+          _HistoryRowData(
+            label: 'זכייה',
+            value: _personalWinningStatusLabel(form),
+            emphasize: true,
+          ),
+          _HistoryRowData(
+            label: 'נשלח',
+            value: _formatDate(form.submittedAt ?? form.updatedAt),
+          ),
         ];
-        return lines.join('\n');
       case _FormsItemKind.personalDraft:
         final LotteryForm form = widget.item.personalForm!;
-        return [
-          'סטטוס: טיוטה',
-          'עלות טופס: ${_ticketCost(form)} ש״ח',
-          'זכייה: ממתין לתוצאות',
-          'נוצר: ${_formatDate(form.createdAt ?? form.savedAt ?? form.updatedAt)}',
-        ].join('\n');
+        return <_HistoryRowData>[
+          const _HistoryRowData(label: 'סטטוס', value: 'טיוטה'),
+          _HistoryRowData(
+            label: 'עלות',
+            value: '${_ticketCost(form)} ש״ח',
+            emphasize: true,
+          ),
+          const _HistoryRowData(label: 'זכייה', value: 'ממתין לתוצאות'),
+          _HistoryRowData(
+            label: 'נוצר',
+            value: _formatDate(
+              form.createdAt ?? form.savedAt ?? form.updatedAt,
+            ),
+          ),
+        ];
       case _FormsItemKind.personalSubmissionBundle:
         final PersonalSubmittedBundle bundle =
             widget.item.personalSubmissionBundle!;
-        final String bundleStatus = _bundleResultStatusLabel(bundle);
-        return [
-          'סטטוס: $bundleStatus',
-          'מספר טפסים: ${bundle.formCount}',
-          'מס׳ הגרלה: ${_bundleLotteryIdLabel(bundle)}',
-          'תאריך הגרלה: ${_formatDate(_bundleLotteryDate(bundle))}',
-          'סה״כ טבלאות: ${bundle.totalTableCount}',
-          'עלות כוללת: ${bundle.totalCost} ש״ח',
-          'זכייה: ${_bundleWinningStatusLabel(bundle)}',
-          'נשלח: ${_formatDate(bundle.submittedAt)}',
-        ].join('\n');
+        return <_HistoryRowData>[
+          _HistoryRowData(
+            label: 'מס׳ הגרלה',
+            value: _bundleLotteryIdLabel(bundle),
+          ),
+          _HistoryRowData(
+            label: 'תאריך הגרלה',
+            value: _formatDate(_bundleLotteryDate(bundle)),
+          ),
+          _HistoryRowData(
+            label: 'מספר טפסים',
+            value: '${bundle.formCount}',
+          ),
+          _HistoryRowData(
+            label: 'עלות כוללת',
+            value: '${bundle.totalCost} ש״ח',
+            emphasize: true,
+          ),
+          _HistoryRowData(
+            label: 'זכייה',
+            value: _bundleWinningStatusLabel(bundle),
+            emphasize: true,
+          ),
+          _HistoryRowData(
+            label: 'נשלח',
+            value: _formatDate(bundle.submittedAt),
+          ),
+        ];
       case _FormsItemKind.groupSubmitted:
-        final SubmittedGroupHistoryItem group = widget.item.submittedGroup!;
-        return [
-          'נוצר על ידי: ${group.creatorName}',
-          'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-          'העלות שלי: ${group.myEffectiveShare} ש״ח',
-        ].join('\n');
       case _FormsItemKind.groupDraft:
-        final UserGroupListItem group = widget.item.activeGroup!;
-        return [
-          'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
-          'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-          'עלות שלי: ${_draftGroupCostLabel(group)}',
-          'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
-        ].join('\n');
       case _FormsItemKind.groupCancelled:
-        final CancelledGroupHistoryItem group = widget.item.cancelledGroup!;
-        return [
-          'נוצר על ידי: ${group.creatorName}',
-          'סטטוס: בוטל',
-          'בוטל על ידי: ${group.cancelledByDisplayName}',
-          'מועד ביטול: ${_formatDate(group.cancelledAt)}',
-          'זיכוי לארנק: ${group.myRefundAmount} ש״ח',
-        ].join('\n');
-    }
-  }
-
-  String _personalStatusLabel(LotteryForm form) {
-    switch (form.resultStatus) {
-      case LotteryResultStatus.winner:
-        return 'זכייה';
-      case LotteryResultStatus.loser:
-        return 'ללא זכייה';
-      case LotteryResultStatus.checked:
-        return 'נבדק';
-      case LotteryResultStatus.waitingForResults:
-        return 'ממתין לתוצאות';
-      case null:
-        return form.status == LotteryFormStatus.submitted ? 'נשלח' : 'טיוטה';
+        return const <_HistoryRowData>[];
     }
   }
 
@@ -1008,28 +1082,6 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
           (_isPersonalBundleFormResultPublished(form) ? form.winAmount : 0),
     );
     return '$totalWinAmount ש״ח';
-  }
-
-  String _bundleResultStatusLabel(PersonalSubmittedBundle bundle) {
-    if (bundle.forms.isEmpty) {
-      return 'נשלחו כמה טפסים אישיים';
-    }
-    final bool hasAnyPublishedResult = bundle.forms.any(
-      _isPersonalBundleFormResultPublished,
-    );
-    if (!hasAnyPublishedResult) {
-      return 'ממתין לתוצאות';
-    }
-    if (bundle.forms
-        .any((form) => form.resultStatus == LotteryResultStatus.winner)) {
-      return 'פורסמו תוצאות';
-    }
-    if (bundle.forms.every(
-      (form) => form.resultStatus == LotteryResultStatus.loser,
-    )) {
-      return 'ללא זכייה';
-    }
-    return 'פורסמו תוצאות';
   }
 
   String _bundleLotteryIdLabel(PersonalSubmittedBundle bundle) {
@@ -1110,46 +1162,6 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
     return null;
   }
 
-  String _groupStatusLabel(String rawStatus) {
-    switch (rawStatus) {
-      case 'submitted':
-        return 'נשלח';
-      case 'ready_for_submission':
-        return 'מוכן לשליחה';
-      case 'awaiting_payments':
-        return 'ממתין לתשלומים';
-      case 'collecting_responses':
-        return 'איסוף משתתפים';
-      case 'cancelled':
-        return 'בוטל';
-      default:
-        return rawStatus.isEmpty ? 'בטיפול' : rawStatus;
-    }
-  }
-
-  String _responseStatusLabel(String rawStatus) {
-    switch (rawStatus) {
-      case 'interested':
-        return 'מעוניין';
-      case 'undecided':
-        return 'טרם הוחלט';
-      case 'declined':
-        return 'לא מצטרף';
-      default:
-        return rawStatus.isEmpty ? 'לא עודכן' : rawStatus;
-    }
-  }
-
-  String _draftGroupCostLabel(UserGroupListItem group) {
-    if (group.lockedIn && group.paymentStatus == 'paid') {
-      return 'שולם';
-    }
-    if (group.lockedIn && group.paymentStatus == 'unpaid') {
-      return 'ממתין לתשלום';
-    }
-    return 'ייקבע בהמשך';
-  }
-
   num _ticketCost(LotteryForm form) {
     final int populatedTableCount =
         form.tables.where((table) => !table.isEmpty).length;
@@ -1177,9 +1189,9 @@ class _HistoryResultChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.16),
+        color: _historyChipBackgroundColor(context),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
           color: color.withValues(alpha: 0.65),
@@ -1193,6 +1205,106 @@ class _HistoryResultChip extends StatelessWidget {
               color: color,
             ),
       ),
+    );
+  }
+}
+
+class _HistoryRowData {
+  const _HistoryRowData({
+    required this.label,
+    required this.value,
+    this.emphasize = false,
+  });
+
+  final String label;
+  final String value;
+  final bool emphasize;
+}
+
+class _HistoryCompactDetails extends StatelessWidget {
+  const _HistoryCompactDetails({
+    required this.rows,
+  });
+
+  final List<_HistoryRowData> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<_HistoryRowData> visibleRows = rows
+        .where((row) => row.value.trim().isNotEmpty)
+        .toList();
+    final Color dividerColor = _historyCardDividerColor(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: List<Widget>.generate(visibleRows.length, (int index) {
+        final _HistoryRowData row = visibleRows[index];
+        return Padding(
+          padding: EdgeInsets.only(bottom: index == visibleRows.length - 1 ? 0 : 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              _HistoryDetailRow(row: row),
+              if (index != visibleRows.length - 1) ...<Widget>[
+                const SizedBox(height: 8),
+                Divider(height: 1, thickness: 1, color: dividerColor),
+              ],
+            ],
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _HistoryDetailRow extends StatelessWidget {
+  const _HistoryDetailRow({
+    required this.row,
+  });
+
+  final _HistoryRowData row;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextStyle? labelStyle = Theme.of(context).textTheme.bodyMedium
+        ?.copyWith(
+          color: _historyCardMutedTextColor(context),
+          fontWeight: FontWeight.w700,
+          height: 1.28,
+        );
+    final TextStyle? valueStyle = Theme.of(context).textTheme.bodyMedium
+        ?.copyWith(
+          color: row.emphasize
+              ? _historyCardTitleColor(context)
+              : _historyCardSecondaryTextColor(context),
+          fontWeight: row.emphasize ? FontWeight.w800 : FontWeight.w600,
+          height: 1.28,
+        );
+
+    return Row(
+      textDirection: TextDirection.rtl,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Flexible(
+          flex: 11,
+          child: Text(
+            row.value,
+            textAlign: TextAlign.right,
+            softWrap: true,
+            style: valueStyle,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          flex: 8,
+          child: Text(
+            '${row.label}:',
+            textAlign: TextAlign.right,
+            softWrap: true,
+            style: labelStyle,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1289,6 +1401,68 @@ String getResultChipLabel(bool isPublished, num winAmount) {
   return 'לא זכה';
 }
 
+bool _isHistoryDark(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark;
+}
+
+Color _historyCardBackgroundColor(BuildContext context) {
+  return _isHistoryDark(context) ? _historyDarkCard : _historyLightCard;
+}
+
+Color _historyCardTitleColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? _historyDarkTextPrimary
+      : _historyLightTextPrimary;
+}
+
+Color _historyCardSecondaryTextColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? _historyDarkTextSecondary
+      : _historyLightTextSecondary;
+}
+
+Color _historyCardMutedTextColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? _historyDarkTextMuted
+      : _historyLightTextMuted;
+}
+
+Color _historyCardDividerColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? Colors.white.withValues(alpha: 0.08)
+      : _historyLightCardEdge;
+}
+
+Color _historyChipBackgroundColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? Colors.black.withValues(alpha: 0.18)
+      : Colors.white.withValues(alpha: 0.9);
+}
+
+Color _historyTabShellColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? _historyDarkCard.withValues(alpha: 0.94)
+      : const Color(0xFFF4E8EC);
+}
+
+Color _historyTabShellBorderColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? Colors.white.withValues(alpha: 0.08)
+      : _historyLightCardEdge;
+}
+
+Color _historyTabIndicatorColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? _historyDarkCardEdge.withValues(alpha: 0.9)
+      : Colors.white;
+}
+
+Color _historyTabIndicatorBorderColor(BuildContext context) {
+  return _isHistoryDark(context)
+      ? Colors.white.withValues(alpha: 0.08)
+      : _historyLightCardEdge;
+}
+
 class _GroupSummaryDetails extends StatelessWidget {
   const _GroupSummaryDetails({
     required this.item,
@@ -1302,9 +1476,8 @@ class _GroupSummaryDetails extends StatelessWidget {
   Widget build(BuildContext context) {
     final String? groupId = item.groupId;
     if (groupId == null) {
-      return Text(
-        _fallbackText(),
-        textAlign: TextAlign.right,
+      return _HistoryCompactDetails(
+        rows: _fallbackRows(),
       );
     }
 
@@ -1374,15 +1547,13 @@ class _GroupSummaryDetails extends StatelessWidget {
             );
 
             if (directMeta.hasAnyValue) {
-              return Text(
-                _resolvedText(
+              return _HistoryCompactDetails(
+                rows: _resolvedRows(
                   meta: directMeta,
                   resultDisplay: resultDisplay,
-                  debugInfo: debugInfo,
                   createdAt: createdAt,
                   submittedAt: submittedAt,
                 ),
-                textAlign: TextAlign.right,
               );
             }
 
@@ -1396,29 +1567,25 @@ class _GroupSummaryDetails extends StatelessWidget {
                   formId: fallbackFormId,
                 ),
                 builder: (context, metaSnapshot) {
-                  return Text(
-                    _resolvedText(
+                  return _HistoryCompactDetails(
+                    rows: _resolvedRows(
                       meta: metaSnapshot.data ?? const _GroupHistoryFormMeta(),
                       resultDisplay: resultDisplay,
-                      debugInfo: debugInfo,
                       createdAt: createdAt,
                       submittedAt: submittedAt,
                     ),
-                    textAlign: TextAlign.right,
                   );
                 },
               );
             }
 
-            return Text(
-              _resolvedText(
+            return _HistoryCompactDetails(
+              rows: _resolvedRows(
                 meta: const _GroupHistoryFormMeta(),
                 resultDisplay: resultDisplay,
-                debugInfo: debugInfo,
                 createdAt: createdAt,
                 submittedAt: submittedAt,
               ),
-              textAlign: TextAlign.right,
             );
           },
         );
@@ -1426,141 +1593,176 @@ class _GroupSummaryDetails extends StatelessWidget {
     );
   }
 
-  String _resolvedText({
+  List<_HistoryRowData> _resolvedRows({
     required _GroupHistoryFormMeta meta,
     required _GroupResultDisplay resultDisplay,
-    required _GroupResultDebugInfo debugInfo,
     required DateTime? createdAt,
     required DateTime? submittedAt,
   }) {
     if (item.kind == _FormsItemKind.groupSubmitted) {
-      return _submittedText(
+      return _submittedRows(
         submittedAt: submittedAt,
         meta: meta,
         resultDisplay: resultDisplay,
-        debugInfo: debugInfo,
       );
     }
     if (item.kind == _FormsItemKind.groupCancelled) {
-      return _cancelledText(meta: meta);
+      return _cancelledRows(meta: meta);
     }
-    return _draftText(
+    return _draftRows(
       createdAt: createdAt,
       meta: meta,
     );
   }
 
-  String _submittedText({
+  List<_HistoryRowData> _submittedRows({
     required DateTime? submittedAt,
     required _GroupHistoryFormMeta meta,
     required _GroupResultDisplay resultDisplay,
-    required _GroupResultDebugInfo debugInfo,
   }) {
     final SubmittedGroupHistoryItem group = item.submittedGroup!;
 
-    final List<String> lines = <String>[
-      'נוצר על ידי: ${group.creatorName}',
-      'סטטוס: ${_submittedStatusLabel(group.dispatchStatus)}',
-      'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
-      'תאריך הגרלה: ${formatPresentationDateTime(meta.lotteryDate ?? submittedAt ?? group.submittedAt)}',
-      'העלות שלי: ${group.myEffectiveShare} ש״ח',
-      'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
-      'זכייה קבוצתית: ${resultDisplay.groupLabel}',
-      'הזכייה שלי: ${resultDisplay.myLabel}',
+    return <_HistoryRowData>[
+      _HistoryRowData(label: 'מס׳ הגרלה', value: meta.lotteryIdLabel ?? '—'),
+      _HistoryRowData(
+        label: 'תאריך הגרלה',
+        value: formatPresentationDateTime(meta.lotteryDate),
+      ),
+      _HistoryRowData(label: 'נוצר על ידי', value: group.creatorName),
+      _HistoryRowData(
+        label: 'העלות שלי',
+        value: '${group.myEffectiveShare} ש״ח',
+        emphasize: true,
+      ),
+      _HistoryRowData(
+        label: 'זכייה קבוצתית',
+        value: resultDisplay.groupLabel,
+        emphasize: true,
+      ),
+      _HistoryRowData(
+        label: 'הזכייה שלי',
+        value: resultDisplay.myLabel,
+        emphasize: true,
+      ),
+      _HistoryRowData(
+        label: 'נשלח',
+        value: formatPresentationDateTime(submittedAt ?? group.submittedAt),
+      ),
     ];
-    return lines.join('\n');
   }
 
-  String _draftText({
+  List<_HistoryRowData> _draftRows({
     required DateTime? createdAt,
     required _GroupHistoryFormMeta meta,
   }) {
     if (item.kind == _FormsItemKind.groupDraft) {
       final UserGroupListItem group = item.activeGroup!;
-      return [
-        'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
-        'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-        'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
-        'תאריך הגרלה: ${formatPresentationDateTime(meta.lotteryDate ?? createdAt ?? group.updatedAt)}',
-        'עלות שלי: ${_draftGroupCostLabel(group)}',
-        'נוצר: ${formatPresentationDateTime(createdAt ?? group.updatedAt)}',
-        'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
-      ].join('\n');
+      return <_HistoryRowData>[
+        _HistoryRowData(label: 'מס׳ הגרלה', value: meta.lotteryIdLabel ?? '—'),
+        _HistoryRowData(
+          label: 'תאריך הגרלה',
+          value: formatPresentationDateTime(meta.lotteryDate),
+        ),
+        _HistoryRowData(
+          label: 'נוצר על ידי',
+          value: group.creatorName ?? group.creatorUserId,
+        ),
+        _HistoryRowData(
+          label: 'עלות שלי',
+          value: _draftGroupCostLabel(group),
+          emphasize: true,
+        ),
+        _HistoryRowData(
+          label: 'מצב תגובה',
+          value: _responseStatusLabel(group.responseStatus),
+        ),
+        _HistoryRowData(
+          label: 'נוצר',
+          value: formatPresentationDateTime(createdAt ?? group.updatedAt),
+        ),
+      ];
     }
 
-    return _fallbackText();
+    return _fallbackRows();
   }
 
-  String _cancelledText({
+  List<_HistoryRowData> _cancelledRows({
     required _GroupHistoryFormMeta meta,
   }) {
     final CancelledGroupHistoryItem group = item.cancelledGroup!;
-    return [
-      'נוצר על ידי: ${group.creatorName}',
-      'סטטוס: בוטל',
-      'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
-      'תאריך הגרלה: ${formatPresentationDateTime(meta.lotteryDate ?? group.cancelledAt)}',
-      'בוטל על ידי: ${group.cancelledByDisplayName}',
-      'מועד ביטול: ${formatPresentationDateTime(group.cancelledAt)}',
-      'זיכוי לארנק: ${group.myRefundAmount} ש״ח',
-    ].join('\n');
+    return <_HistoryRowData>[
+      _HistoryRowData(label: 'מס׳ הגרלה', value: meta.lotteryIdLabel ?? '—'),
+      _HistoryRowData(
+        label: 'תאריך הגרלה',
+        value: formatPresentationDateTime(meta.lotteryDate),
+      ),
+      _HistoryRowData(label: 'נוצר על ידי', value: group.creatorName),
+      _HistoryRowData(
+        label: 'בוטל על ידי',
+        value: group.cancelledByDisplayName,
+      ),
+      _HistoryRowData(
+        label: 'מועד ביטול',
+        value: formatPresentationDateTime(group.cancelledAt),
+      ),
+      _HistoryRowData(
+        label: 'זיכוי לארנק',
+        value: '${group.myRefundAmount} ש״ח',
+        emphasize: true,
+      ),
+    ];
   }
 
-  String _submittedStatusLabel(String rawDispatchStatus) {
-    switch (rawDispatchStatus) {
-      case LotteryGroupRepository.dispatchStatusSubmittedToStation:
-        return 'נמסר לתחנה';
-      case LotteryGroupRepository.dispatchStatusPrinted:
-        return 'הודפס';
-      case LotteryGroupRepository.dispatchStatusQueuedForPrint:
-      default:
-        return 'ממתין להדפסה';
-    }
-  }
-
-  String _fallbackText() {
+  List<_HistoryRowData> _fallbackRows() {
     if (item.kind == _FormsItemKind.groupSubmitted) {
       final SubmittedGroupHistoryItem group = item.submittedGroup!;
-      return [
-        'נוצר על ידי: ${group.creatorName}',
-        'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-        'מס׳ הגרלה: —',
-        'העלות שלי: ${group.myEffectiveShare} ש״ח',
-        'נשלח: ${formatPresentationDateTime(group.submittedAt)}',
-        'הזכייה שלי: טרם פורסם',
-      ].join('\n');
+      return <_HistoryRowData>[
+        _HistoryRowData(label: 'מס׳ הגרלה', value: '—'),
+        const _HistoryRowData(label: 'תאריך הגרלה', value: 'ללא תאריך'),
+        _HistoryRowData(label: 'נוצר על ידי', value: group.creatorName),
+        _HistoryRowData(
+          label: 'העלות שלי',
+          value: '${group.myEffectiveShare} ש״ח',
+          emphasize: true,
+        ),
+        const _HistoryRowData(
+          label: 'הזכייה שלי',
+          value: 'טרם פורסם',
+          emphasize: true,
+        ),
+        _HistoryRowData(
+          label: 'נשלח',
+          value: formatPresentationDateTime(group.submittedAt),
+        ),
+      ];
     }
 
     if (item.kind == _FormsItemKind.groupCancelled) {
-      return _cancelledText(meta: const _GroupHistoryFormMeta());
+      return _cancelledRows(meta: const _GroupHistoryFormMeta());
     }
 
     final UserGroupListItem group = item.activeGroup!;
-    return [
-      'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
-      'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
-      'מס׳ הגרלה: —',
-      'עלות שלי: ${_draftGroupCostLabel(group)}',
-      'נוצר: ${formatPresentationDateTime(group.updatedAt)}',
-      'מצב תגובה: ${_responseStatusLabel(group.responseStatus)}',
-    ].join('\n');
-  }
-
-  String _groupStatusLabel(String rawStatus) {
-    switch (rawStatus) {
-      case 'submitted':
-        return 'נשלח';
-      case 'ready_for_submission':
-        return 'מוכן לשליחה';
-      case 'awaiting_payments':
-        return 'ממתין לתשלומים';
-      case 'collecting_responses':
-        return 'איסוף משתתפים';
-      case 'cancelled':
-        return 'בוטל';
-      default:
-        return rawStatus.isEmpty ? 'בטיפול' : rawStatus;
-    }
+    return <_HistoryRowData>[
+      _HistoryRowData(label: 'מס׳ הגרלה', value: '—'),
+      const _HistoryRowData(label: 'תאריך הגרלה', value: 'ללא תאריך'),
+      _HistoryRowData(
+        label: 'נוצר על ידי',
+        value: group.creatorName ?? group.creatorUserId,
+      ),
+      _HistoryRowData(
+        label: 'עלות שלי',
+        value: _draftGroupCostLabel(group),
+        emphasize: true,
+      ),
+      _HistoryRowData(
+        label: 'מצב תגובה',
+        value: _responseStatusLabel(group.responseStatus),
+      ),
+      _HistoryRowData(
+        label: 'נוצר',
+        value: formatPresentationDateTime(group.updatedAt),
+      ),
+    ];
   }
 
   String _responseStatusLabel(String rawStatus) {
