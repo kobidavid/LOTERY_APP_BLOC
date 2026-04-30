@@ -165,66 +165,90 @@ class _HistoryTabState extends State<HistoryTab>
                                 children: [
                                   Material(
                                     color: Colors.transparent,
-                                    child: Container(
-                                      margin: const EdgeInsets.fromLTRB(
-                                        12,
-                                        8,
-                                        12,
-                                        0,
-                                      ),
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: _historyTabShellColor(context),
-                                        borderRadius: BorderRadius.circular(22),
-                                        border: Border.all(
-                                          color: _historyTabShellBorderColor(
-                                            context,
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        final double textScale =
+                                            MediaQuery.textScalerOf(context)
+                                                    .scale(14) /
+                                                14;
+                                        final bool useScrollableTabs =
+                                            textScale > 1.25 ||
+                                                constraints.maxWidth < 360;
+
+                                        return Container(
+                                          margin: const EdgeInsets.fromLTRB(
+                                            12,
+                                            8,
+                                            12,
+                                            0,
                                           ),
-                                        ),
-                                      ),
-                                      child: TabBar(
-                                        controller: _tabController,
-                                        isScrollable: true,
-                                        tabAlignment: TabAlignment.start,
-                                        indicatorSize: TabBarIndicatorSize.tab,
-                                        dividerColor: Colors.transparent,
-                                        indicator: BoxDecoration(
-                                          color: _historyTabIndicatorColor(
-                                            context,
-                                          ),
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          border: Border.all(
-                                            color:
-                                                _historyTabIndicatorBorderColor(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: _historyTabShellColor(
                                               context,
                                             ),
+                                            borderRadius:
+                                                BorderRadius.circular(22),
+                                            border: Border.all(
+                                              color:
+                                                  _historyTabShellBorderColor(
+                                                context,
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                        labelColor:
-                                            _historyCardTitleColor(context),
-                                        unselectedLabelColor:
-                                            _historyCardMutedTextColor(context),
-                                        labelStyle: const TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: 14,
-                                        ),
-                                        unselectedLabelStyle: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14,
-                                        ),
-                                        labelPadding:
-                                            const EdgeInsetsDirectional
-                                                .symmetric(
-                                          horizontal: 14,
-                                          vertical: 12,
-                                        ),
-                                        tabs: const [
-                                          Tab(text: 'טפסים שנשלחו'),
-                                          Tab(text: 'טיוטות'),
-                                          Tab(text: 'טפסים מבוטלים'),
-                                        ],
-                                      ),
+                                          child: TabBar(
+                                            controller: _tabController,
+                                            isScrollable: useScrollableTabs,
+                                            tabAlignment: useScrollableTabs
+                                                ? TabAlignment.start
+                                                : TabAlignment.fill,
+                                            indicatorSize:
+                                                TabBarIndicatorSize.tab,
+                                            dividerColor: Colors.transparent,
+                                            indicator: BoxDecoration(
+                                              color:
+                                                  _historyTabIndicatorColor(
+                                                context,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                              border: Border.all(
+                                                color:
+                                                    _historyTabIndicatorBorderColor(
+                                                  context,
+                                                ),
+                                              ),
+                                            ),
+                                            labelColor:
+                                                _historyCardTitleColor(context),
+                                            unselectedLabelColor:
+                                                _historyCardMutedTextColor(
+                                              context,
+                                            ),
+                                            labelStyle: const TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                              fontSize: 14,
+                                            ),
+                                            unselectedLabelStyle:
+                                                const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 14,
+                                            ),
+                                            labelPadding: useScrollableTabs
+                                                ? const EdgeInsetsDirectional
+                                                    .symmetric(
+                                                    horizontal: 14,
+                                                    vertical: 12,
+                                                  )
+                                                : EdgeInsets.zero,
+                                            tabs: const [
+                                              Tab(text: 'טפסים שנשלחו'),
+                                              Tab(text: 'טיוטות'),
+                                              Tab(text: 'טפסים מבוטלים'),
+                                            ],
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ),
                                   Expanded(
@@ -715,29 +739,35 @@ class _FormsTabContent extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
-        Align(
-          alignment: AlignmentDirectional.centerEnd,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                title,
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
-                      color: titleColor,
-                    ),
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: SizedBox(
+              width: double.infinity,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    title,
+                    textAlign: TextAlign.right,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: titleColor,
+                        ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    subtitle,
+                    textAlign: TextAlign.right,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: secondaryColor,
+                          height: 1.35,
+                        ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                subtitle,
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: secondaryColor,
-                      height: 1.35,
-                    ),
-              ),
-            ],
+            ),
           ),
         ),
         const SizedBox(height: 14),
@@ -1281,30 +1311,35 @@ class _HistoryDetailRow extends StatelessWidget {
           height: 1.28,
         );
 
-    return Row(
+    return Directionality(
       textDirection: TextDirection.rtl,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Flexible(
-          flex: 11,
-          child: Text(
-            row.value,
-            textAlign: TextAlign.right,
-            softWrap: true,
-            style: valueStyle,
+      child: Row(
+        textDirection: TextDirection.rtl,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Flexible(
+            flex: 8,
+            child: Text(
+              '${row.label}:',
+              textAlign: TextAlign.right,
+              softWrap: true,
+              textDirection: TextDirection.rtl,
+              style: labelStyle,
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Flexible(
-          flex: 8,
-          child: Text(
-            '${row.label}:',
-            textAlign: TextAlign.right,
-            softWrap: true,
-            style: labelStyle,
+          const SizedBox(width: 8),
+          Flexible(
+            flex: 11,
+            child: Text(
+              row.value,
+              textAlign: TextAlign.right,
+              softWrap: true,
+              textDirection: TextDirection.rtl,
+              style: valueStyle,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
