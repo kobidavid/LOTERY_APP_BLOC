@@ -101,6 +101,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   int? _lastAutoScrolledActiveRowIndex;
   int? _lastAutoScrolledSelectedTableCount;
   Timer? _personalDraftPersistDebounce;
+  bool _isPersonalPaymentFlowInProgress = false;
 
   @override
   void initState() {
@@ -139,9 +140,22 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
   }
 
-  bool _shouldPersistPersonalDrafts(LotteryFormState state) {
+  bool _isPersonalMultiDraftFlow(LotteryFormState state) {
     final List<_LocalDraftForm> drafts = _effectiveLocalDrafts(state);
     return drafts.length > 1 && drafts.every((draft) => !draft.isGroupMode);
+  }
+
+  bool _shouldPersistPersonalDrafts(LotteryFormState state) {
+    if (_isPersonalMultiDraftFlow(state)) {
+      final String reason = _isPersonalPaymentFlowInProgress
+          ? 'payment_flow_started'
+          : 'personal_multi_local_only';
+      debugPrint(
+        '[DraftsDebug] autoPersist skipped reason=$reason activeDraft=$_activeDraftIndex drafts=${_effectiveLocalDrafts(state).length}',
+      );
+      return false;
+    }
+    return false;
   }
 
   bool _canPersistDraft(_LocalDraftForm draft) {
@@ -150,6 +164,12 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   Future<void> _persistLocalDraftAtIndex(int index) async {
     if (!mounted || index < 0 || index >= _localDrafts.length) {
+      return;
+    }
+    if (_isPersonalPaymentFlowInProgress) {
+      debugPrint(
+        '[DraftsDebug] autoPersist skipped reason=payment_flow_started index=$index',
+      );
       return;
     }
     final _LocalDraftForm draft = _localDrafts[index];
@@ -271,7 +291,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
     final LotteryFormState currentState = cubit.state;
     _syncActiveDraftSnapshot(currentState);
-    if (!_isGroupMode) {
+    if (!_isGroupMode && _shouldPersistPersonalDrafts(currentState)) {
       await _persistLocalDraftAtIndex(_activeDraftIndex);
     }
     final bool targetGroupMode = _effectiveLocalDrafts(currentState).first.isGroupMode;
@@ -298,7 +318,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _isDoubleMode = draft.isDoubleMode;
     });
     cubit.loadLocalDraftState(draft.formState);
-    await _persistAllPersonalDrafts(cubit.state);
+    if (_shouldPersistPersonalDrafts(cubit.state)) {
+      await _persistAllPersonalDrafts(cubit.state);
+    }
   }
 
   Future<void> _switchToLocalDraft(int index) async {
@@ -315,7 +337,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _isDoubleMode = draft.isDoubleMode;
     });
     cubit.loadLocalDraftState(draft.formState);
-    await _persistAllPersonalDrafts(cubit.state);
+    if (_shouldPersistPersonalDrafts(cubit.state)) {
+      await _persistAllPersonalDrafts(cubit.state);
+    }
   }
 
   Future<bool> _deleteLocalDraft(int index) async {
@@ -472,10 +496,23 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     });
   }
 
-  void _resetLocalDraftsAfterSubmit(String userId) {
+  Future<void> _cleanupPersistedDraftsAfterSuccessfulSubmit() async {
     for (final _LocalDraftForm draft in _localDrafts) {
-      unawaited(_deletePersistedDraftIfNeeded(draft));
+      final String? formId = draft.formState.form.formId;
+      if (formId == null || formId.isEmpty) {
+        continue;
+      }
+      debugPrint(
+        '[DraftsDebug] cleanupTemporaryDraft start path=users/${draft.formState.form.userId}/forms/$formId localDraft=${draft.number}',
+      );
+      await _deletePersistedDraftIfNeeded(draft);
+      debugPrint(
+        '[DraftsDebug] cleanupTemporaryDraft success path=users/${draft.formState.form.userId}/forms/$formId localDraft=${draft.number}',
+      );
     }
+  }
+
+  void _resetLocalDraftsAfterSubmit(String userId) {
     final LotteryFormState initialState = LotteryFormState.initial(userId);
     _localDrafts
       ..clear()
@@ -960,29 +997,33 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final List<PersonalSubmissionDraftPayload> payloads =
         _buildPersonalSubmissionDraftPayloads(drafts);
     final num totalCost = _calculateDraftsTotalCost(drafts);
-
-    final bool? paymentConfirmed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => PaymentOptionsPage(
-          userId: currentState.form.userId,
-          amount: totalCost,
-          onWalletPayment: () async {
-            await _paymentRepository.chargeUserWallet(
+    _isPersonalPaymentFlowInProgress = true;
+    final bool? paymentConfirmed = await Navigator.of(context)
+        .push<bool>(
+          MaterialPageRoute<bool>(
+            builder: (_) => PaymentOptionsPage(
               userId: currentState.form.userId,
               amount: totalCost,
-            );
-            await _submitPersonalDraftBundleAndOpenHistory(
-              userId: currentState.form.userId,
-              payloads: payloads,
-            );
-          },
-          onExternalPayment: () => _submitPersonalDraftBundleAndOpenHistory(
-            userId: currentState.form.userId,
-            payloads: payloads,
+              onWalletPayment: () async {
+                await _paymentRepository.chargeUserWallet(
+                  userId: currentState.form.userId,
+                  amount: totalCost,
+                );
+                await _submitPersonalDraftBundleAndOpenHistory(
+                  userId: currentState.form.userId,
+                  payloads: payloads,
+                );
+              },
+              onExternalPayment: () => _submitPersonalDraftBundleAndOpenHistory(
+                userId: currentState.form.userId,
+                payloads: payloads,
+              ),
+            ),
           ),
-        ),
-      ),
-    );
+        )
+        .whenComplete(() {
+          _isPersonalPaymentFlowInProgress = false;
+        });
 
     if (!mounted || paymentConfirmed != true) {
       return;
@@ -1016,6 +1057,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             total + draft.cost,
       ),
     );
+    await _cleanupPersistedDraftsAfterSuccessfulSubmit();
 
     if (!mounted) {
       return;

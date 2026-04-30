@@ -290,6 +290,9 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
         clearSubmittedAt: true,
         clearId: true,
       );
+      debugPrint(
+        '[DraftsDebug] explicitSaveDraft start userId=${candidate.userId} status=${candidate.status.value} mode=${candidate.mode.value} isComplete=${candidate.isComplete}',
+      );
 
       final bool alreadyExists =
           await _formRepository.hasIdenticalSavedForm(candidate);
@@ -305,6 +308,9 @@ class LotteryFormCubit extends Cubit<LotteryFormState> {
       }
 
       final LotteryForm saved = await _formRepository.upsertForm(candidate);
+      debugPrint(
+        '[DraftsDebug] explicitSaveDraft success path=users/${saved.userId}/forms/${saved.formId ?? 'null'} formId=${saved.formId ?? 'null'} status=${saved.status.value} mode=${saved.mode.value} createdAt=${saved.createdAt?.toIso8601String() ?? 'null'} updatedAt=${saved.updatedAt?.toIso8601String() ?? 'null'}',
+      );
       emit(
         state.copyWith(
           form: saved.copyWith(
