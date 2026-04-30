@@ -521,6 +521,20 @@ class _HistoryTabState extends State<HistoryTab>
   }
 }
 
+bool _isPersonalFormResultPublished(LotteryForm form) {
+  return form.resultPublishedAt != null ||
+      form.resultStatus == LotteryResultStatus.winner ||
+      form.resultStatus == LotteryResultStatus.loser ||
+      form.resultStatus == LotteryResultStatus.checked;
+}
+
+bool _isPersonalBundleFormResultPublished(PersonalSubmittedBundleForm form) {
+  return form.resultPublishedAt != null ||
+      form.resultStatus == LotteryResultStatus.winner ||
+      form.resultStatus == LotteryResultStatus.loser ||
+      form.resultStatus == LotteryResultStatus.checked;
+}
+
 enum _FormsItemKind {
   personalSubmitted,
   personalDraft,
@@ -744,57 +758,101 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
             widget.item.groupId != null &&
             widget.item.activeGroup?.creatorUserId == widget.viewerUserId &&
             widget.onDelete != null;
+    final _HistoryCardVisualState visualState =
+        _resolveHistoryCardVisualState(widget.item);
+    final Color baseCardColor =
+        Theme.of(context).colorScheme.primaryContainer;
 
     final Widget tile = Material(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      borderRadius: BorderRadius.circular(16),
+      color: baseCardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: visualState.accentColor.withValues(alpha: 0.28),
+          width: 1,
+        ),
+      ),
       child: InkWell(
         onTap: widget.onTap,
         borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 12),
-          child: Row(
-            textDirection: TextDirection.rtl,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Stack(
             children: [
-              Expanded(
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _titleText(),
-                        textAlign: TextAlign.right,
-                        style: const TextStyle(fontWeight: FontWeight.w900),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildSubtitle(),
-                    ],
+              PositionedDirectional(
+                top: -12,
+                bottom: -12,
+                end: -16,
+                child: Container(
+                  width: 7,
+                  decoration: BoxDecoration(
+                    color: visualState.accentColor.withValues(alpha: 0.92),
+                    borderRadius: const BorderRadiusDirectional.only(
+                      topEnd: Radius.circular(16),
+                      bottomEnd: Radius.circular(16),
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Column(
-                mainAxisSize: MainAxisSize.min,
+              Row(
+                textDirection: TextDirection.rtl,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (cancellableGroupDraft)
-                    IconButton(
-                      onPressed: () async {
-                        final bool cancelled = await widget.onDelete!();
-                        if (cancelled && mounted) {
-                          setState(() => _isCollapsed = true);
-                        }
-                      },
-                      icon: const Icon(Icons.cancel_outlined),
-                      tooltip: 'ביטול טיוטה קבוצתית',
-                      visualDensity: VisualDensity.compact,
+                  Expanded(
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            textDirection: TextDirection.rtl,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _HistoryResultChip(
+                                label: visualState.chipLabel,
+                                color: visualState.accentColor,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _titleText(),
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          _buildSubtitle(),
+                        ],
+                      ),
                     ),
-                  const Padding(
-                    padding: EdgeInsetsDirectional.only(top: 2),
-                    child: Icon(Icons.chevron_left),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (cancellableGroupDraft)
+                        IconButton(
+                          onPressed: () async {
+                            final bool cancelled = await widget.onDelete!();
+                            if (cancelled && mounted) {
+                              setState(() => _isCollapsed = true);
+                            }
+                          },
+                          icon: const Icon(Icons.cancel_outlined),
+                          tooltip: 'ביטול טיוטה קבוצתית',
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      const Padding(
+                        padding: EdgeInsetsDirectional.only(top: 2),
+                        child: Icon(Icons.chevron_left),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -863,7 +921,6 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalDraft:
         final LotteryForm form = widget.item.personalForm!;
         return [
-          'DEBUG DRAFTS v2',
           'סטטוס: טיוטה',
           'עלות טופס: ${_ticketCost(form)} ש״ח',
           'זכייה: ממתין לתוצאות',
@@ -874,7 +931,6 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
             widget.item.personalSubmissionBundle!;
         final String bundleStatus = _bundleResultStatusLabel(bundle);
         return [
-          'DEBUG PERSONAL BUNDLE v2',
           'סטטוס: $bundleStatus',
           'מספר טפסים: ${bundle.formCount}',
           'מס׳ הגרלה: ${_bundleLotteryIdLabel(bundle)}',
@@ -894,7 +950,6 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.groupDraft:
         final UserGroupListItem group = widget.item.activeGroup!;
         return [
-          'DEBUG DRAFTS v2',
           'נוצר על ידי: ${group.creatorName ?? group.creatorUserId}',
           'סטטוס: ${_groupStatusLabel(group.groupStatus)}',
           'עלות שלי: ${_draftGroupCostLabel(group)}',
@@ -1110,6 +1165,130 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
   }
 }
 
+class _HistoryResultChip extends StatelessWidget {
+  const _HistoryResultChip({
+    required this.label,
+    required this.color,
+  });
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: color.withValues(alpha: 0.65),
+        ),
+      ),
+      child: Text(
+        label,
+        textAlign: TextAlign.right,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+      ),
+    );
+  }
+}
+
+class _HistoryCardVisualState {
+  const _HistoryCardVisualState({
+    required this.accentColor,
+    required this.chipLabel,
+  });
+
+  final Color accentColor;
+  final String chipLabel;
+}
+
+_HistoryCardVisualState _resolveHistoryCardVisualState(_FormsListItem item) {
+  switch (item.kind) {
+    case _FormsItemKind.personalSubmitted:
+      final LotteryForm form = item.personalForm!;
+      return _buildHistoryCardVisualState(
+        isPublished: _isPersonalFormResultPublished(form),
+        winAmount: form.winAmount,
+      );
+    case _FormsItemKind.personalDraft:
+      return _buildHistoryCardVisualState(
+        isPublished: false,
+        winAmount: 0,
+      );
+    case _FormsItemKind.personalSubmissionBundle:
+      final PersonalSubmittedBundle bundle = item.personalSubmissionBundle!;
+      final bool isPublished = bundle.forms.any(
+        _isPersonalBundleFormResultPublished,
+      );
+      final num totalWinAmount = bundle.forms.fold<num>(
+        0,
+        (num total, PersonalSubmittedBundleForm form) =>
+            total +
+            (_isPersonalBundleFormResultPublished(form) ? form.winAmount : 0),
+      );
+      return _buildHistoryCardVisualState(
+        isPublished: isPublished,
+        winAmount: totalWinAmount,
+      );
+    case _FormsItemKind.groupSubmitted:
+      final SubmittedGroupHistoryItem group = item.submittedGroup!;
+      return _buildHistoryCardVisualState(
+        isPublished: group.resultPublishedAt != null,
+        winAmount: _firstNumericValue(
+          <dynamic>[
+            group.myWinningAmount,
+            group.groupWinningAmount,
+          ],
+        ),
+      );
+    case _FormsItemKind.groupDraft:
+      return _buildHistoryCardVisualState(
+        isPublished: false,
+        winAmount: 0,
+      );
+    case _FormsItemKind.groupCancelled:
+      return const _HistoryCardVisualState(
+        accentColor: Color(0xFFBDBDBD),
+        chipLabel: 'בוטל',
+      );
+  }
+}
+
+_HistoryCardVisualState _buildHistoryCardVisualState({
+  required bool isPublished,
+  required num winAmount,
+}) {
+  return _HistoryCardVisualState(
+    accentColor: getCardBorderColor(isPublished, winAmount),
+    chipLabel: getResultChipLabel(isPublished, winAmount),
+  );
+}
+
+Color getCardBorderColor(bool isPublished, num winAmount) {
+  if (!isPublished) {
+    return const Color(0xFFFFC107);
+  }
+  if (winAmount > 0) {
+    return const Color(0xFF4CAF50);
+  }
+  return const Color(0xFFBDBDBD);
+}
+
+String getResultChipLabel(bool isPublished, num winAmount) {
+  if (!isPublished) {
+    return 'ממתין לתוצאות';
+  }
+  if (winAmount > 0) {
+    return 'זכה';
+  }
+  return 'לא זכה';
+}
+
 class _GroupSummaryDetails extends StatelessWidget {
   const _GroupSummaryDetails({
     required this.item,
@@ -1280,7 +1459,6 @@ class _GroupSummaryDetails extends StatelessWidget {
     final SubmittedGroupHistoryItem group = item.submittedGroup!;
 
     final List<String> lines = <String>[
-      'DEBUG GROUP CARD v2',
       'נוצר על ידי: ${group.creatorName}',
       'סטטוס: ${_submittedStatusLabel(group.dispatchStatus)}',
       'מס׳ הגרלה: ${meta.lotteryIdLabel ?? '—'}',
@@ -1289,16 +1467,6 @@ class _GroupSummaryDetails extends StatelessWidget {
       'נשלח: ${formatPresentationDateTime(submittedAt ?? group.submittedAt)}',
       'זכייה קבוצתית: ${resultDisplay.groupLabel}',
       'הזכייה שלי: ${resultDisplay.myLabel}',
-      '',
-      '[debug] groupId: ${debugInfo.groupId}',
-      '[debug] childFormsCount: ${debugInfo.childFormsCount}',
-      '[debug] loadedChildDocsCount: ${debugInfo.loadedChildDocsCount}',
-      '[debug] childQueryExecuted: ${debugInfo.childQueryExecuted}',
-      '[debug] childQueryError: ${debugInfo.childQueryError ?? 'null'}',
-      '[debug] publishedFormsCount: ${debugInfo.publishedFormsCount}',
-      '[debug] sumWinAmount: ${debugInfo.sumWinAmount}',
-      '[debug] resolvedHasPublishedResults: ${debugInfo.resolvedHasPublishedResults}',
-      '[debug] source used: ${debugInfo.sourceUsed}',
     ];
     return lines.join('\n');
   }
