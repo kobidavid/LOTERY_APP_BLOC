@@ -197,6 +197,33 @@ exports.getUpcomingLotteryMetadata = functions.https.onCall(async () => {
   }
 });
 
+exports.getLotteryMetadataByLotteryId = functions.https.onCall(async (data) => {
+  try {
+    const lotteryId = Number(data?.lotteryId ?? data?.drawNumber);
+    if (!Number.isFinite(lotteryId) || lotteryId <= 0) {
+      throw new functions.https.HttpsError(
+          "invalid-argument",
+          "lotteryId is required.",
+      );
+    }
+
+    const metadata = await findLotteryMetadataByLotteryId(lotteryId, {
+      scope: "getLotteryMetadataByLotteryId",
+      lotteryId,
+    });
+    return buildLotteryMetadataPatch(metadata);
+  } catch (error) {
+    console.error("getLotteryMetadataByLotteryId failed", error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError(
+        "internal",
+        "Lottery metadata lookup by lotteryId failed.",
+    );
+  }
+});
+
 exports.getReceiptOpenTarget = functions.https.onCall(async (data, context) => {
   try {
     const authenticatedUserId = await resolveAuthenticatedUserId(data, context);
@@ -2988,6 +3015,35 @@ async function resolveLotteryMetadataFallback({
 async function findLotteryMetadataByLotteryId(lotteryId, debugContext = null) {
   if (!Number.isFinite(Number(lotteryId)) || Number(lotteryId) <= 0) {
     return emptyLotteryMetadata();
+  }
+
+  try {
+    const upcomingLottery = await fetchNextLotteryMetadata();
+    if (
+      Number(upcomingLottery?.lotteryId) === Number(lotteryId) &&
+      upcomingLottery?.salesCloseAt
+    ) {
+      const officialMetadata = {
+        lotteryId: Number(lotteryId),
+        drawNumber: Number(lotteryId),
+        salesCloseAt: asDate(upcomingLottery.salesCloseAt),
+        drawDate: asDate(upcomingLottery.salesCloseAt),
+      };
+      console.log("findLotteryMetadataByLotteryId official upcoming match", {
+        lotteryId,
+        resolvedLotteryId: officialMetadata.lotteryId,
+        resolvedDrawDate: officialMetadata.salesCloseAt.toISOString(),
+        ...(debugContext || {}),
+      });
+      return officialMetadata;
+    }
+  } catch (error) {
+    console.error("findLotteryMetadataByLotteryId official upcoming lookup failed", {
+      lotteryId,
+      code: error && error.code ? error.code : null,
+      message: error && error.message ? error.message : String(error),
+      ...(debugContext || {}),
+    });
   }
 
   console.log("findLotteryMetadataByLotteryId query start", {

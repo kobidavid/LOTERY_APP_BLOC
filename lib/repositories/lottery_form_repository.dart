@@ -15,6 +15,23 @@ DateTime? _repositoryAsDateTime(dynamic value) {
   if (value is DateTime) {
     return value;
   }
+  if (value is String) {
+    return DateTime.tryParse(value);
+  }
+  if (value is Map) {
+    final Object? seconds = value['seconds'];
+    final Object? nanoseconds = value['nanoseconds'];
+    if (seconds is num) {
+      return DateTime.fromMillisecondsSinceEpoch(
+        (seconds * 1000).toInt(),
+        isUtc: true,
+      ).add(
+        Duration(
+          microseconds: ((nanoseconds is num ? nanoseconds : 0) / 1000).round(),
+        ),
+      ).toLocal();
+    }
+  }
   return null;
 }
 
@@ -194,6 +211,8 @@ class LotteryFormRepository {
   static const String _chargeWalletFunctionName = 'chargeUserWallet';
   static const String _upcomingLotteryMetadataFunctionName =
       'getUpcomingLotteryMetadata';
+  static const String _lotteryMetadataByIdFunctionName =
+      'getLotteryMetadataByLotteryId';
   static const int _regularLottoPairPriceNis = 6;
   static const String _groupSnapshotSource = 'group_snapshot';
 
@@ -572,9 +591,13 @@ class LotteryFormRepository {
         _submissionsRef(userId).doc();
     final WriteBatch batch = _firestore.batch();
     const String waitingResultStatus = 'waiting_for_results';
-    final int? effectiveLotteryId =
-        _normalizePositiveLotteryId(upcomingLottery.lotteryId);
-    final DateTime? effectiveSalesCloseAt = upcomingLottery.salesCloseAt;
+    final _UpcomingLotteryMetadataPayload effectiveMetadata =
+        await _resolvePersonalBundleLotteryMetadata(
+      hintedLotteryId: _normalizePositiveLotteryId(upcomingLottery.lotteryId),
+      hintedSalesCloseAt: upcomingLottery.salesCloseAt,
+    );
+    final int? effectiveLotteryId = effectiveMetadata.lotteryId;
+    final DateTime? effectiveSalesCloseAt = effectiveMetadata.salesCloseAt;
 
     batch.set(
       submissionRef,
@@ -598,11 +621,16 @@ class LotteryFormRepository {
     for (final PersonalSubmissionDraftPayload draft in drafts) {
       final DocumentReference<Map<String, dynamic>> formRef =
           _formsRef(userId).doc();
-      final int? draftLotteryId = _normalizePositiveLotteryId(
+      final int? hintedDraftLotteryId = _normalizePositiveLotteryId(
         draft.form.lotteryId ?? effectiveLotteryId,
       );
-      final DateTime? draftSalesCloseAt =
-          draft.form.salesCloseAt ?? effectiveSalesCloseAt;
+      final _UpcomingLotteryMetadataPayload draftMetadata =
+          await _resolvePersonalBundleLotteryMetadata(
+        hintedLotteryId: hintedDraftLotteryId,
+        hintedSalesCloseAt: draft.form.salesCloseAt ?? effectiveSalesCloseAt,
+      );
+      final int? draftLotteryId = draftMetadata.lotteryId;
+      final DateTime? draftSalesCloseAt = draftMetadata.salesCloseAt;
       batch.set(
         formRef,
         <String, dynamic>{
@@ -642,11 +670,56 @@ class LotteryFormRepository {
     return submissionRef.id;
   }
 
+  Future<_UpcomingLotteryMetadataPayload> _resolvePersonalBundleLotteryMetadata({
+    required int? hintedLotteryId,
+    required DateTime? hintedSalesCloseAt,
+  }) async {
+    if (hintedLotteryId != null && hintedSalesCloseAt != null) {
+      return _UpcomingLotteryMetadataPayload(
+        lotteryId: hintedLotteryId,
+        salesCloseAt: hintedSalesCloseAt,
+      );
+    }
+    if (hintedLotteryId != null) {
+      final _UpcomingLotteryMetadataPayload exactMetadata =
+          await _fetchLotteryMetadataByLotteryId(hintedLotteryId);
+      if (exactMetadata.lotteryId != null && exactMetadata.salesCloseAt != null) {
+        return exactMetadata;
+      }
+    }
+    return _UpcomingLotteryMetadataPayload(
+      lotteryId: hintedLotteryId,
+      salesCloseAt: hintedSalesCloseAt,
+    );
+  }
+
   Future<_UpcomingLotteryMetadataPayload>
       _fetchUpcomingLotteryMetadata() async {
     final HttpsCallable callable =
         _functions.httpsCallable(_upcomingLotteryMetadataFunctionName);
     final HttpsCallableResult<dynamic> result = await callable.call();
+    final Map<String, dynamic> data =
+        Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
+    return _UpcomingLotteryMetadataPayload(
+      lotteryId: _normalizePositiveLotteryId(
+        (data['lotteryId'] as num?)?.toInt() ??
+            (data['drawNumber'] as num?)?.toInt(),
+      ),
+      salesCloseAt: _repositoryAsDateTime(data['salesCloseAt']) ??
+          _repositoryAsDateTime(data['drawDate']),
+    );
+  }
+
+  Future<_UpcomingLotteryMetadataPayload> _fetchLotteryMetadataByLotteryId(
+    int lotteryId,
+  ) async {
+    final HttpsCallable callable =
+        _functions.httpsCallable(_lotteryMetadataByIdFunctionName);
+    final HttpsCallableResult<dynamic> result = await callable.call(
+      <String, dynamic>{
+        'lotteryId': lotteryId,
+      },
+    );
     final Map<String, dynamic> data =
         Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
     return _UpcomingLotteryMetadataPayload(
