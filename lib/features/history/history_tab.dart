@@ -278,6 +278,8 @@ class _HistoryTabState extends State<HistoryTab>
                                               'טפסים שנשלחו ומחכים להגרלה הקרובה',
                                           infoTooltip:
                                               'טפסים שנשלחו ומחכים להגרלה הקרובה',
+                                          sectionKind:
+                                              _HistorySectionKind.waiting,
                                           items: waitingItems,
                                           emptyText:
                                               'אין כרגע טפסים שממתינים להגרלה',
@@ -296,6 +298,8 @@ class _HistoryTabState extends State<HistoryTab>
                                               'טפסים שההגרלה שלהם הסתיימה או בוטלו',
                                           infoTooltip:
                                               'טפסים שההגרלה שלהם הסתיימה או בוטלו',
+                                          sectionKind:
+                                              _HistorySectionKind.history,
                                           items: historyItems,
                                           emptyText: 'אין עדיין פריטי היסטוריה להצגה',
                                           onItemTap: (item) => _handleItemTap(
@@ -312,6 +316,8 @@ class _HistoryTabState extends State<HistoryTab>
                                               'טפסים שלא הוגשו עדיין, כולל קבוצות בהקמה',
                                           infoTooltip:
                                               'טפסים שלא הוגשו עדיין, כולל קבוצות בהקמה',
+                                          sectionKind:
+                                              _HistorySectionKind.drafts,
                                           items: draftItems,
                                           emptyText: 'אין כרגע טיוטות להצגה',
                                           onItemTap: (item) => _handleItemTap(
@@ -381,6 +387,7 @@ class _HistoryTabState extends State<HistoryTab>
                                           },
                                           dismissGeneration:
                                               _draftDismissGeneration,
+                                          hideStatusChip: true,
                                         ),
                                       ],
                                     ),
@@ -782,6 +789,7 @@ class _FormsTabContent extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.infoTooltip,
+    required this.sectionKind,
     required this.items,
     required this.emptyText,
     required this.onItemTap,
@@ -794,6 +802,7 @@ class _FormsTabContent extends StatelessWidget {
   final String title;
   final String subtitle;
   final String infoTooltip;
+  final _HistorySectionKind sectionKind;
   final List<_FormsListItem> items;
   final String emptyText;
   final ValueChanged<_FormsListItem> onItemTap;
@@ -818,22 +827,10 @@ class _FormsTabContent extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Row(
-                    mainAxisSize: MainAxisSize.min,
+                    mainAxisSize: MainAxisSize.max,
                     textDirection: TextDirection.rtl,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          title,
-                          textAlign: TextAlign.right,
-                          style:
-                              Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    color: titleColor,
-                                  ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
                       Tooltip(
                         message: infoTooltip,
                         child: Icon(
@@ -842,16 +839,19 @@ class _FormsTabContent extends StatelessWidget {
                           color: secondaryColor,
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    subtitle,
-                    textAlign: TextAlign.right,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: secondaryColor,
-                          height: 1.35,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          subtitle,
+                          textAlign: TextAlign.right,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: titleColor,
+                                height: 1.25,
+                              ),
                         ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -875,18 +875,81 @@ class _FormsTabContent extends StatelessWidget {
             (item) => Padding(
               key: ValueKey<String>(item.stableKey),
               padding: const EdgeInsets.only(bottom: 10),
-              child: _FormsSummaryTile(
+              child: _SubmittedGroupVisibilityGate(
                 viewerUserId: viewerUserId,
                 item: item,
-                dismissGeneration: dismissGeneration,
-                hideStatusChip: hideStatusChip,
-                onTap: () => onItemTap(item),
-                onDelete:
-                    onCancelDraft == null ? null : () => onCancelDraft!(item),
+                sectionKind: sectionKind,
+                child: _FormsSummaryTile(
+                  viewerUserId: viewerUserId,
+                  item: item,
+                  dismissGeneration: dismissGeneration,
+                  hideStatusChip: hideStatusChip,
+                  onTap: () => onItemTap(item),
+                  onDelete:
+                      onCancelDraft == null ? null : () => onCancelDraft!(item),
+                ),
               ),
             ),
           ),
       ],
+    );
+  }
+}
+
+enum _HistorySectionKind {
+  waiting,
+  history,
+  drafts,
+}
+
+class _SubmittedGroupVisibilityGate extends StatelessWidget {
+  const _SubmittedGroupVisibilityGate({
+    required this.viewerUserId,
+    required this.item,
+    required this.sectionKind,
+    required this.child,
+  });
+
+  final String viewerUserId;
+  final _FormsListItem item;
+  final _HistorySectionKind sectionKind;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.kind != _FormsItemKind.groupSubmitted ||
+        (sectionKind != _HistorySectionKind.waiting &&
+            sectionKind != _HistorySectionKind.history) ||
+        item.groupId == null) {
+      return child;
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('lottery_groups')
+          .doc(item.groupId)
+          .collection('forms')
+          .snapshots(),
+      builder: (context, snapshot) {
+        final List<Map<String, dynamic>> canonicalForms = snapshot.data?.docs
+                .map((doc) => doc.data())
+                .toList() ??
+            const <Map<String, dynamic>>[];
+        final bool resolvedPublished = canonicalForms.isNotEmpty
+            ? _resolveGroupResultDisplayFromForms(
+                canonicalForms: canonicalForms,
+                viewerUserId: viewerUserId,
+              ).isPublished
+            : (item.submittedGroup?.resultPublishedAt != null);
+
+        if (sectionKind == _HistorySectionKind.waiting && resolvedPublished) {
+          return const SizedBox.shrink();
+        }
+        if (sectionKind == _HistorySectionKind.history && !resolvedPublished) {
+          return const SizedBox.shrink();
+        }
+        return child;
+      },
     );
   }
 }
