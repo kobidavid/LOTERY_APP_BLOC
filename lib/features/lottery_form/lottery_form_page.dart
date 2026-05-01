@@ -159,10 +159,13 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
   void _syncActiveDraftSnapshot(LotteryFormState state) {
     _ensureInitialDraftRegistered(state);
+    final bool keepPersistedIds = state.isEditingSavedRecord;
     _localDrafts[_activeDraftIndex] = _localDrafts[_activeDraftIndex].copyWith(
       formState: state.copyWith(clearError: true, clearSuccess: true),
       isGroupMode: _isGroupMode,
       isDoubleMode: _isDoubleMode,
+      clearPersistedDraftFormId: !keepPersistedIds,
+      clearPersistedDraftBundleId: !keepPersistedIds,
     );
   }
 
@@ -460,10 +463,13 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       if (index != _activeDraftIndex) {
         return _localDrafts[index];
       }
+      final bool keepPersistedIds = state.isEditingSavedRecord;
       return _localDrafts[index].copyWith(
         formState: state.copyWith(clearError: true, clearSuccess: true),
         isGroupMode: _isGroupMode,
         isDoubleMode: _isDoubleMode,
+        clearPersistedDraftFormId: !keepPersistedIds,
+        clearPersistedDraftBundleId: !keepPersistedIds,
       );
     });
   }
@@ -599,6 +605,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         formState: draftState,
         isGroupMode: false,
         isDoubleMode: entry.isDoubleMode,
+        persistedDraftFormId: entry.form.formId,
+        persistedDraftBundleId: entry.draftBundleId,
       );
     });
     setState(() {
@@ -625,9 +633,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   String? _currentPersonalDraftBundleId(LotteryFormState state) {
     final List<_LocalDraftForm> drafts = _effectiveLocalDrafts(state);
     for (final _LocalDraftForm draft in drafts) {
-      final String? submissionId = draft.formState.form.submissionId;
-      if (submissionId != null && submissionId.trim().isNotEmpty) {
-        return submissionId.trim();
+      final String? bundleId = draft.persistedDraftBundleId;
+      if (bundleId != null && bundleId.trim().isNotEmpty) {
+        return bundleId.trim();
       }
     }
     return null;
@@ -703,8 +711,16 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
     if (drafts.length == 1) {
       final _LocalDraftForm draft = drafts.first;
-      final bool isUpdate =
-          draft.formState.form.formId?.trim().isNotEmpty == true;
+      final bool isEditingExistingDraft =
+          draft.persistedDraftFormId?.trim().isNotEmpty == true;
+      final String? currentDraftId = draft.persistedDraftFormId;
+      final String? currentFormId = draft.formState.form.formId;
+      final bool shouldCreateNewDraft = !isEditingExistingDraft;
+      final bool shouldUpdateExistingDraft = isEditingExistingDraft;
+      debugPrint(
+        '[DraftsDebug] singleDraftLifecycle isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${currentDraftId ?? 'null'} currentFormId=${currentFormId ?? 'null'} shouldCreateNewDraft=$shouldCreateNewDraft shouldUpdateExistingDraft=$shouldUpdateExistingDraft',
+      );
+      final bool isUpdate = isEditingExistingDraft;
       if (!isUpdate) {
         final int draftsCount =
             await _paymentRepository.countSavedPersonalDrafts(
@@ -730,10 +746,14 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         }
       }
       final LotteryForm candidate = draft.formState.form.copyWith(
+        formId: draft.persistedDraftFormId,
+        submissionId: draft.persistedDraftBundleId,
         status: LotteryFormStatus.saved,
         mode: LotteryFormMode.personal,
         isComplete: _isDraftComplete(draft),
         savedAt: DateTime.now(),
+        clearId: !isEditingExistingDraft,
+        clearSubmissionId: !isEditingExistingDraft,
         clearSubmittedAt: true,
         clearParentSubmissionId: true,
         clearGroupId: true,
@@ -773,6 +793,11 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         _buildPersonalSubmissionDraftPayloads(drafts);
     final String? existingBundleId =
         _currentPersonalDraftBundleId(currentState);
+    final bool isEditingExistingDraft =
+        existingBundleId != null && existingBundleId.isNotEmpty;
+    debugPrint(
+      '[DraftsDebug] bundleDraftLifecycle isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${existingBundleId ?? 'null'} currentFormId=${drafts.first.persistedDraftFormId ?? drafts.first.formState.form.formId ?? 'null'} shouldCreateNewDraft=${!isEditingExistingDraft} shouldUpdateExistingDraft=$isEditingExistingDraft',
+    );
     if (existingBundleId == null || existingBundleId.isEmpty) {
       final int draftsCount = await _paymentRepository.countSavedPersonalDrafts(
         currentState.form.userId,
@@ -2471,24 +2496,38 @@ class _LocalDraftForm {
     required this.formState,
     required this.isGroupMode,
     required this.isDoubleMode,
+    this.persistedDraftFormId,
+    this.persistedDraftBundleId,
   });
 
   final int number;
   final LotteryFormState formState;
   final bool isGroupMode;
   final bool isDoubleMode;
+  final String? persistedDraftFormId;
+  final String? persistedDraftBundleId;
 
   _LocalDraftForm copyWith({
     int? number,
     LotteryFormState? formState,
     bool? isGroupMode,
     bool? isDoubleMode,
+    String? persistedDraftFormId,
+    String? persistedDraftBundleId,
+    bool clearPersistedDraftFormId = false,
+    bool clearPersistedDraftBundleId = false,
   }) {
     return _LocalDraftForm(
       number: number ?? this.number,
       formState: formState ?? this.formState,
       isGroupMode: isGroupMode ?? this.isGroupMode,
       isDoubleMode: isDoubleMode ?? this.isDoubleMode,
+      persistedDraftFormId: clearPersistedDraftFormId
+          ? null
+          : (persistedDraftFormId ?? this.persistedDraftFormId),
+      persistedDraftBundleId: clearPersistedDraftBundleId
+          ? null
+          : (persistedDraftBundleId ?? this.persistedDraftBundleId),
     );
   }
 }
