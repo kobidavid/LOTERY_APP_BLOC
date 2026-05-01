@@ -159,9 +159,9 @@ class _HistoryTabState extends State<HistoryTab>
                                 (a, b) => b.sortDate.compareTo(a.sortDate),
                               );
 
-                            final List<_FormsListItem> waitingItems =
+                            final List<_FormsListItem> activeItems =
                                 submittedItems
-                                    .where(_isWaitingTabItem)
+                                    .where(_isActiveTabItem)
                                     .toList()
                                   ..sort(
                                     (a, b) =>
@@ -169,7 +169,7 @@ class _HistoryTabState extends State<HistoryTab>
                                   );
 
                             final List<_FormsListItem> historyItems = [
-                              ...submittedItems.where(_isHistoryTabItem),
+                              ...submittedItems.where(_isHistoryTabSeedItem),
                               ...cancelledItems,
                             ]..sort(
                                 (a, b) => b.sortDate.compareTo(a.sortDate),
@@ -258,7 +258,7 @@ class _HistoryTabState extends State<HistoryTab>
                                                   )
                                                 : EdgeInsets.zero,
                                             tabs: const [
-                                              Tab(text: 'ממתינים להגרלה'),
+                                              Tab(text: 'טפסים פעילים'),
                                               Tab(text: 'היסטוריה'),
                                               Tab(text: 'טיוטות'),
                                             ],
@@ -273,16 +273,16 @@ class _HistoryTabState extends State<HistoryTab>
                                       children: [
                                         _FormsTabContent(
                                           viewerUserId: widget.userId,
-                                          title: 'ממתינים להגרלה',
+                                          title: 'טפסים פעילים',
                                           subtitle:
-                                              'טפסים שנשלחו ומחכים להגרלה הקרובה',
+                                              'טפסים שנשלחו ונמצאים בתהליך עד לפרסום תוצאות',
                                           infoTooltip:
-                                              'טפסים שנשלחו ומחכים להגרלה הקרובה',
+                                              'טפסים שנשלחו ונמצאים בתהליך עד לפרסום תוצאות',
                                           sectionKind:
-                                              _HistorySectionKind.waiting,
-                                          items: waitingItems,
+                                              _HistorySectionKind.active,
+                                          items: activeItems,
                                           emptyText:
-                                              'אין כרגע טפסים שממתינים להגרלה',
+                                              'אין כרגע טפסים פעילים להצגה',
                                           onItemTap: (item) => _handleItemTap(
                                             context: context,
                                             item: item,
@@ -640,7 +640,7 @@ bool _isPersonalBundleFormResultPublished(PersonalSubmittedBundleForm form) {
       form.resultStatus == LotteryResultStatus.checked;
 }
 
-bool _isWaitingTabItem(_FormsListItem item) {
+bool _isActiveTabItem(_FormsListItem item) {
   switch (item.kind) {
     case _FormsItemKind.personalSubmitted:
       final LotteryForm form = item.personalForm!;
@@ -650,8 +650,7 @@ bool _isWaitingTabItem(_FormsListItem item) {
       final PersonalSubmittedBundle bundle = item.personalSubmissionBundle!;
       return !bundle.forms.any(_isPersonalBundleFormResultPublished);
     case _FormsItemKind.groupSubmitted:
-      final SubmittedGroupHistoryItem group = item.submittedGroup!;
-      return group.resultPublishedAt == null;
+      return true;
     case _FormsItemKind.personalDraft:
     case _FormsItemKind.groupDraft:
     case _FormsItemKind.groupCancelled:
@@ -659,7 +658,7 @@ bool _isWaitingTabItem(_FormsListItem item) {
   }
 }
 
-bool _isHistoryTabItem(_FormsListItem item) {
+bool _isHistoryTabSeedItem(_FormsListItem item) {
   switch (item.kind) {
     case _FormsItemKind.personalSubmitted:
       final LotteryForm form = item.personalForm!;
@@ -669,8 +668,7 @@ bool _isHistoryTabItem(_FormsListItem item) {
       final PersonalSubmittedBundle bundle = item.personalSubmissionBundle!;
       return bundle.forms.any(_isPersonalBundleFormResultPublished);
     case _FormsItemKind.groupSubmitted:
-      final SubmittedGroupHistoryItem group = item.submittedGroup!;
-      return group.resultPublishedAt != null;
+      return true;
     case _FormsItemKind.groupCancelled:
       return true;
     case _FormsItemKind.personalDraft:
@@ -883,6 +881,7 @@ class _FormsTabContent extends StatelessWidget {
                   viewerUserId: viewerUserId,
                   item: item,
                   dismissGeneration: dismissGeneration,
+                  sectionKind: sectionKind,
                   hideStatusChip: hideStatusChip,
                   onTap: () => onItemTap(item),
                   onDelete:
@@ -897,7 +896,7 @@ class _FormsTabContent extends StatelessWidget {
 }
 
 enum _HistorySectionKind {
-  waiting,
+  active,
   history,
   drafts,
 }
@@ -918,7 +917,7 @@ class _SubmittedGroupVisibilityGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (item.kind != _FormsItemKind.groupSubmitted ||
-        (sectionKind != _HistorySectionKind.waiting &&
+        (sectionKind != _HistorySectionKind.active &&
             sectionKind != _HistorySectionKind.history) ||
         item.groupId == null) {
       return child;
@@ -942,7 +941,7 @@ class _SubmittedGroupVisibilityGate extends StatelessWidget {
               ).isPublished
             : (item.submittedGroup?.resultPublishedAt != null);
 
-        if (sectionKind == _HistorySectionKind.waiting && resolvedPublished) {
+        if (sectionKind == _HistorySectionKind.active && resolvedPublished) {
           return const SizedBox.shrink();
         }
         if (sectionKind == _HistorySectionKind.history && !resolvedPublished) {
@@ -959,6 +958,7 @@ class _FormsSummaryTile extends StatefulWidget {
     required this.viewerUserId,
     required this.item,
     required this.dismissGeneration,
+    required this.sectionKind,
     required this.hideStatusChip,
     required this.onTap,
     required this.onDelete,
@@ -967,6 +967,7 @@ class _FormsSummaryTile extends StatefulWidget {
   final String viewerUserId;
   final _FormsListItem item;
   final int dismissGeneration;
+  final _HistorySectionKind sectionKind;
   final bool hideStatusChip;
   final VoidCallback onTap;
   final Future<bool> Function()? onDelete;
@@ -1008,6 +1009,10 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
     final Color titleColor = _historyCardTitleColor(context);
     final Color secondaryColor = _historyCardSecondaryTextColor(context);
     final Color mutedColor = _historyCardMutedTextColor(context);
+
+    final bool shouldHideStatusChip = widget.hideStatusChip ||
+        (widget.sectionKind == _HistorySectionKind.history &&
+            widget.item.kind == _FormsItemKind.groupSubmitted);
 
     final Widget tile = Material(
       color: baseCardColor,
@@ -1055,7 +1060,7 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
                             textDirection: TextDirection.rtl,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (!widget.hideStatusChip) ...[
+                              if (!shouldHideStatusChip) ...[
                                 _HistoryResultChip(
                                   label: visualState.chipLabel,
                                   color: visualState.accentColor,
@@ -1129,6 +1134,7 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
         child: _GroupSummaryDetails(
           item: widget.item,
           viewerUserId: widget.viewerUserId,
+          sectionKind: widget.sectionKind,
         ),
       );
     }
@@ -1146,13 +1152,13 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalSubmitted:
         return 'טופס אישי';
       case _FormsItemKind.personalDraft:
-        return 'טופס אישי · טיוטה';
+        return 'טופס אישי';
       case _FormsItemKind.personalSubmissionBundle:
         return 'שליחת טפסים אישיים';
       case _FormsItemKind.groupSubmitted:
         return widget.item.submittedGroup!.groupName;
       case _FormsItemKind.groupDraft:
-        return '${widget.item.activeGroup!.groupName} · בהקמה';
+        return widget.item.activeGroup!.groupName;
       case _FormsItemKind.groupCancelled:
         return widget.item.cancelledGroup!.groupName;
     }
@@ -1164,7 +1170,15 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
         final LotteryForm form = widget.item.personalForm!;
         final DateTime? safeDrawDate =
             _coerceSafeDrawDate(form.salesCloseAt, form.submittedAt);
+        final bool isHistory =
+            widget.sectionKind == _HistorySectionKind.history;
         return <_HistoryRowData>[
+          _HistoryRowData(
+            label: 'סטטוס',
+            value: isHistory
+                ? _personalHistoryStatusLabel(form)
+                : _personalOperationalStatusLabel(form),
+          ),
           _HistoryRowData(
             label: 'מס׳ הגרלה',
             value: form.lotteryId?.toString() ?? '—',
@@ -1178,11 +1192,12 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
             value: '${_ticketCost(form)} ש״ח',
             emphasize: true,
           ),
-          _HistoryRowData(
-            label: 'זכייה',
-            value: _personalWinningStatusLabel(form),
-            emphasize: true,
-          ),
+          if (isHistory)
+            _HistoryRowData(
+              label: 'זכייה',
+              value: _personalWinningStatusLabel(form),
+              emphasize: true,
+            ),
           _HistoryRowData(
             label: 'נשלח',
             value: _formatDate(form.submittedAt ?? form.updatedAt),
@@ -1191,6 +1206,7 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalDraft:
         final LotteryForm form = widget.item.personalForm!;
         return <_HistoryRowData>[
+          const _HistoryRowData(label: 'סטטוס', value: 'טיוטה'),
           _HistoryRowData(
             label: 'עלות',
             value: '${_ticketCost(form)} ש״ח',
@@ -1206,7 +1222,15 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalSubmissionBundle:
         final PersonalSubmittedBundle bundle =
             widget.item.personalSubmissionBundle!;
+        final bool isHistory =
+            widget.sectionKind == _HistorySectionKind.history;
         return <_HistoryRowData>[
+          _HistoryRowData(
+            label: 'סטטוס',
+            value: isHistory
+                ? _bundleHistoryStatusLabel(bundle)
+                : _bundleOperationalStatusLabel(bundle),
+          ),
           _HistoryRowData(
             label: 'מס׳ הגרלה',
             value: _bundleLotteryIdLabel(bundle),
@@ -1224,11 +1248,12 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
             value: '${bundle.totalCost} ש״ח',
             emphasize: true,
           ),
-          _HistoryRowData(
-            label: 'זכייה',
-            value: _bundleWinningStatusLabel(bundle),
-            emphasize: true,
-          ),
+          if (isHistory)
+            _HistoryRowData(
+              label: 'זכייה',
+              value: _bundleWinningStatusLabel(bundle),
+              emphasize: true,
+            ),
           _HistoryRowData(
             label: 'נשלח',
             value: _formatDate(bundle.submittedAt),
@@ -1246,6 +1271,40 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       return 'טרם פורסם';
     }
     return '${form.winAmount} ש״ח';
+  }
+
+  String _personalHistoryStatusLabel(LotteryForm form) {
+    if (_isCancelledPersonalStatus(form.status)) {
+      return 'בוטל';
+    }
+    if (!_isPersonalFormResultPublished(form)) {
+      return 'מעבד תוצאות';
+    }
+    return form.winAmount > 0 ? 'זכה' : 'לא זכה';
+  }
+
+  String _personalOperationalStatusLabel(LotteryForm form) {
+    if (form.resultStatus == LotteryResultStatus.waitingForResults) {
+      return 'ממתין לתוצאות';
+    }
+    final String dispatchStatus = (form.dispatchStatus ?? '').trim();
+    if (dispatchStatus == 'queued_for_print' ||
+        dispatchStatus == 'ready_for_print') {
+      return 'ממתין להדפסה';
+    }
+    if (dispatchStatus == 'printed' ||
+        dispatchStatus == 'print_ready' ||
+        dispatchStatus == 'ready_for_station' ||
+        form.printedAt != null ||
+        form.printReadyUrl != null) {
+      return 'ממתין למסירה בתחנה';
+    }
+    if (dispatchStatus == 'submitted_to_station' ||
+        dispatchStatus == 'delivered_to_station' ||
+        form.submittedToStationAt != null) {
+      return 'ממתין להגרלה';
+    }
+    return 'בתהליך';
   }
 
   String _bundleWinningStatusLabel(PersonalSubmittedBundle bundle) {
@@ -1267,6 +1326,41 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
           (_isPersonalBundleFormResultPublished(form) ? form.winAmount : 0),
     );
     return '$totalWinAmount ש״ח';
+  }
+
+  String _bundleHistoryStatusLabel(PersonalSubmittedBundle bundle) {
+    final bool hasAnyPublishedResult = bundle.forms.any(
+      _isPersonalBundleFormResultPublished,
+    );
+    if (!hasAnyPublishedResult) {
+      return 'מעבד תוצאות';
+    }
+    final num totalWinAmount = bundle.forms.fold<num>(
+      0,
+      (num total, PersonalSubmittedBundleForm form) =>
+          total +
+          (_isPersonalBundleFormResultPublished(form) ? form.winAmount : 0),
+    );
+    return totalWinAmount > 0 ? 'זכה' : 'לא זכה';
+  }
+
+  String _bundleOperationalStatusLabel(PersonalSubmittedBundle bundle) {
+    if (bundle.forms.any(
+      (form) => form.resultStatus == LotteryResultStatus.waitingForResults,
+    )) {
+      return 'ממתין לתוצאות';
+    }
+    if (bundle.forms.any(
+      (form) => form.submittedToStationAt != null,
+    )) {
+      return 'ממתין להגרלה';
+    }
+    if (bundle.forms.any(
+      (form) => form.printedAt != null || form.receiptUrl != null,
+    )) {
+      return 'ממתין למסירה בתחנה';
+    }
+    return 'ממתין להדפסה';
   }
 
   String _bundleLotteryIdLabel(PersonalSubmittedBundle bundle) {
@@ -1660,10 +1754,12 @@ class _GroupSummaryDetails extends StatelessWidget {
   const _GroupSummaryDetails({
     required this.item,
     required this.viewerUserId,
+    required this.sectionKind,
   });
 
   final _FormsListItem item;
   final String viewerUserId;
+  final _HistorySectionKind sectionKind;
 
   @override
   Widget build(BuildContext context) {
@@ -1814,8 +1910,15 @@ class _GroupSummaryDetails extends StatelessWidget {
     required _GroupResultDisplay resultDisplay,
   }) {
     final SubmittedGroupHistoryItem group = item.submittedGroup!;
+    final bool isHistory = sectionKind == _HistorySectionKind.history;
 
     return <_HistoryRowData>[
+      _HistoryRowData(
+        label: 'סטטוס',
+        value: isHistory
+            ? _groupHistoryStatusLabel(resultDisplay)
+            : _groupOperationalStatusLabel(group),
+      ),
       _HistoryRowData(label: 'מס׳ הגרלה', value: meta.lotteryIdLabel ?? '—'),
       _HistoryRowData(
         label: 'תאריך הגרלה',
@@ -1827,16 +1930,18 @@ class _GroupSummaryDetails extends StatelessWidget {
         value: '${group.myEffectiveShare} ש״ח',
         emphasize: true,
       ),
-      _HistoryRowData(
-        label: 'זכייה קבוצתית',
-        value: resultDisplay.groupLabel,
-        emphasize: true,
-      ),
-      _HistoryRowData(
-        label: 'הזכייה שלי',
-        value: resultDisplay.myLabel,
-        emphasize: true,
-      ),
+      if (isHistory) ...<_HistoryRowData>[
+        _HistoryRowData(
+          label: 'זכייה קבוצתית',
+          value: resultDisplay.groupLabel,
+          emphasize: true,
+        ),
+        _HistoryRowData(
+          label: 'הזכייה שלי',
+          value: resultDisplay.myLabel,
+          emphasize: true,
+        ),
+      ],
       _HistoryRowData(
         label: 'נשלח',
         value: formatPresentationDateTime(submittedAt ?? group.submittedAt),
@@ -1851,6 +1956,7 @@ class _GroupSummaryDetails extends StatelessWidget {
     if (item.kind == _FormsItemKind.groupDraft) {
       final UserGroupListItem group = item.activeGroup!;
       return <_HistoryRowData>[
+        const _HistoryRowData(label: 'סטטוס', value: 'בהקמה'),
         _HistoryRowData(label: 'מס׳ הגרלה', value: meta.lotteryIdLabel ?? '—'),
         _HistoryRowData(
           label: 'תאריך הגרלה',
@@ -1884,6 +1990,7 @@ class _GroupSummaryDetails extends StatelessWidget {
   }) {
     final CancelledGroupHistoryItem group = item.cancelledGroup!;
     return <_HistoryRowData>[
+      const _HistoryRowData(label: 'סטטוס', value: 'בוטל'),
       _HistoryRowData(label: 'מס׳ הגרלה', value: meta.lotteryIdLabel ?? '—'),
       _HistoryRowData(
         label: 'תאריך הגרלה',
@@ -1909,7 +2016,12 @@ class _GroupSummaryDetails extends StatelessWidget {
   List<_HistoryRowData> _fallbackRows() {
     if (item.kind == _FormsItemKind.groupSubmitted) {
       final SubmittedGroupHistoryItem group = item.submittedGroup!;
+      final bool isHistory = sectionKind == _HistorySectionKind.history;
       return <_HistoryRowData>[
+        _HistoryRowData(
+          label: 'סטטוס',
+          value: isHistory ? 'מעבד תוצאות' : _groupOperationalStatusLabel(group),
+        ),
         _HistoryRowData(label: 'מס׳ הגרלה', value: '—'),
         const _HistoryRowData(label: 'תאריך הגרלה', value: 'ללא תאריך'),
         _HistoryRowData(label: 'נוצר על ידי', value: group.creatorName),
@@ -1918,11 +2030,12 @@ class _GroupSummaryDetails extends StatelessWidget {
           value: '${group.myEffectiveShare} ש״ח',
           emphasize: true,
         ),
-        const _HistoryRowData(
-          label: 'הזכייה שלי',
-          value: 'טרם פורסם',
-          emphasize: true,
-        ),
+        if (isHistory)
+          const _HistoryRowData(
+            label: 'הזכייה שלי',
+            value: 'טרם פורסם',
+            emphasize: true,
+          ),
         _HistoryRowData(
           label: 'נשלח',
           value: formatPresentationDateTime(group.submittedAt),
@@ -1936,6 +2049,7 @@ class _GroupSummaryDetails extends StatelessWidget {
 
     final UserGroupListItem group = item.activeGroup!;
     return <_HistoryRowData>[
+      const _HistoryRowData(label: 'סטטוס', value: 'בהקמה'),
       _HistoryRowData(label: 'מס׳ הגרלה', value: '—'),
       const _HistoryRowData(label: 'תאריך הגרלה', value: 'ללא תאריך'),
       _HistoryRowData(
@@ -1956,6 +2070,33 @@ class _GroupSummaryDetails extends StatelessWidget {
         value: formatPresentationDateTime(group.updatedAt),
       ),
     ];
+  }
+
+  String _groupOperationalStatusLabel(SubmittedGroupHistoryItem group) {
+    final String dispatchStatus = group.dispatchStatus.trim();
+    if (dispatchStatus == 'queued_for_print' ||
+        dispatchStatus == 'ready_for_print') {
+      return 'ממתין להדפסה';
+    }
+    if (dispatchStatus == 'printed' ||
+        dispatchStatus == 'print_ready' ||
+        dispatchStatus == 'ready_for_station') {
+      return 'ממתין למסירה בתחנה';
+    }
+    if (dispatchStatus == 'submitted_to_station' ||
+        dispatchStatus == 'delivered_to_station') {
+      return 'ממתין להגרלה';
+    }
+    return 'ממתין לתוצאות';
+  }
+
+  String _groupHistoryStatusLabel(_GroupResultDisplay resultDisplay) {
+    if (!resultDisplay.isPublished) {
+      return 'מעבד תוצאות';
+    }
+    return resultDisplay.myWinningAmount > 0 || resultDisplay.groupWinningAmount > 0
+        ? 'זכה'
+        : 'לא זכה';
   }
 
   String _responseStatusLabel(String rawStatus) {
