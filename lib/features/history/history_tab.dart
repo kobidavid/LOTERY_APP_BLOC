@@ -137,10 +137,10 @@ class _HistoryTabState extends State<HistoryTab>
                                             .contains(item.groupId) &&
                                         !cancelledGroupIds
                                             .contains(item.groupId),
-                                  )
-                                  .map(
-                                    (item) => _FormsListItem.groupDraft(item),
-                                  ),
+                                )
+                                .map(
+                                  (item) => _FormsListItem.groupDraft(item),
+                                ),
                             ]
                                 .where(
                                   (item) => !_hiddenDraftItemKeys
@@ -155,6 +155,22 @@ class _HistoryTabState extends State<HistoryTab>
                               ...cancelledGroups.map(
                                 (item) => _FormsListItem.groupCancelled(item),
                               ),
+                            ]..sort(
+                                (a, b) => b.sortDate.compareTo(a.sortDate),
+                              );
+
+                            final List<_FormsListItem> waitingItems =
+                                submittedItems
+                                    .where(_isWaitingTabItem)
+                                    .toList()
+                                  ..sort(
+                                    (a, b) =>
+                                        b.sortDate.compareTo(a.sortDate),
+                                  );
+
+                            final List<_FormsListItem> historyItems = [
+                              ...submittedItems.where(_isHistoryTabItem),
+                              ...cancelledItems,
                             ]..sort(
                                 (a, b) => b.sortDate.compareTo(a.sortDate),
                               );
@@ -242,9 +258,9 @@ class _HistoryTabState extends State<HistoryTab>
                                                   )
                                                 : EdgeInsets.zero,
                                             tabs: const [
-                                              Tab(text: 'טפסים שנשלחו'),
+                                              Tab(text: 'ממתינים להגרלה'),
+                                              Tab(text: 'היסטוריה'),
                                               Tab(text: 'טיוטות'),
-                                              Tab(text: 'טפסים מבוטלים'),
                                             ],
                                           ),
                                         );
@@ -257,12 +273,31 @@ class _HistoryTabState extends State<HistoryTab>
                                       children: [
                                         _FormsTabContent(
                                           viewerUserId: widget.userId,
-                                          title: 'טפסים שנשלחו',
+                                          title: 'ממתינים להגרלה',
                                           subtitle:
-                                              'טפסים אישיים וקבוצתיים שכבר הוגשו',
-                                          items: submittedItems,
+                                              'טפסים שנשלחו ומחכים להגרלה הקרובה',
+                                          infoTooltip:
+                                              'טפסים שנשלחו ומחכים להגרלה הקרובה',
+                                          items: waitingItems,
                                           emptyText:
-                                              'אין עדיין טפסים שנשלחו להצגה',
+                                              'אין כרגע טפסים שממתינים להגרלה',
+                                          onItemTap: (item) => _handleItemTap(
+                                            context: context,
+                                            item: item,
+                                          ),
+                                          onCancelDraft: null,
+                                          dismissGeneration: 0,
+                                          hideStatusChip: true,
+                                        ),
+                                        _FormsTabContent(
+                                          viewerUserId: widget.userId,
+                                          title: 'היסטוריה',
+                                          subtitle:
+                                              'טפסים שההגרלה שלהם הסתיימה או בוטלו',
+                                          infoTooltip:
+                                              'טפסים שההגרלה שלהם הסתיימה או בוטלו',
+                                          items: historyItems,
+                                          emptyText: 'אין עדיין פריטי היסטוריה להצגה',
                                           onItemTap: (item) => _handleItemTap(
                                             context: context,
                                             item: item,
@@ -274,7 +309,9 @@ class _HistoryTabState extends State<HistoryTab>
                                           viewerUserId: widget.userId,
                                           title: 'טיוטות',
                                           subtitle:
-                                              'טפסים שמורים או קבוצות שעדיין בתהליך',
+                                              'טפסים שלא הוגשו עדיין, כולל קבוצות בהקמה',
+                                          infoTooltip:
+                                              'טפסים שלא הוגשו עדיין, כולל קבוצות בהקמה',
                                           items: draftItems,
                                           emptyText: 'אין כרגע טיוטות להצגה',
                                           onItemTap: (item) => _handleItemTap(
@@ -344,21 +381,6 @@ class _HistoryTabState extends State<HistoryTab>
                                           },
                                           dismissGeneration:
                                               _draftDismissGeneration,
-                                        ),
-                                        _FormsTabContent(
-                                          viewerUserId: widget.userId,
-                                          title: 'טפסים מבוטלים',
-                                          subtitle:
-                                              'טפסים קבוצתיים שבוטלו כולל זיכויים למי שכבר שילם',
-                                          items: cancelledItems,
-                                          emptyText:
-                                              'אין כרגע טפסים שבוטלו להצגה',
-                                          onItemTap: (item) => _handleItemTap(
-                                            context: context,
-                                            item: item,
-                                          ),
-                                          onCancelDraft: null,
-                                          dismissGeneration: 0,
                                         ),
                                       ],
                                     ),
@@ -611,6 +633,49 @@ bool _isPersonalBundleFormResultPublished(PersonalSubmittedBundleForm form) {
       form.resultStatus == LotteryResultStatus.checked;
 }
 
+bool _isWaitingTabItem(_FormsListItem item) {
+  switch (item.kind) {
+    case _FormsItemKind.personalSubmitted:
+      final LotteryForm form = item.personalForm!;
+      return !_isPersonalFormResultPublished(form) &&
+          !_isCancelledPersonalStatus(form.status);
+    case _FormsItemKind.personalSubmissionBundle:
+      final PersonalSubmittedBundle bundle = item.personalSubmissionBundle!;
+      return !bundle.forms.any(_isPersonalBundleFormResultPublished);
+    case _FormsItemKind.groupSubmitted:
+      final SubmittedGroupHistoryItem group = item.submittedGroup!;
+      return group.resultPublishedAt == null;
+    case _FormsItemKind.personalDraft:
+    case _FormsItemKind.groupDraft:
+    case _FormsItemKind.groupCancelled:
+      return false;
+  }
+}
+
+bool _isHistoryTabItem(_FormsListItem item) {
+  switch (item.kind) {
+    case _FormsItemKind.personalSubmitted:
+      final LotteryForm form = item.personalForm!;
+      return _isPersonalFormResultPublished(form) ||
+          _isCancelledPersonalStatus(form.status);
+    case _FormsItemKind.personalSubmissionBundle:
+      final PersonalSubmittedBundle bundle = item.personalSubmissionBundle!;
+      return bundle.forms.any(_isPersonalBundleFormResultPublished);
+    case _FormsItemKind.groupSubmitted:
+      final SubmittedGroupHistoryItem group = item.submittedGroup!;
+      return group.resultPublishedAt != null;
+    case _FormsItemKind.groupCancelled:
+      return true;
+    case _FormsItemKind.personalDraft:
+    case _FormsItemKind.groupDraft:
+      return false;
+  }
+}
+
+bool _isCancelledPersonalStatus(LotteryFormStatus status) {
+  return status == LotteryFormStatus.cancelled;
+}
+
 enum _FormsItemKind {
   personalSubmitted,
   personalDraft,
@@ -716,21 +781,25 @@ class _FormsTabContent extends StatelessWidget {
     required this.viewerUserId,
     required this.title,
     required this.subtitle,
+    required this.infoTooltip,
     required this.items,
     required this.emptyText,
     required this.onItemTap,
     required this.onCancelDraft,
     required this.dismissGeneration,
+    this.hideStatusChip = false,
   });
 
   final String viewerUserId;
   final String title;
   final String subtitle;
+  final String infoTooltip;
   final List<_FormsListItem> items;
   final String emptyText;
   final ValueChanged<_FormsListItem> onItemTap;
   final Future<bool> Function(_FormsListItem item)? onCancelDraft;
   final int dismissGeneration;
+  final bool hideStatusChip;
 
   @override
   Widget build(BuildContext context) {
@@ -748,13 +817,32 @@ class _FormsTabContent extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    title,
-                    textAlign: TextAlign.right,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w900,
-                          color: titleColor,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    textDirection: TextDirection.rtl,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          textAlign: TextAlign.right,
+                          style:
+                              Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                    color: titleColor,
+                                  ),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: infoTooltip,
+                        child: Icon(
+                          Icons.info_outline_rounded,
+                          size: 18,
+                          color: secondaryColor,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   Text(
@@ -791,6 +879,7 @@ class _FormsTabContent extends StatelessWidget {
                 viewerUserId: viewerUserId,
                 item: item,
                 dismissGeneration: dismissGeneration,
+                hideStatusChip: hideStatusChip,
                 onTap: () => onItemTap(item),
                 onDelete:
                     onCancelDraft == null ? null : () => onCancelDraft!(item),
@@ -807,6 +896,7 @@ class _FormsSummaryTile extends StatefulWidget {
     required this.viewerUserId,
     required this.item,
     required this.dismissGeneration,
+    required this.hideStatusChip,
     required this.onTap,
     required this.onDelete,
   });
@@ -814,6 +904,7 @@ class _FormsSummaryTile extends StatefulWidget {
   final String viewerUserId;
   final _FormsListItem item;
   final int dismissGeneration;
+  final bool hideStatusChip;
   final VoidCallback onTap;
   final Future<bool> Function()? onDelete;
 
@@ -901,11 +992,13 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
                             textDirection: TextDirection.rtl,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _HistoryResultChip(
-                                label: visualState.chipLabel,
-                                color: visualState.accentColor,
-                              ),
-                              const SizedBox(width: 10),
+                              if (!widget.hideStatusChip) ...[
+                                _HistoryResultChip(
+                                  label: visualState.chipLabel,
+                                  color: visualState.accentColor,
+                                ),
+                                const SizedBox(width: 10),
+                              ],
                               Expanded(
                                 child: Text(
                                   _titleText(),
@@ -988,14 +1081,15 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
   String _titleText() {
     switch (widget.item.kind) {
       case _FormsItemKind.personalSubmitted:
-      case _FormsItemKind.personalDraft:
         return 'טופס אישי';
+      case _FormsItemKind.personalDraft:
+        return 'טופס אישי · טיוטה';
       case _FormsItemKind.personalSubmissionBundle:
         return 'שליחת טפסים אישיים';
       case _FormsItemKind.groupSubmitted:
         return widget.item.submittedGroup!.groupName;
       case _FormsItemKind.groupDraft:
-        return widget.item.activeGroup!.groupName;
+        return '${widget.item.activeGroup!.groupName} · בהקמה';
       case _FormsItemKind.groupCancelled:
         return widget.item.cancelledGroup!.groupName;
     }
@@ -1034,13 +1128,11 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalDraft:
         final LotteryForm form = widget.item.personalForm!;
         return <_HistoryRowData>[
-          const _HistoryRowData(label: 'סטטוס', value: 'טיוטה'),
           _HistoryRowData(
             label: 'עלות',
             value: '${_ticketCost(form)} ש״ח',
             emphasize: true,
           ),
-          const _HistoryRowData(label: 'זכייה', value: 'ממתין לתוצאות'),
           _HistoryRowData(
             label: 'נוצר',
             value: _formatDate(
@@ -1363,9 +1455,9 @@ _HistoryCardVisualState _resolveHistoryCardVisualState(_FormsListItem item) {
         winAmount: form.winAmount,
       );
     case _FormsItemKind.personalDraft:
-      return _buildHistoryCardVisualState(
-        isPublished: false,
-        winAmount: 0,
+      return const _HistoryCardVisualState(
+        accentColor: Color(0xFFBDBDBD),
+        chipLabel: 'טיוטה',
       );
     case _FormsItemKind.personalSubmissionBundle:
       final PersonalSubmittedBundle bundle = item.personalSubmissionBundle!;
@@ -1384,19 +1476,21 @@ _HistoryCardVisualState _resolveHistoryCardVisualState(_FormsListItem item) {
       );
     case _FormsItemKind.groupSubmitted:
       final SubmittedGroupHistoryItem group = item.submittedGroup!;
+      final bool isPublished = group.resultPublishedAt != null;
       return _buildHistoryCardVisualState(
-        isPublished: group.resultPublishedAt != null,
+        isPublished: isPublished,
         winAmount: _firstNumericValue(
           <dynamic>[
             group.myWinningAmount,
             group.groupWinningAmount,
           ],
         ),
+        explicitChipLabel: isPublished ? null : 'מעבד תוצאות',
       );
     case _FormsItemKind.groupDraft:
-      return _buildHistoryCardVisualState(
-        isPublished: false,
-        winAmount: 0,
+      return const _HistoryCardVisualState(
+        accentColor: Color(0xFFBDBDBD),
+        chipLabel: 'בהקמה',
       );
     case _FormsItemKind.groupCancelled:
       return const _HistoryCardVisualState(
@@ -1409,10 +1503,11 @@ _HistoryCardVisualState _resolveHistoryCardVisualState(_FormsListItem item) {
 _HistoryCardVisualState _buildHistoryCardVisualState({
   required bool isPublished,
   required num winAmount,
+  String? explicitChipLabel,
 }) {
   return _HistoryCardVisualState(
     accentColor: getCardBorderColor(isPublished, winAmount),
-    chipLabel: getResultChipLabel(isPublished, winAmount),
+    chipLabel: explicitChipLabel ?? getResultChipLabel(isPublished, winAmount),
   );
 }
 
