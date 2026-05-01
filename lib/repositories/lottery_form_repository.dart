@@ -25,11 +25,14 @@ DateTime? _repositoryAsDateTime(dynamic value) {
       return DateTime.fromMillisecondsSinceEpoch(
         (seconds * 1000).toInt(),
         isUtc: true,
-      ).add(
-        Duration(
-          microseconds: ((nanoseconds is num ? nanoseconds : 0) / 1000).round(),
-        ),
-      ).toLocal();
+      )
+          .add(
+            Duration(
+              microseconds:
+                  ((nanoseconds is num ? nanoseconds : 0) / 1000).round(),
+            ),
+          )
+          .toLocal();
     }
   }
   return null;
@@ -64,6 +67,52 @@ class PersonalSubmissionDraftPayload {
   final int tableCount;
   final bool isDoubleMode;
   final int displayOrder;
+}
+
+class PersonalSavedDraftEntry {
+  const PersonalSavedDraftEntry({
+    required this.form,
+    required this.displayOrder,
+    required this.tableCount,
+    required this.cost,
+    required this.isDoubleMode,
+    required this.updatedAt,
+    this.draftBundleId,
+    this.savedAt,
+  });
+
+  final LotteryForm form;
+  final int displayOrder;
+  final int tableCount;
+  final num cost;
+  final bool isDoubleMode;
+  final String? draftBundleId;
+  final DateTime updatedAt;
+  final DateTime? savedAt;
+
+  DateTime get sortDate => savedAt ?? updatedAt;
+
+  factory PersonalSavedDraftEntry.fromFirestore(
+    String formId,
+    Map<String, dynamic> data,
+  ) {
+    final LotteryForm form = LotteryForm.fromFirestore(formId, data);
+    return PersonalSavedDraftEntry(
+      form: form,
+      displayOrder: (data['displayOrder'] as num?)?.toInt() ?? 0,
+      tableCount: (data['tableCount'] as num?)?.toInt() ??
+          form.tables.where((table) => !table.isEmpty).length,
+      cost: (data['cost'] as num?) ?? 0,
+      isDoubleMode: data['isDoubleMode'] as bool? ?? false,
+      draftBundleId:
+          (data['submissionId'] as String?)?.trim().isNotEmpty == true
+              ? (data['submissionId'] as String?)!.trim()
+              : null,
+      updatedAt: _repositoryAsDateTime(data['updatedAt']) ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+      savedAt: _repositoryAsDateTime(data['savedAt']),
+    );
+  }
 }
 
 class GroupDraftPayload {
@@ -361,6 +410,25 @@ class LotteryFormRepository {
     });
   }
 
+  Stream<List<PersonalSavedDraftEntry>> watchSavedPersonalDraftEntries(
+    String userId,
+  ) {
+    return _formsRef(userId).snapshots().map((snapshot) {
+      final List<PersonalSavedDraftEntry> entries = snapshot.docs
+          .map(
+            (doc) => PersonalSavedDraftEntry.fromFirestore(doc.id, doc.data()),
+          )
+          .where(
+            (entry) =>
+                entry.form.status == LotteryFormStatus.saved &&
+                entry.form.mode == LotteryFormMode.personal,
+          )
+          .toList()
+        ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+      return entries;
+    });
+  }
+
   String _debugSubmissionId(
     QuerySnapshot<Map<String, dynamic>> snapshot,
     String? formId,
@@ -506,6 +574,201 @@ class LotteryFormRepository {
     );
 
     return persistable;
+  }
+
+  Future<PersonalSavedDraftEntry> savePersonalDraft({
+    required LotteryForm form,
+    required int tableCount,
+    required num cost,
+    required bool isDoubleMode,
+    int displayOrder = 1,
+    String? draftBundleId,
+  }) async {
+    final DocumentReference<Map<String, dynamic>> docRef = form.formId == null
+        ? _formsRef(form.userId).doc()
+        : _formsRef(form.userId).doc(form.formId);
+    final DateTime now = DateTime.now();
+    final LotteryForm persistable = form.copyWith(
+      formId: docRef.id,
+      submissionId: draftBundleId,
+      status: LotteryFormStatus.saved,
+      mode: LotteryFormMode.personal,
+      createdAt: form.createdAt ?? now,
+      updatedAt: now,
+      savedAt: now,
+      clearSubmittedAt: true,
+      clearParentSubmissionId: true,
+      clearGroupId: true,
+      isEditable: true,
+    );
+
+    await docRef.set(
+      <String, dynamic>{
+        'formId': docRef.id,
+        'userId': persistable.userId,
+        'submissionId': draftBundleId,
+        'status': persistable.status.value,
+        'mode': LotteryFormMode.personal.value,
+        'submissionType': 'personal_draft',
+        'displayOrder': displayOrder,
+        'tableCount': tableCount,
+        'cost': cost,
+        'isDoubleMode': isDoubleMode,
+        'tables': persistable.tables.map((table) => table.toMap()).toList(),
+        'isComplete': persistable.isComplete,
+        'createdAt': persistable.createdAt,
+        'updatedAt': persistable.updatedAt,
+        'savedAt': persistable.savedAt,
+        'submittedAt': null,
+        'source':
+            draftBundleId == null ? 'personal_draft' : 'personal_draft_bundle',
+        'version': persistable.version,
+        'lotteryId': persistable.lotteryId,
+        'drawNumber': persistable.lotteryId,
+        'salesCloseAt': persistable.salesCloseAt,
+        'drawDate': persistable.salesCloseAt,
+        'resultStatus': null,
+        'resultPublishedAt': null,
+        'winAmount': 0,
+        'checkedAt': null,
+        'balanceApplied': persistable.balanceApplied,
+        'isEditable': true,
+        'dispatchStatus': persistable.dispatchStatus,
+        'printReadyUrl': persistable.printReadyUrl,
+        'printReadyGeneratedAt': persistable.printReadyGeneratedAt,
+        'printReadyStoragePath': persistable.printReadyStoragePath,
+        'printedAt': persistable.printedAt,
+        'submittedToStationAt': persistable.submittedToStationAt,
+        'ticketFingerprintSource': persistable.ticketFingerprintSource,
+        'ticketFingerprint': persistable.ticketFingerprint,
+        'fingerprintVersion': persistable.fingerprintVersion,
+      },
+      SetOptions(merge: true),
+    );
+
+    final DocumentSnapshot<Map<String, dynamic>> snapshot = await docRef.get();
+    return PersonalSavedDraftEntry.fromFirestore(
+      docRef.id,
+      snapshot.data() ?? <String, dynamic>{},
+    );
+  }
+
+  Future<String> savePersonalDraftBundle({
+    required String userId,
+    required List<PersonalSubmissionDraftPayload> drafts,
+    String? existingBundleId,
+  }) async {
+    if (drafts.isEmpty) {
+      throw StateError('לא נמצאו טפסים לשמירה כטיוטה.');
+    }
+
+    final String bundleId =
+        (existingBundleId != null && existingBundleId.trim().isNotEmpty)
+            ? existingBundleId.trim()
+            : _submissionsRef(userId).doc().id;
+    final QuerySnapshot<Map<String, dynamic>> existingSnapshot =
+        await _formsRef(userId)
+            .where('submissionId', isEqualTo: bundleId)
+            .get();
+    final Set<String> retainedFormIds = <String>{};
+    final WriteBatch batch = _firestore.batch();
+    final DateTime now = DateTime.now();
+
+    for (final PersonalSubmissionDraftPayload draft in drafts) {
+      final String formId = draft.form.formId?.trim().isNotEmpty == true
+          ? draft.form.formId!.trim()
+          : _formsRef(userId).doc().id;
+      retainedFormIds.add(formId);
+      final DocumentReference<Map<String, dynamic>> formRef =
+          _formsRef(userId).doc(formId);
+      final LotteryForm persistable = draft.form.copyWith(
+        formId: formId,
+        submissionId: bundleId,
+        status: LotteryFormStatus.saved,
+        mode: LotteryFormMode.personal,
+        createdAt: draft.form.createdAt ?? now,
+        updatedAt: now,
+        savedAt: now,
+        clearSubmittedAt: true,
+        clearParentSubmissionId: true,
+        clearGroupId: true,
+        isEditable: true,
+      );
+      batch.set(
+        formRef,
+        <String, dynamic>{
+          'formId': formId,
+          'userId': userId,
+          'submissionId': bundleId,
+          'status': LotteryFormStatus.saved.value,
+          'mode': LotteryFormMode.personal.value,
+          'submissionType': 'personal_draft',
+          'displayOrder': draft.displayOrder,
+          'tableCount': draft.tableCount,
+          'cost': draft.cost,
+          'isDoubleMode': draft.isDoubleMode,
+          'tables': persistable.tables.map((table) => table.toMap()).toList(),
+          'isComplete': persistable.isComplete,
+          'createdAt': persistable.createdAt,
+          'updatedAt': persistable.updatedAt,
+          'savedAt': persistable.savedAt,
+          'submittedAt': null,
+          'source': 'personal_draft_bundle',
+          'version': persistable.version,
+          'lotteryId': persistable.lotteryId,
+          'drawNumber': persistable.lotteryId,
+          'salesCloseAt': persistable.salesCloseAt,
+          'drawDate': persistable.salesCloseAt,
+          'resultStatus': null,
+          'resultPublishedAt': null,
+          'winAmount': 0,
+          'checkedAt': null,
+          'balanceApplied': persistable.balanceApplied,
+          'isEditable': true,
+          'dispatchStatus': persistable.dispatchStatus,
+          'printReadyUrl': persistable.printReadyUrl,
+          'printReadyGeneratedAt': persistable.printReadyGeneratedAt,
+          'printReadyStoragePath': persistable.printReadyStoragePath,
+          'printedAt': persistable.printedAt,
+          'submittedToStationAt': persistable.submittedToStationAt,
+          'ticketFingerprintSource': persistable.ticketFingerprintSource,
+          'ticketFingerprint': persistable.ticketFingerprint,
+          'fingerprintVersion': persistable.fingerprintVersion,
+        },
+        SetOptions(merge: true),
+      );
+    }
+
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc
+        in existingSnapshot.docs) {
+      if (!retainedFormIds.contains(doc.id)) {
+        batch.delete(doc.reference);
+      }
+    }
+
+    await batch.commit();
+    return bundleId;
+  }
+
+  Future<List<PersonalSavedDraftEntry>> loadPersonalDraftBundle({
+    required String userId,
+    required String bundleId,
+  }) async {
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _formsRef(userId)
+        .where('submissionId', isEqualTo: bundleId)
+        .get();
+    final List<PersonalSavedDraftEntry> entries = snapshot.docs
+        .map(
+          (doc) => PersonalSavedDraftEntry.fromFirestore(doc.id, doc.data()),
+        )
+        .where(
+          (entry) =>
+              entry.form.status == LotteryFormStatus.saved &&
+              entry.form.mode == LotteryFormMode.personal,
+        )
+        .toList()
+      ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    return entries;
   }
 
   Future<LotteryForm> submitForm(LotteryForm form) async {
@@ -670,7 +933,8 @@ class LotteryFormRepository {
     return submissionRef.id;
   }
 
-  Future<_UpcomingLotteryMetadataPayload> _resolvePersonalBundleLotteryMetadata({
+  Future<_UpcomingLotteryMetadataPayload>
+      _resolvePersonalBundleLotteryMetadata({
     required int? hintedLotteryId,
     required DateTime? hintedSalesCloseAt,
   }) async {
@@ -683,7 +947,8 @@ class LotteryFormRepository {
     if (hintedLotteryId != null) {
       final _UpcomingLotteryMetadataPayload exactMetadata =
           await _fetchLotteryMetadataByLotteryId(hintedLotteryId);
-      if (exactMetadata.lotteryId != null && exactMetadata.salesCloseAt != null) {
+      if (exactMetadata.lotteryId != null &&
+          exactMetadata.salesCloseAt != null) {
         return exactMetadata;
       }
     }

@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../models/app_user.dart';
-import '../models/lottery_form.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/lottery_form_repository.dart';
 import '../repositories/lottery_group_repository.dart';
@@ -47,7 +46,9 @@ class _MainShellPageState extends State<MainShellPage> {
   StreamSubscription<GroupInviteLink>? _inviteSubscription;
 
   int _selectedTabIndex = 0;
+  int _personalDraftLoadVersion = 0;
   bool _handlingInvite = false;
+  PersonalDraftLoadRequest? _personalDraftLoadRequest;
 
   @override
   void initState() {
@@ -142,13 +143,17 @@ class _MainShellPageState extends State<MainShellPage> {
               LotteryFormPage(
                 inviteLinkService: widget.inviteLinkService,
                 onOpenMyForms: () => setState(() => _selectedTabIndex = 1),
+                personalDraftLoadRequest: _personalDraftLoadRequest,
+                personalDraftLoadVersion: _personalDraftLoadVersion,
               ),
               HistoryTab(
                 userId: widget.user.uid,
                 repository: _formRepository,
                 groupRepository: _groupRepository,
                 inviteLinkService: widget.inviteLinkService,
-                onFormSelected: _handleHistoryFormSelected,
+                onPersonalDraftSelected: _handlePersonalDraftSelected,
+                onPersonalDraftBundleSelected:
+                    _handlePersonalDraftBundleSelected,
                 onCancelGroupDraft: _handleCancelGroupDraft,
               ),
               _PersonalAreaTab(user: widget.user),
@@ -201,9 +206,24 @@ class _MainShellPageState extends State<MainShellPage> {
     }
   }
 
-  void _handleHistoryFormSelected(LotteryForm form) {
-    _formCubit.loadForm(form);
-    setState(() => _selectedTabIndex = 0);
+  void _handlePersonalDraftSelected(PersonalSavedDraftEntry entry) {
+    setState(() {
+      _personalDraftLoadRequest = PersonalDraftLoadRequest(
+        entries: <PersonalSavedDraftEntry>[entry],
+      );
+      _personalDraftLoadVersion += 1;
+      _selectedTabIndex = 0;
+    });
+  }
+
+  void _handlePersonalDraftBundleSelected(
+    List<PersonalSavedDraftEntry> entries,
+  ) {
+    setState(() {
+      _personalDraftLoadRequest = PersonalDraftLoadRequest(entries: entries);
+      _personalDraftLoadVersion += 1;
+      _selectedTabIndex = 0;
+    });
   }
 
   Future<bool> _handleCancelGroupDraft(String groupId) async {

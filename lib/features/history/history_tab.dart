@@ -28,7 +28,8 @@ class HistoryTab extends StatefulWidget {
     required this.repository,
     required this.groupRepository,
     required this.inviteLinkService,
-    required this.onFormSelected,
+    required this.onPersonalDraftSelected,
+    required this.onPersonalDraftBundleSelected,
     required this.onCancelGroupDraft,
   });
 
@@ -36,7 +37,9 @@ class HistoryTab extends StatefulWidget {
   final LotteryFormRepository repository;
   final LotteryGroupRepository groupRepository;
   final GroupInviteLinkService inviteLinkService;
-  final ValueChanged<LotteryForm> onFormSelected;
+  final ValueChanged<PersonalSavedDraftEntry> onPersonalDraftSelected;
+  final ValueChanged<List<PersonalSavedDraftEntry>>
+      onPersonalDraftBundleSelected;
   final Future<bool> Function(String groupId) onCancelGroupDraft;
 
   @override
@@ -74,9 +77,11 @@ class _HistoryTabState extends State<HistoryTab>
               stream: widget.groupRepository
                   .watchSubmittedGroupsForUser(widget.userId),
               builder: (context, submittedGroupsSnapshot) {
-                return StreamBuilder<List<LotteryForm>>(
-                  stream: widget.repository.watchSavedForms(widget.userId),
-                  builder: (context, savedFormsSnapshot) {
+                return StreamBuilder<List<PersonalSavedDraftEntry>>(
+                  stream: widget.repository.watchSavedPersonalDraftEntries(
+                    widget.userId,
+                  ),
+                  builder: (context, savedDraftsSnapshot) {
                     return StreamBuilder<List<UserGroupListItem>>(
                       stream: widget.groupRepository
                           .watchGroupsForUser(widget.userId),
@@ -117,16 +122,10 @@ class _HistoryTabState extends State<HistoryTab>
                               );
 
                             final List<_FormsListItem> draftItems = [
-                              ...(savedFormsSnapshot.data ??
-                                      const <LotteryForm>[])
-                                  .where(
-                                    (form) =>
-                                        form.status == LotteryFormStatus.saved,
-                                  )
-                                  .map(
-                                    (form) =>
-                                        _FormsListItem.personalDraft(form),
-                                  ),
+                              ..._buildPersonalDraftItems(
+                                savedDraftsSnapshot.data ??
+                                    const <PersonalSavedDraftEntry>[],
+                              ),
                               ...(activeGroupsSnapshot.data ??
                                       const <UserGroupListItem>[])
                                   .where(
@@ -137,10 +136,10 @@ class _HistoryTabState extends State<HistoryTab>
                                             .contains(item.groupId) &&
                                         !cancelledGroupIds
                                             .contains(item.groupId),
-                                )
-                                .map(
-                                  (item) => _FormsListItem.groupDraft(item),
-                                ),
+                                  )
+                                  .map(
+                                    (item) => _FormsListItem.groupDraft(item),
+                                  ),
                             ]
                                 .where(
                                   (item) => !_hiddenDraftItemKeys
@@ -160,12 +159,9 @@ class _HistoryTabState extends State<HistoryTab>
                               );
 
                             final List<_FormsListItem> activeItems =
-                                submittedItems
-                                    .where(_isActiveTabItem)
-                                    .toList()
+                                submittedItems.where(_isActiveTabItem).toList()
                                   ..sort(
-                                    (a, b) =>
-                                        b.sortDate.compareTo(a.sortDate),
+                                    (a, b) => b.sortDate.compareTo(a.sortDate),
                                   );
 
                             final List<_FormsListItem> historyItems = [
@@ -222,8 +218,7 @@ class _HistoryTabState extends State<HistoryTab>
                                                 TabBarIndicatorSize.tab,
                                             dividerColor: Colors.transparent,
                                             indicator: BoxDecoration(
-                                              color:
-                                                  _historyTabIndicatorColor(
+                                              color: _historyTabIndicatorColor(
                                                 context,
                                               ),
                                               borderRadius:
@@ -301,7 +296,8 @@ class _HistoryTabState extends State<HistoryTab>
                                           sectionKind:
                                               _HistorySectionKind.history,
                                           items: historyItems,
-                                          emptyText: 'אין עדיין פריטי היסטוריה להצגה',
+                                          emptyText:
+                                              'אין עדיין פריטי היסטוריה להצגה',
                                           onItemTap: (item) => _handleItemTap(
                                             context: context,
                                             item: item,
@@ -414,20 +410,27 @@ class _HistoryTabState extends State<HistoryTab>
     required _FormsListItem item,
   }) {
     switch (item.kind) {
-      case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
+        if (item.personalDraftEntry != null) {
+          widget.onPersonalDraftSelected(item.personalDraftEntry!);
+        }
+        return;
+      case _FormsItemKind.personalDraftBundle:
+        if (item.personalDraftBundle != null) {
+          widget.onPersonalDraftBundleSelected(
+            item.personalDraftBundle!.entries,
+          );
+        }
+        return;
+      case _FormsItemKind.personalSubmitted:
         if (item.personalForm?.formId != null) {
-          String pageTitle = 'טופס אישי';
-          if (item.kind == _FormsItemKind.personalDraft) {
-            pageTitle = 'טיוטת טופס אישי';
-          }
           Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => PersonalFormDetailsPage(
                 ownerUserId: widget.userId,
                 formId: item.personalForm!.formId!,
                 repository: widget.repository,
-                title: pageTitle,
+                title: 'טופס אישי',
               ),
             ),
           );
@@ -519,6 +522,50 @@ class _HistoryTabState extends State<HistoryTab>
         continue;
       }
       items.add(_FormsListItem.personalSubmissionBundle(bundle));
+    }
+
+    return items;
+  }
+
+  List<_FormsListItem> _buildPersonalDraftItems(
+    List<PersonalSavedDraftEntry> savedDraftEntries,
+  ) {
+    final Map<String, List<PersonalSavedDraftEntry>> entriesByBundleId =
+        <String, List<PersonalSavedDraftEntry>>{};
+    final List<PersonalSavedDraftEntry> standaloneEntries =
+        <PersonalSavedDraftEntry>[];
+
+    for (final PersonalSavedDraftEntry entry in savedDraftEntries) {
+      final String? bundleId = entry.draftBundleId;
+      if (bundleId == null || bundleId.isEmpty) {
+        standaloneEntries.add(entry);
+        continue;
+      }
+      entriesByBundleId
+          .putIfAbsent(bundleId, () => <PersonalSavedDraftEntry>[])
+          .add(entry);
+    }
+
+    final List<_FormsListItem> items = <_FormsListItem>[
+      ...standaloneEntries.map(_FormsListItem.personalDraft),
+    ];
+
+    for (final MapEntry<String, List<PersonalSavedDraftEntry>> entry
+        in entriesByBundleId.entries) {
+      final List<PersonalSavedDraftEntry> bundleEntries = entry.value
+        ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+      if (bundleEntries.length <= 1) {
+        items.add(_FormsListItem.personalDraft(bundleEntries.first));
+        continue;
+      }
+      items.add(
+        _FormsListItem.personalDraftBundle(
+          _PersonalDraftBundleSummary.fromEntries(
+            bundleId: entry.key,
+            entries: bundleEntries,
+          ),
+        ),
+      );
     }
 
     return items;
@@ -652,6 +699,7 @@ bool _isActiveTabItem(_FormsListItem item) {
     case _FormsItemKind.groupSubmitted:
       return true;
     case _FormsItemKind.personalDraft:
+    case _FormsItemKind.personalDraftBundle:
     case _FormsItemKind.groupDraft:
     case _FormsItemKind.groupCancelled:
       return false;
@@ -672,6 +720,7 @@ bool _isHistoryTabSeedItem(_FormsListItem item) {
     case _FormsItemKind.groupCancelled:
       return true;
     case _FormsItemKind.personalDraft:
+    case _FormsItemKind.personalDraftBundle:
     case _FormsItemKind.groupDraft:
       return false;
   }
@@ -684,16 +733,58 @@ bool _isCancelledPersonalStatus(LotteryFormStatus status) {
 enum _FormsItemKind {
   personalSubmitted,
   personalDraft,
+  personalDraftBundle,
   personalSubmissionBundle,
   groupSubmitted,
   groupDraft,
   groupCancelled,
 }
 
+class _PersonalDraftBundleSummary {
+  const _PersonalDraftBundleSummary({
+    required this.bundleId,
+    required this.userId,
+    required this.entries,
+    required this.updatedAt,
+  });
+
+  final String bundleId;
+  final String userId;
+  final List<PersonalSavedDraftEntry> entries;
+  final DateTime updatedAt;
+
+  int get formCount => entries.length;
+
+  num get totalCost =>
+      entries.fold<num>(0, (total, entry) => total + entry.cost);
+
+  factory _PersonalDraftBundleSummary.fromEntries({
+    required String bundleId,
+    required List<PersonalSavedDraftEntry> entries,
+  }) {
+    final List<PersonalSavedDraftEntry> sortedEntries =
+        List<PersonalSavedDraftEntry>.from(entries)
+          ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    final DateTime updatedAt =
+        sortedEntries.map((entry) => entry.updatedAt).fold<DateTime>(
+              DateTime.fromMillisecondsSinceEpoch(0),
+              (latest, current) => current.isAfter(latest) ? current : latest,
+            );
+    return _PersonalDraftBundleSummary(
+      bundleId: bundleId,
+      userId: sortedEntries.first.form.userId,
+      entries: sortedEntries,
+      updatedAt: updatedAt,
+    );
+  }
+}
+
 class _FormsListItem {
   const _FormsListItem._({
     required this.kind,
     required this.sortDate,
+    this.personalDraftEntry,
+    this.personalDraftBundle,
     this.personalForm,
     this.personalSubmissionBundle,
     this.submittedGroup,
@@ -709,11 +800,22 @@ class _FormsListItem {
     );
   }
 
-  factory _FormsListItem.personalDraft(LotteryForm form) {
+  factory _FormsListItem.personalDraft(PersonalSavedDraftEntry entry) {
     return _FormsListItem._(
       kind: _FormsItemKind.personalDraft,
-      sortDate: form.savedAt ?? form.updatedAt ?? DateTime(0),
-      personalForm: form,
+      sortDate: entry.sortDate,
+      personalDraftEntry: entry,
+      personalForm: entry.form,
+    );
+  }
+
+  factory _FormsListItem.personalDraftBundle(
+    _PersonalDraftBundleSummary bundle,
+  ) {
+    return _FormsListItem._(
+      kind: _FormsItemKind.personalDraftBundle,
+      sortDate: bundle.updatedAt,
+      personalDraftBundle: bundle,
     );
   }
 
@@ -753,6 +855,8 @@ class _FormsListItem {
 
   final _FormsItemKind kind;
   final DateTime sortDate;
+  final PersonalSavedDraftEntry? personalDraftEntry;
+  final _PersonalDraftBundleSummary? personalDraftBundle;
   final LotteryForm? personalForm;
   final PersonalSubmittedBundle? personalSubmissionBundle;
   final SubmittedGroupHistoryItem? submittedGroup;
@@ -769,6 +873,8 @@ class _FormsListItem {
       case _FormsItemKind.personalSubmitted:
       case _FormsItemKind.personalDraft:
         return 'personal-${personalForm?.formId ?? sortDate.toIso8601String()}';
+      case _FormsItemKind.personalDraftBundle:
+        return 'personal-draft-bundle-${personalDraftBundle?.bundleId ?? sortDate.toIso8601String()}';
       case _FormsItemKind.personalSubmissionBundle:
         return 'personal-bundle-${personalSubmissionBundle?.submissionId ?? sortDate.toIso8601String()}';
       case _FormsItemKind.groupSubmitted:
@@ -842,11 +948,12 @@ class _FormsTabContent extends StatelessWidget {
                         child: Text(
                           subtitle,
                           textAlign: TextAlign.right,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: titleColor,
-                                height: 1.25,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: titleColor,
+                                    height: 1.25,
+                                  ),
                         ),
                       ),
                     ],
@@ -930,10 +1037,9 @@ class _SubmittedGroupVisibilityGate extends StatelessWidget {
           .collection('forms')
           .snapshots(),
       builder: (context, snapshot) {
-        final List<Map<String, dynamic>> canonicalForms = snapshot.data?.docs
-                .map((doc) => doc.data())
-                .toList() ??
-            const <Map<String, dynamic>>[];
+        final List<Map<String, dynamic>> canonicalForms =
+            snapshot.data?.docs.map((doc) => doc.data()).toList() ??
+                const <Map<String, dynamic>>[];
         final bool resolvedPublished = canonicalForms.isNotEmpty
             ? _resolveGroupResultDisplayFromForms(
                 canonicalForms: canonicalForms,
@@ -1011,6 +1117,8 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
     final Color mutedColor = _historyCardMutedTextColor(context);
 
     final bool shouldHideStatusChip = widget.hideStatusChip ||
+        widget.item.kind == _FormsItemKind.personalDraft ||
+        widget.item.kind == _FormsItemKind.personalDraftBundle ||
         (widget.sectionKind == _HistorySectionKind.history &&
             widget.item.kind == _FormsItemKind.groupSubmitted);
 
@@ -1152,7 +1260,9 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalSubmitted:
         return 'טופס אישי';
       case _FormsItemKind.personalDraft:
-        return 'טופס אישי';
+        return 'טופס אישי · טיוטה';
+      case _FormsItemKind.personalDraftBundle:
+        return 'שליחת טפסים אישיים · טיוטה';
       case _FormsItemKind.personalSubmissionBundle:
         return 'שליחת טפסים אישיים';
       case _FormsItemKind.groupSubmitted:
@@ -1204,19 +1314,42 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
           ),
         ];
       case _FormsItemKind.personalDraft:
-        final LotteryForm form = widget.item.personalForm!;
+        final PersonalSavedDraftEntry entry = widget.item.personalDraftEntry!;
         return <_HistoryRowData>[
           const _HistoryRowData(label: 'סטטוס', value: 'טיוטה'),
           _HistoryRowData(
+            label: 'מספר טפסים',
+            value: '1',
+          ),
+          _HistoryRowData(
             label: 'עלות',
-            value: '${_ticketCost(form)} ש״ח',
+            value: '${entry.cost} ש״ח',
             emphasize: true,
           ),
           _HistoryRowData(
-            label: 'נוצר',
+            label: 'נשמר',
             value: _formatDate(
-              form.createdAt ?? form.savedAt ?? form.updatedAt,
+              entry.savedAt ?? entry.updatedAt,
             ),
+          ),
+        ];
+      case _FormsItemKind.personalDraftBundle:
+        final _PersonalDraftBundleSummary bundle =
+            widget.item.personalDraftBundle!;
+        return <_HistoryRowData>[
+          const _HistoryRowData(label: 'סטטוס', value: 'טיוטה'),
+          _HistoryRowData(
+            label: 'מספר טפסים',
+            value: '${bundle.formCount}',
+          ),
+          _HistoryRowData(
+            label: 'עלות משוערת',
+            value: '${bundle.totalCost} ש״ח',
+            emphasize: true,
+          ),
+          _HistoryRowData(
+            label: 'נשמר',
+            value: _formatDate(bundle.updatedAt),
           ),
         ];
       case _FormsItemKind.personalSubmissionBundle:
@@ -1285,26 +1418,23 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
 
   String _personalOperationalStatusLabel(LotteryForm form) {
     final String dispatchStatus = (form.dispatchStatus ?? '').trim();
-    final bool hasReachedStation =
-        dispatchStatus == 'submitted_to_station' ||
-            dispatchStatus == 'delivered_to_station' ||
-            form.submittedToStationAt != null;
+    final bool hasReachedStation = dispatchStatus == 'submitted_to_station' ||
+        dispatchStatus == 'delivered_to_station' ||
+        form.submittedToStationAt != null;
     if (hasReachedStation) {
       return 'ממתין להגרלה';
     }
-    final bool isPrintedForStation =
-        dispatchStatus == 'printed' ||
-            dispatchStatus == 'print_ready' ||
-            dispatchStatus == 'ready_for_station' ||
-            form.printedAt != null;
+    final bool isPrintedForStation = dispatchStatus == 'printed' ||
+        dispatchStatus == 'print_ready' ||
+        dispatchStatus == 'ready_for_station' ||
+        form.printedAt != null;
     if (isPrintedForStation) {
       return 'ממתין למסירה בתחנה';
     }
-    final bool isReadyForPrint =
-        dispatchStatus == 'queued_for_print' ||
-            dispatchStatus == 'ready_for_print' ||
-            ((form.printReadyGeneratedAt != null || form.printReadyUrl != null) &&
-                form.printedAt == null);
+    final bool isReadyForPrint = dispatchStatus == 'queued_for_print' ||
+        dispatchStatus == 'ready_for_print' ||
+        ((form.printReadyGeneratedAt != null || form.printReadyUrl != null) &&
+            form.printedAt == null);
     if (isReadyForPrint) {
       return 'ממתין להדפסה';
     }
@@ -1523,9 +1653,8 @@ class _HistoryCompactDetails extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<_HistoryRowData> visibleRows = rows
-        .where((row) => row.value.trim().isNotEmpty)
-        .toList();
+    final List<_HistoryRowData> visibleRows =
+        rows.where((row) => row.value.trim().isNotEmpty).toList();
     final Color dividerColor = _historyCardDividerColor(context);
 
     return Column(
@@ -1533,7 +1662,8 @@ class _HistoryCompactDetails extends StatelessWidget {
       children: List<Widget>.generate(visibleRows.length, (int index) {
         final _HistoryRowData row = visibleRows[index];
         return Padding(
-          padding: EdgeInsets.only(bottom: index == visibleRows.length - 1 ? 0 : 8),
+          padding:
+              EdgeInsets.only(bottom: index == visibleRows.length - 1 ? 0 : 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
@@ -1559,20 +1689,20 @@ class _HistoryDetailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final TextStyle? labelStyle = Theme.of(context).textTheme.bodyMedium
-        ?.copyWith(
-          color: _historyCardMutedTextColor(context),
-          fontWeight: FontWeight.w700,
-          height: 1.28,
-        );
-    final TextStyle? valueStyle = Theme.of(context).textTheme.bodyMedium
-        ?.copyWith(
-          color: row.emphasize
-              ? _historyCardTitleColor(context)
-              : _historyCardSecondaryTextColor(context),
-          fontWeight: row.emphasize ? FontWeight.w800 : FontWeight.w600,
-          height: 1.28,
-        );
+    final TextStyle? labelStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: _historyCardMutedTextColor(context),
+              fontWeight: FontWeight.w700,
+              height: 1.28,
+            );
+    final TextStyle? valueStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: row.emphasize
+                  ? _historyCardTitleColor(context)
+                  : _historyCardSecondaryTextColor(context),
+              fontWeight: row.emphasize ? FontWeight.w800 : FontWeight.w600,
+              height: 1.28,
+            );
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -1626,6 +1756,11 @@ _HistoryCardVisualState _resolveHistoryCardVisualState(_FormsListItem item) {
         winAmount: form.winAmount,
       );
     case _FormsItemKind.personalDraft:
+      return const _HistoryCardVisualState(
+        accentColor: Color(0xFFBDBDBD),
+        chipLabel: 'טיוטה',
+      );
+    case _FormsItemKind.personalDraftBundle:
       return const _HistoryCardVisualState(
         accentColor: Color(0xFFBDBDBD),
         chipLabel: 'טיוטה',
@@ -1819,7 +1954,8 @@ class _GroupSummaryDetails extends StatelessWidget {
           builder: (context, groupFormsSnapshot) {
             final bool childQueryExecuted =
                 groupFormsSnapshot.connectionState != ConnectionState.none;
-            final String? childQueryError = groupFormsSnapshot.error?.toString();
+            final String? childQueryError =
+                groupFormsSnapshot.error?.toString();
             final int loadedChildDocsCount =
                 groupFormsSnapshot.data?.docs.length ?? 0;
             final List<Map<String, dynamic>> canonicalForms = groupFormsSnapshot
@@ -2034,7 +2170,8 @@ class _GroupSummaryDetails extends StatelessWidget {
       return <_HistoryRowData>[
         _HistoryRowData(
           label: 'סטטוס',
-          value: isHistory ? 'מעבד תוצאות' : _groupOperationalStatusLabel(group),
+          value:
+              isHistory ? 'מעבד תוצאות' : _groupOperationalStatusLabel(group),
         ),
         _HistoryRowData(label: 'מס׳ הגרלה', value: '—'),
         const _HistoryRowData(label: 'תאריך הגרלה', value: 'ללא תאריך'),
@@ -2108,7 +2245,8 @@ class _GroupSummaryDetails extends StatelessWidget {
     if (!resultDisplay.isPublished) {
       return 'מעבד תוצאות';
     }
-    return resultDisplay.myWinningAmount > 0 || resultDisplay.groupWinningAmount > 0
+    return resultDisplay.myWinningAmount > 0 ||
+            resultDisplay.groupWinningAmount > 0
         ? 'זכה'
         : 'לא זכה';
   }
