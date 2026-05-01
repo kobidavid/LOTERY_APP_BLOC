@@ -508,6 +508,18 @@ class LotteryFormRepository {
     return snapshot.docs.where((doc) => doc.id != excludingFormId).length;
   }
 
+  Future<int> countSavedPersonalDrafts(String userId) async {
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _formsRef(userId)
+        .where('status', isEqualTo: LotteryFormStatus.saved.value)
+        .where('mode', isEqualTo: LotteryFormMode.personal.value)
+        .get();
+    final Set<String> uniqueDrafts = snapshot.docs.map((doc) {
+      final String? bundleId = (doc.data()['submissionId'] as String?)?.trim();
+      return (bundleId != null && bundleId.isNotEmpty) ? bundleId : doc.id;
+    }).toSet();
+    return uniqueDrafts.length;
+  }
+
   Future<bool> hasIdenticalSavedForm(
     LotteryForm form,
   ) async {
@@ -584,6 +596,7 @@ class LotteryFormRepository {
     int displayOrder = 1,
     String? draftBundleId,
   }) async {
+    final bool isUpdate = form.formId?.trim().isNotEmpty == true;
     final DocumentReference<Map<String, dynamic>> docRef = form.formId == null
         ? _formsRef(form.userId).doc()
         : _formsRef(form.userId).doc(form.formId);
@@ -602,6 +615,9 @@ class LotteryFormRepository {
       isEditable: true,
     );
 
+    debugPrint(
+      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} start userId=${form.userId} formId=${form.formId ?? 'new'} bundleId=${draftBundleId ?? 'null'}',
+    );
     await docRef.set(
       <String, dynamic>{
         'formId': docRef.id,
@@ -647,6 +663,9 @@ class LotteryFormRepository {
     );
 
     final DocumentSnapshot<Map<String, dynamic>> snapshot = await docRef.get();
+    debugPrint(
+      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} success path=users/${form.userId}/forms/${docRef.id} formId=${docRef.id} bundleId=${draftBundleId ?? 'null'}',
+    );
     return PersonalSavedDraftEntry.fromFirestore(
       docRef.id,
       snapshot.data() ?? <String, dynamic>{},
@@ -662,10 +681,15 @@ class LotteryFormRepository {
       throw StateError('לא נמצאו טפסים לשמירה כטיוטה.');
     }
 
+    final bool isUpdate =
+        existingBundleId != null && existingBundleId.trim().isNotEmpty;
     final String bundleId =
         (existingBundleId != null && existingBundleId.trim().isNotEmpty)
             ? existingBundleId.trim()
             : _submissionsRef(userId).doc().id;
+    debugPrint(
+      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} start userId=$userId bundleId=$bundleId drafts=${drafts.length}',
+    );
     final QuerySnapshot<Map<String, dynamic>> existingSnapshot =
         await _formsRef(userId)
             .where('submissionId', isEqualTo: bundleId)
@@ -747,6 +771,9 @@ class LotteryFormRepository {
     }
 
     await batch.commit();
+    debugPrint(
+      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} success userId=$userId bundleId=$bundleId drafts=${drafts.length}',
+    );
     return bundleId;
   }
 
@@ -769,6 +796,38 @@ class LotteryFormRepository {
         .toList()
       ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
     return entries;
+  }
+
+  Future<void> deletePersonalDraft({
+    required String userId,
+    String? formId,
+    String? bundleId,
+  }) async {
+    debugPrint(
+      '[DraftsDebug] deletePersonalDraft start userId=$userId formId=${formId ?? 'null'} bundleId=${bundleId ?? 'null'}',
+    );
+    if (bundleId != null && bundleId.trim().isNotEmpty) {
+      final QuerySnapshot<Map<String, dynamic>> snapshot =
+          await _formsRef(userId)
+              .where('submissionId', isEqualTo: bundleId.trim())
+              .get();
+      final WriteBatch batch = _firestore.batch();
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> doc
+          in snapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+      debugPrint(
+        '[DraftsDebug] deletePersonalDraft success userId=$userId formId=null bundleId=${bundleId.trim()} deletedDocs=${snapshot.docs.length}',
+      );
+      return;
+    }
+    if (formId != null && formId.trim().isNotEmpty) {
+      await _formsRef(userId).doc(formId.trim()).delete();
+      debugPrint(
+        '[DraftsDebug] deletePersonalDraft success userId=$userId formId=${formId.trim()} bundleId=null deletedDocs=1',
+      );
+    }
   }
 
   Future<LotteryForm> submitForm(LotteryForm form) async {

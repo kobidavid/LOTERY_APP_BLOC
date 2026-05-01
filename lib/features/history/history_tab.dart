@@ -320,67 +320,11 @@ class _HistoryTabState extends State<HistoryTab>
                                             context: context,
                                             item: item,
                                           ),
-                                          onCancelDraft: (item) async {
-                                            if (item.kind !=
-                                                    _FormsItemKind.groupDraft ||
-                                                item.groupId == null) {
-                                              return false;
-                                            }
-
-                                            final bool confirmed =
-                                                await showDialog<bool>(
-                                                      context: context,
-                                                      builder:
-                                                          (dialogContext) =>
-                                                              AlertDialog(
-                                                        title: const Text(
-                                                          'ביטול טופס קבוצתי',
-                                                        ),
-                                                        content: const Text(
-                                                          'האם אתה בטוח? רק מי שכבר שילם על הטופס יזוכה בארנק שלו.',
-                                                        ),
-                                                        actions: [
-                                                          TextButton(
-                                                            onPressed: () =>
-                                                                Navigator.of(
-                                                              dialogContext,
-                                                            ).pop(false),
-                                                            child: const Text(
-                                                              'חזרה',
-                                                            ),
-                                                          ),
-                                                          FilledButton(
-                                                            onPressed: () =>
-                                                                Navigator.of(
-                                                              dialogContext,
-                                                            ).pop(true),
-                                                            child: const Text(
-                                                              'אשר ביטול',
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ) ??
-                                                    false;
-
-                                            if (!confirmed) {
-                                              return false;
-                                            }
-
-                                            final bool cancelled =
-                                                await widget.onCancelGroupDraft(
-                                              item.groupId!,
-                                            );
-                                            if (cancelled && mounted) {
-                                              setState(() {
-                                                _hiddenDraftItemKeys.add(
-                                                  item.stableKey,
-                                                );
-                                                _draftDismissGeneration++;
-                                              });
-                                            }
-                                            return cancelled;
-                                          },
+                                          onCancelDraft: (item) =>
+                                              _handleDeleteDraftItem(
+                                            context,
+                                            item,
+                                          ),
                                           dismissGeneration:
                                               _draftDismissGeneration,
                                           hideStatusChip: true,
@@ -467,6 +411,95 @@ class _HistoryTabState extends State<HistoryTab>
           ),
         );
     }
+  }
+
+  Future<bool> _handleDeleteDraftItem(
+    BuildContext context,
+    _FormsListItem item,
+  ) async {
+    if (item.kind == _FormsItemKind.groupDraft && item.groupId != null) {
+      final bool confirmed = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('ביטול טופס קבוצתי'),
+              content: const Text(
+                'האם אתה בטוח? רק מי שכבר שילם על הטופס יזוכה בארנק שלו.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('חזרה'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('אשר ביטול'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+
+      if (!confirmed) {
+        return false;
+      }
+
+      final bool cancelled = await widget.onCancelGroupDraft(item.groupId!);
+      if (cancelled && mounted) {
+        setState(() {
+          _hiddenDraftItemKeys.add(item.stableKey);
+          _draftDismissGeneration++;
+        });
+      }
+      return cancelled;
+    }
+
+    if (item.kind != _FormsItemKind.personalDraft &&
+        item.kind != _FormsItemKind.personalDraftBundle) {
+      return false;
+    }
+
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('מחיקת טיוטה'),
+            content: const Text('למחוק את הטיוטה?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('ביטול'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('מחיקה'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) {
+      return false;
+    }
+
+    if (item.kind == _FormsItemKind.personalDraftBundle) {
+      final _PersonalDraftBundleSummary bundle = item.personalDraftBundle!;
+      await widget.repository.deletePersonalDraft(
+        userId: bundle.userId,
+        bundleId: bundle.bundleId,
+      );
+    } else {
+      final PersonalSavedDraftEntry entry = item.personalDraftEntry!;
+      await widget.repository.deletePersonalDraft(
+        userId: entry.form.userId,
+        formId: entry.form.formId,
+      );
+    }
+    if (mounted) {
+      setState(() {
+        _hiddenDraftItemKeys.add(item.stableKey);
+        _draftDismissGeneration++;
+      });
+    }
+    return true;
   }
 
   List<_FormsListItem> _buildPersonalSubmittedItems({
@@ -1104,10 +1137,14 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       );
     }
 
-    final bool cancellableGroupDraft =
+    final bool deletableGroupDraft =
         widget.item.kind == _FormsItemKind.groupDraft &&
             widget.item.groupId != null &&
             widget.item.activeGroup?.creatorUserId == widget.viewerUserId &&
+            widget.onDelete != null;
+    final bool deletablePersonalDraft =
+        (widget.item.kind == _FormsItemKind.personalDraft ||
+                widget.item.kind == _FormsItemKind.personalDraftBundle) &&
             widget.onDelete != null;
     final _HistoryCardVisualState visualState =
         _resolveHistoryCardVisualState(widget.item);
@@ -1200,7 +1237,7 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (cancellableGroupDraft)
+                      if (deletableGroupDraft || deletablePersonalDraft)
                         IconButton(
                           onPressed: () async {
                             final bool cancelled = await widget.onDelete!();
@@ -1210,7 +1247,9 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
                           },
                           icon: const Icon(Icons.cancel_outlined),
                           color: mutedColor,
-                          tooltip: 'ביטול טיוטה קבוצתית',
+                          tooltip: deletableGroupDraft
+                              ? 'ביטול טיוטה קבוצתית'
+                              : 'מחיקת טיוטה',
                           visualDensity: VisualDensity.compact,
                         ),
                       Padding(

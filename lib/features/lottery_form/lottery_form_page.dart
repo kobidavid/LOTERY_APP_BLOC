@@ -245,7 +245,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     if (formId == null || formId.isEmpty) {
       return;
     }
-    await _paymentRepository.deleteSavedForm(
+    await _paymentRepository.deletePersonalDraft(
       userId: draft.formState.form.userId,
       formId: formId,
     );
@@ -633,6 +633,58 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     return null;
   }
 
+  Future<bool> _confirmDeletePersonalDraft() async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('מחיקת טיוטה'),
+            content: const Text('למחוק את הטיוטה?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('ביטול'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('מחיקה'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> _deleteCurrentPersonalDraft() async {
+    final LotteryFormState currentState =
+        context.read<LotteryFormCubit>().state;
+    final String? bundleId = _currentPersonalDraftBundleId(currentState);
+    final String? formId = currentState.form.formId;
+    if ((bundleId == null || bundleId.isEmpty) &&
+        (formId == null || formId.isEmpty)) {
+      return;
+    }
+    final bool confirmed = await _confirmDeletePersonalDraft();
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _paymentRepository.deletePersonalDraft(
+      userId: currentState.form.userId,
+      formId: (bundleId == null || bundleId.isEmpty) ? formId : null,
+      bundleId: bundleId,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _resetLocalDraftsAfterSubmit(currentState.form.userId);
+    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(content: Text('הטיוטה נמחקה')),
+      );
+  }
+
   Future<void> _saveExplicitPersonalDraft() async {
     final LotteryFormState currentState =
         context.read<LotteryFormCubit>().state;
@@ -651,6 +703,32 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
     if (drafts.length == 1) {
       final _LocalDraftForm draft = drafts.first;
+      final bool isUpdate =
+          draft.formState.form.formId?.trim().isNotEmpty == true;
+      if (!isUpdate) {
+        final int draftsCount =
+            await _paymentRepository.countSavedPersonalDrafts(
+          currentState.form.userId,
+        );
+        debugPrint(
+          '[DraftsDebug] draftsCount check userId=${currentState.form.userId} count=$draftsCount max=3',
+        );
+        if (draftsCount >= 3) {
+          if (!mounted) {
+            return;
+          }
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'ניתן לשמור עד 3 טיוטות. מחק טיוטה קיימת כדי לשמור חדשה.',
+                ),
+              ),
+            );
+          return;
+        }
+      }
       final LotteryForm candidate = draft.formState.form.copyWith(
         status: LotteryFormStatus.saved,
         mode: LotteryFormMode.personal,
@@ -695,6 +773,29 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         _buildPersonalSubmissionDraftPayloads(drafts);
     final String? existingBundleId =
         _currentPersonalDraftBundleId(currentState);
+    if (existingBundleId == null || existingBundleId.isEmpty) {
+      final int draftsCount = await _paymentRepository.countSavedPersonalDrafts(
+        currentState.form.userId,
+      );
+      debugPrint(
+        '[DraftsDebug] draftsCount check userId=${currentState.form.userId} count=$draftsCount max=3',
+      );
+      if (draftsCount >= 3) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text(
+                'ניתן לשמור עד 3 טיוטות. מחק טיוטה קיימת כדי לשמור חדשה.',
+              ),
+            ),
+          );
+        return;
+      }
+    }
     debugPrint(
       '[DraftsDebug] explicitSavePersonalDraft start userId=${currentState.form.userId} drafts=${payloads.length} bundleId=${existingBundleId ?? 'new'}',
     );
@@ -1596,8 +1697,11 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                             metrics: metrics,
                             isBusy: state.isBusy,
                             showSaveDraft: !_isGroupMode,
+                            showDeleteDraft:
+                                !_isGroupMode && state.isEditingSavedRecord,
                             onClearPressed: _confirmClearForm,
                             onSaveDraftPressed: _saveExplicitPersonalDraft,
+                            onDeleteDraftPressed: _deleteCurrentPersonalDraft,
                             onManageDraftsPressed: () =>
                                 _showDraftFormsSheet(state),
                             onLottomatAction: (action) {
@@ -2250,8 +2354,10 @@ class _SecondaryActionRow extends StatelessWidget {
     required this.metrics,
     required this.isBusy,
     required this.showSaveDraft,
+    required this.showDeleteDraft,
     required this.onClearPressed,
     required this.onSaveDraftPressed,
+    required this.onDeleteDraftPressed,
     required this.onManageDraftsPressed,
     required this.onLottomatAction,
   });
@@ -2259,8 +2365,10 @@ class _SecondaryActionRow extends StatelessWidget {
   final _FormPageLayoutMetrics metrics;
   final bool isBusy;
   final bool showSaveDraft;
+  final bool showDeleteDraft;
   final VoidCallback onClearPressed;
   final VoidCallback onSaveDraftPressed;
+  final VoidCallback onDeleteDraftPressed;
   final VoidCallback onManageDraftsPressed;
   final ValueChanged<_LottomatAction> onLottomatAction;
 
@@ -2296,6 +2404,17 @@ class _SecondaryActionRow extends StatelessWidget {
             label: 'שמור טיוטה',
             icon: Icons.bookmark_outline,
             onTap: isBusy ? null : onSaveDraftPressed,
+          ),
+        ),
+        SizedBox(width: metrics.sectionGap + 2),
+      ],
+      if (showDeleteDraft) ...<Widget>[
+        Expanded(
+          child: _ActionChip(
+            metrics: metrics,
+            label: 'מחק טיוטה',
+            icon: Icons.delete_sweep_outlined,
+            onTap: isBusy ? null : onDeleteDraftPressed,
           ),
         ),
         SizedBox(width: metrics.sectionGap + 2),
