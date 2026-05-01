@@ -1284,25 +1284,34 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
   }
 
   String _personalOperationalStatusLabel(LotteryForm form) {
-    if (form.resultStatus == LotteryResultStatus.waitingForResults) {
-      return 'ממתין לתוצאות';
-    }
     final String dispatchStatus = (form.dispatchStatus ?? '').trim();
-    if (dispatchStatus == 'queued_for_print' ||
-        dispatchStatus == 'ready_for_print') {
-      return 'ממתין להדפסה';
+    final bool hasReachedStation =
+        dispatchStatus == 'submitted_to_station' ||
+            dispatchStatus == 'delivered_to_station' ||
+            form.submittedToStationAt != null;
+    if (hasReachedStation) {
+      return 'ממתין להגרלה';
     }
-    if (dispatchStatus == 'printed' ||
-        dispatchStatus == 'print_ready' ||
-        dispatchStatus == 'ready_for_station' ||
-        form.printedAt != null ||
-        form.printReadyUrl != null) {
+    final bool isPrintedForStation =
+        dispatchStatus == 'printed' ||
+            dispatchStatus == 'print_ready' ||
+            dispatchStatus == 'ready_for_station' ||
+            form.printedAt != null;
+    if (isPrintedForStation) {
       return 'ממתין למסירה בתחנה';
     }
-    if (dispatchStatus == 'submitted_to_station' ||
-        dispatchStatus == 'delivered_to_station' ||
-        form.submittedToStationAt != null) {
-      return 'ממתין להגרלה';
+    final bool isReadyForPrint =
+        dispatchStatus == 'queued_for_print' ||
+            dispatchStatus == 'ready_for_print' ||
+            ((form.printReadyGeneratedAt != null || form.printReadyUrl != null) &&
+                form.printedAt == null);
+    if (isReadyForPrint) {
+      return 'ממתין להדפסה';
+    }
+    if (dispatchStatus == 'queued_for_print' ||
+        dispatchStatus == 'ready_for_print' ||
+        form.resultStatus == LotteryResultStatus.waitingForResults) {
+      return 'ממתין להדפסה';
     }
     return 'בתהליך';
   }
@@ -1346,19 +1355,24 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
 
   String _bundleOperationalStatusLabel(PersonalSubmittedBundle bundle) {
     if (bundle.forms.any(
-      (form) => form.resultStatus == LotteryResultStatus.waitingForResults,
-    )) {
-      return 'ממתין לתוצאות';
-    }
-    if (bundle.forms.any(
       (form) => form.submittedToStationAt != null,
     )) {
       return 'ממתין להגרלה';
     }
     if (bundle.forms.any(
-      (form) => form.printedAt != null || form.receiptUrl != null,
+      (form) => form.printedAt != null,
     )) {
       return 'ממתין למסירה בתחנה';
+    }
+    if (bundle.forms.any(
+      (form) => form.receiptUrl != null && form.printedAt == null,
+    )) {
+      return 'ממתין להדפסה';
+    }
+    if (bundle.forms.any(
+      (form) => form.resultStatus == LotteryResultStatus.waitingForResults,
+    )) {
+      return 'ממתין להדפסה';
     }
     return 'ממתין להדפסה';
   }
