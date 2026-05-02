@@ -513,10 +513,17 @@ class LotteryFormRepository {
         .where('status', isEqualTo: LotteryFormStatus.saved.value)
         .where('mode', isEqualTo: LotteryFormMode.personal.value)
         .get();
-    final Set<String> uniqueDrafts = snapshot.docs.map((doc) {
+    final Set<String> uniqueDrafts = snapshot.docs.where((doc) {
+      final Map<String, dynamic> data = doc.data();
+      return data['status'] == LotteryFormStatus.saved.value &&
+          data['mode'] == LotteryFormMode.personal.value;
+    }).map((doc) {
       final String? bundleId = (doc.data()['submissionId'] as String?)?.trim();
       return (bundleId != null && bundleId.isNotEmpty) ? bundleId : doc.id;
     }).toSet();
+    debugPrint(
+      '[DraftsDebug] draftsCount check userId=$userId count=${uniqueDrafts.length} identities=${uniqueDrafts.toList().join(",")}',
+    );
     return uniqueDrafts.length;
   }
 
@@ -595,11 +602,13 @@ class LotteryFormRepository {
     required bool isDoubleMode,
     int displayOrder = 1,
     String? draftBundleId,
+    bool forceCreateNew = false,
   }) async {
-    final bool isUpdate = form.formId?.trim().isNotEmpty == true;
-    final DocumentReference<Map<String, dynamic>> docRef = form.formId == null
-        ? _formsRef(form.userId).doc()
-        : _formsRef(form.userId).doc(form.formId);
+    final bool isUpdate =
+        !forceCreateNew && form.formId?.trim().isNotEmpty == true;
+    final DocumentReference<Map<String, dynamic>> docRef = isUpdate
+        ? _formsRef(form.userId).doc(form.formId!.trim())
+        : _formsRef(form.userId).doc();
     final DateTime now = DateTime.now();
     final LotteryForm persistable = form.copyWith(
       formId: docRef.id,
@@ -615,8 +624,9 @@ class LotteryFormRepository {
       isEditable: true,
     );
 
+    final String path = 'users/${form.userId}/forms/${docRef.id}';
     debugPrint(
-      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} start userId=${form.userId} formId=${form.formId ?? 'new'} bundleId=${draftBundleId ?? 'null'}',
+      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} start userId=${form.userId} formId=${form.formId ?? 'new'} bundleId=${draftBundleId ?? 'null'} forceCreateNew=$forceCreateNew path=$path',
     );
     await docRef.set(
       <String, dynamic>{
@@ -664,7 +674,10 @@ class LotteryFormRepository {
 
     final DocumentSnapshot<Map<String, dynamic>> snapshot = await docRef.get();
     debugPrint(
-      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} success path=users/${form.userId}/forms/${docRef.id} formId=${docRef.id} bundleId=${draftBundleId ?? 'null'}',
+      '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} success path=$path formId=${docRef.id} bundleId=${draftBundleId ?? 'null'}',
+    );
+    debugPrint(
+      '[DraftsDebug] draftWriteResult operation=${isUpdate ? 'update' : 'create'} newDraftId=${docRef.id} docsWritten=1 docsDeleted=0 paths=$path',
     );
     return PersonalSavedDraftEntry.fromFirestore(
       docRef.id,
@@ -676,17 +689,17 @@ class LotteryFormRepository {
     required String userId,
     required List<PersonalSubmissionDraftPayload> drafts,
     String? existingBundleId,
+    bool forceCreateNew = false,
   }) async {
     if (drafts.isEmpty) {
       throw StateError('לא נמצאו טפסים לשמירה כטיוטה.');
     }
 
-    final bool isUpdate =
-        existingBundleId != null && existingBundleId.trim().isNotEmpty;
+    final bool isUpdate = !forceCreateNew &&
+        existingBundleId != null &&
+        existingBundleId.trim().isNotEmpty;
     final String bundleId =
-        (existingBundleId != null && existingBundleId.trim().isNotEmpty)
-            ? existingBundleId.trim()
-            : _submissionsRef(userId).doc().id;
+        isUpdate ? existingBundleId.trim() : _submissionsRef(userId).doc().id;
     debugPrint(
       '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} start userId=$userId bundleId=$bundleId drafts=${drafts.length}',
     );
@@ -695,16 +708,20 @@ class LotteryFormRepository {
             .where('submissionId', isEqualTo: bundleId)
             .get();
     final Set<String> retainedFormIds = <String>{};
+    final List<String> writtenPaths = <String>[];
+    final List<String> deletedPaths = <String>[];
     final WriteBatch batch = _firestore.batch();
     final DateTime now = DateTime.now();
 
     for (final PersonalSubmissionDraftPayload draft in drafts) {
-      final String formId = draft.form.formId?.trim().isNotEmpty == true
-          ? draft.form.formId!.trim()
-          : _formsRef(userId).doc().id;
+      final String formId =
+          isUpdate && draft.form.formId?.trim().isNotEmpty == true
+              ? draft.form.formId!.trim()
+              : _formsRef(userId).doc().id;
       retainedFormIds.add(formId);
       final DocumentReference<Map<String, dynamic>> formRef =
           _formsRef(userId).doc(formId);
+      writtenPaths.add('users/$userId/forms/$formId');
       final LotteryForm persistable = draft.form.copyWith(
         formId: formId,
         submissionId: bundleId,
@@ -767,12 +784,19 @@ class LotteryFormRepository {
         in existingSnapshot.docs) {
       if (!retainedFormIds.contains(doc.id)) {
         batch.delete(doc.reference);
+        deletedPaths.add('users/$userId/forms/${doc.id}');
       }
     }
 
     await batch.commit();
     debugPrint(
       '[DraftsDebug] ${isUpdate ? 'updatePersonalDraft' : 'createPersonalDraft'} success userId=$userId bundleId=$bundleId drafts=${drafts.length}',
+    );
+    debugPrint(
+      '[DraftsDebug] draftWriteResult operation=${isUpdate ? 'update' : 'create'} newDraftId=$bundleId docsWritten=${writtenPaths.length} docsDeleted=${deletedPaths.length} paths=${<String>[
+        ...writtenPaths,
+        ...deletedPaths
+      ].join(",")}',
     );
     return bundleId;
   }
@@ -811,6 +835,9 @@ class LotteryFormRepository {
           await _formsRef(userId)
               .where('submissionId', isEqualTo: bundleId.trim())
               .get();
+      final List<String> deletedPaths = snapshot.docs
+          .map((doc) => 'users/$userId/forms/${doc.id}')
+          .toList(growable: false);
       final WriteBatch batch = _firestore.batch();
       for (final QueryDocumentSnapshot<Map<String, dynamic>> doc
           in snapshot.docs) {
@@ -820,12 +847,18 @@ class LotteryFormRepository {
       debugPrint(
         '[DraftsDebug] deletePersonalDraft success userId=$userId formId=null bundleId=${bundleId.trim()} deletedDocs=${snapshot.docs.length}',
       );
+      debugPrint(
+        '[DraftsDebug] draftWriteResult operation=delete newDraftId=${bundleId.trim()} docsWritten=0 docsDeleted=${snapshot.docs.length} paths=${deletedPaths.join(",")}',
+      );
       return;
     }
     if (formId != null && formId.trim().isNotEmpty) {
       await _formsRef(userId).doc(formId.trim()).delete();
       debugPrint(
         '[DraftsDebug] deletePersonalDraft success userId=$userId formId=${formId.trim()} bundleId=null deletedDocs=1',
+      );
+      debugPrint(
+        '[DraftsDebug] draftWriteResult operation=delete newDraftId=${formId.trim()} docsWritten=0 docsDeleted=1 paths=users/$userId/forms/${formId.trim()}',
       );
     }
   }

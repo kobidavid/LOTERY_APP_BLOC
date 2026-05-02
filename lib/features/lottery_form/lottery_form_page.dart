@@ -30,6 +30,8 @@ class LotteryFormPage extends StatefulWidget {
     required this.onOpenMyForms,
     this.personalDraftLoadRequest,
     this.personalDraftLoadVersion = 0,
+    this.personalDraftDeletedNotice,
+    this.personalDraftDeletedVersion = 0,
   });
 
   static const double rowLabelWidth = 98;
@@ -37,6 +39,8 @@ class LotteryFormPage extends StatefulWidget {
   final VoidCallback onOpenMyForms;
   final PersonalDraftLoadRequest? personalDraftLoadRequest;
   final int personalDraftLoadVersion;
+  final PersonalDraftDeletionNotice? personalDraftDeletedNotice;
+  final int personalDraftDeletedVersion;
 
   @override
   State<LotteryFormPage> createState() => _LotteryFormPageState();
@@ -48,6 +52,16 @@ class PersonalDraftLoadRequest {
   });
 
   final List<PersonalSavedDraftEntry> entries;
+}
+
+class PersonalDraftDeletionNotice {
+  const PersonalDraftDeletionNotice({
+    this.formId,
+    this.bundleId,
+  });
+
+  final String? formId;
+  final String? bundleId;
 }
 
 class _FormPageLayoutMetrics {
@@ -125,6 +139,16 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
           return;
         }
         unawaited(_loadPersonalDraftRequest(widget.personalDraftLoadRequest!));
+      });
+    }
+    if (widget.personalDraftDeletedVersion !=
+            oldWidget.personalDraftDeletedVersion &&
+        widget.personalDraftDeletedNotice != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _handleDeletedPersonalDraftNotice(widget.personalDraftDeletedNotice!);
       });
     }
   }
@@ -693,6 +717,68 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       );
   }
 
+  void _handleDeletedPersonalDraftNotice(PersonalDraftDeletionNotice notice) {
+    final String? deletedFormId =
+        notice.formId?.trim().isNotEmpty == true ? notice.formId!.trim() : null;
+    final String? deletedBundleId = notice.bundleId?.trim().isNotEmpty == true
+        ? notice.bundleId!.trim()
+        : null;
+    bool didUpdate = false;
+    int? activeReplacementIndex;
+    final List<_LocalDraftForm> nextDrafts =
+        List<_LocalDraftForm>.generate(_localDrafts.length, (index) {
+      final _LocalDraftForm draft = _localDrafts[index];
+      final String? draftFormId =
+          draft.persistedDraftFormId?.trim().isNotEmpty == true
+              ? draft.persistedDraftFormId!.trim()
+              : null;
+      final String? draftBundleId =
+          draft.persistedDraftBundleId?.trim().isNotEmpty == true
+              ? draft.persistedDraftBundleId!.trim()
+              : null;
+      final bool matchesDeletedDraft =
+          (deletedBundleId != null && draftBundleId == deletedBundleId) ||
+              (deletedFormId != null && draftFormId == deletedFormId);
+      if (!matchesDeletedDraft) {
+        return draft;
+      }
+      didUpdate = true;
+      if (index == _activeDraftIndex) {
+        activeReplacementIndex = index;
+      }
+      return draft.copyWith(
+        formState: draft.formState.copyWith(
+          form: draft.formState.form.copyWith(
+            clearId: true,
+            clearSubmissionId: true,
+            clearSavedAt: true,
+            clearSubmittedAt: true,
+            status: LotteryFormStatus.draft,
+            isEditable: true,
+          ),
+          isEditingSavedRecord: false,
+          clearError: true,
+          clearSuccess: true,
+        ),
+        clearPersistedDraftFormId: true,
+        clearPersistedDraftBundleId: true,
+      );
+    });
+    if (!didUpdate) {
+      return;
+    }
+    setState(() {
+      _localDrafts
+        ..clear()
+        ..addAll(nextDrafts);
+    });
+    if (activeReplacementIndex != null && mounted) {
+      context.read<LotteryFormCubit>().loadLocalDraftState(
+            nextDrafts[activeReplacementIndex!].formState,
+          );
+    }
+  }
+
   Future<void> _saveExplicitPersonalDraft() async {
     final LotteryFormState currentState =
         context.read<LotteryFormCubit>().state;
@@ -717,33 +803,28 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       final String? currentFormId = draft.formState.form.formId;
       final bool shouldCreateNewDraft = !isEditingExistingDraft;
       final bool shouldUpdateExistingDraft = isEditingExistingDraft;
-      debugPrint(
-        '[DraftsDebug] singleDraftLifecycle isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${currentDraftId ?? 'null'} currentFormId=${currentFormId ?? 'null'} shouldCreateNewDraft=$shouldCreateNewDraft shouldUpdateExistingDraft=$shouldUpdateExistingDraft',
+      final int savedDraftCount =
+          await _paymentRepository.countSavedPersonalDrafts(
+        currentState.form.userId,
       );
-      final bool isUpdate = isEditingExistingDraft;
-      if (!isUpdate) {
-        final int draftsCount =
-            await _paymentRepository.countSavedPersonalDrafts(
-          currentState.form.userId,
-        );
-        debugPrint(
-          '[DraftsDebug] draftsCount check userId=${currentState.form.userId} count=$draftsCount max=3',
-        );
-        if (draftsCount >= 3) {
-          if (!mounted) {
-            return;
-          }
-          ScaffoldMessenger.of(context)
-            ..hideCurrentSnackBar()
-            ..showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'ניתן לשמור עד 3 טיוטות. מחק טיוטה קיימת כדי לשמור חדשה.',
-                ),
-              ),
-            );
+      final bool blockedByLimit = shouldCreateNewDraft && savedDraftCount >= 3;
+      debugPrint(
+        '[DraftsDebug] draftDecision savedDraftCount=$savedDraftCount isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${currentDraftId ?? 'null'} persistedDraftFormId=${draft.persistedDraftFormId ?? 'null'} persistedDraftBundleId=${draft.persistedDraftBundleId ?? 'null'} currentFormId=${currentFormId ?? 'null'} shouldCreateNewDraft=$shouldCreateNewDraft shouldUpdateExistingDraft=$shouldUpdateExistingDraft blockedByLimit=$blockedByLimit',
+      );
+      if (blockedByLimit) {
+        if (!mounted) {
           return;
         }
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text(
+                'ניתן לשמור עד 3 טיוטות. מחק טיוטה קיימת כדי לשמור חדשה.',
+              ),
+            ),
+          );
+        return;
       }
       final LotteryForm candidate = draft.formState.form.copyWith(
         formId: draft.persistedDraftFormId,
@@ -768,6 +849,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         tableCount: draft.formState.selectedTableCount,
         cost: _calculateDraftCost(draft),
         isDoubleMode: draft.isDoubleMode,
+        forceCreateNew: shouldCreateNewDraft,
       );
       if (!mounted) {
         return;
@@ -795,31 +877,30 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         _currentPersonalDraftBundleId(currentState);
     final bool isEditingExistingDraft =
         existingBundleId != null && existingBundleId.isNotEmpty;
-    debugPrint(
-      '[DraftsDebug] bundleDraftLifecycle isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${existingBundleId ?? 'null'} currentFormId=${drafts.first.persistedDraftFormId ?? drafts.first.formState.form.formId ?? 'null'} shouldCreateNewDraft=${!isEditingExistingDraft} shouldUpdateExistingDraft=$isEditingExistingDraft',
+    final bool shouldCreateNewDraft = !isEditingExistingDraft;
+    final bool shouldUpdateExistingDraft = isEditingExistingDraft;
+    final int savedDraftCount =
+        await _paymentRepository.countSavedPersonalDrafts(
+      currentState.form.userId,
     );
-    if (existingBundleId == null || existingBundleId.isEmpty) {
-      final int draftsCount = await _paymentRepository.countSavedPersonalDrafts(
-        currentState.form.userId,
-      );
-      debugPrint(
-        '[DraftsDebug] draftsCount check userId=${currentState.form.userId} count=$draftsCount max=3',
-      );
-      if (draftsCount >= 3) {
-        if (!mounted) {
-          return;
-        }
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text(
-                'ניתן לשמור עד 3 טיוטות. מחק טיוטה קיימת כדי לשמור חדשה.',
-              ),
-            ),
-          );
+    final bool blockedByLimit = shouldCreateNewDraft && savedDraftCount >= 3;
+    debugPrint(
+      '[DraftsDebug] draftDecision savedDraftCount=$savedDraftCount isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${existingBundleId ?? 'null'} persistedDraftFormId=${drafts.first.persistedDraftFormId ?? 'null'} persistedDraftBundleId=${drafts.first.persistedDraftBundleId ?? 'null'} currentFormId=${drafts.first.formState.form.formId ?? 'null'} shouldCreateNewDraft=$shouldCreateNewDraft shouldUpdateExistingDraft=$shouldUpdateExistingDraft blockedByLimit=$blockedByLimit',
+    );
+    if (blockedByLimit) {
+      if (!mounted) {
         return;
       }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'ניתן לשמור עד 3 טיוטות. מחק טיוטה קיימת כדי לשמור חדשה.',
+            ),
+          ),
+        );
+      return;
     }
     debugPrint(
       '[DraftsDebug] explicitSavePersonalDraft start userId=${currentState.form.userId} drafts=${payloads.length} bundleId=${existingBundleId ?? 'new'}',
@@ -828,6 +909,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       userId: currentState.form.userId,
       drafts: payloads,
       existingBundleId: existingBundleId,
+      forceCreateNew: shouldCreateNewDraft,
     );
     final List<PersonalSavedDraftEntry> savedEntries =
         await _paymentRepository.loadPersonalDraftBundle(
@@ -1025,6 +1107,15 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       return;
     }
 
+    if (_localDrafts.isNotEmpty) {
+      setState(() {
+        _localDrafts[_activeDraftIndex] =
+            _localDrafts[_activeDraftIndex].copyWith(
+          clearPersistedDraftFormId: true,
+          clearPersistedDraftBundleId: true,
+        );
+      });
+    }
     context.read<LotteryFormCubit>().clearForm();
   }
 

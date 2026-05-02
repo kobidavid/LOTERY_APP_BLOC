@@ -30,6 +30,7 @@ class HistoryTab extends StatefulWidget {
     required this.inviteLinkService,
     required this.onPersonalDraftSelected,
     required this.onPersonalDraftBundleSelected,
+    required this.onPersonalDraftDeleted,
     required this.onCancelGroupDraft,
   });
 
@@ -40,6 +41,8 @@ class HistoryTab extends StatefulWidget {
   final ValueChanged<PersonalSavedDraftEntry> onPersonalDraftSelected;
   final ValueChanged<List<PersonalSavedDraftEntry>>
       onPersonalDraftBundleSelected;
+  final void Function({String? formId, String? bundleId})
+      onPersonalDraftDeleted;
   final Future<bool> Function(String groupId) onCancelGroupDraft;
 
   @override
@@ -140,15 +143,21 @@ class _HistoryTabState extends State<HistoryTab>
                                   .map(
                                     (item) => _FormsListItem.groupDraft(item),
                                   ),
-                            ]
-                                .where(
-                                  (item) => !_hiddenDraftItemKeys
-                                      .contains(item.stableKey),
-                                )
-                                .toList()
+                            ].toList()
                               ..sort(
                                 (a, b) => b.sortDate.compareTo(a.sortDate),
                               );
+                            final Set<String> currentDraftKeys = draftItems
+                                .map((item) => item.stableKey)
+                                .toSet();
+                            _hiddenDraftItemKeys.removeWhere(
+                              (key) => !currentDraftKeys.contains(key),
+                            );
+                            draftItems.removeWhere(
+                              (item) =>
+                                  item.kind == _FormsItemKind.groupDraft &&
+                                  _hiddenDraftItemKeys.contains(item.stableKey),
+                            );
 
                             final List<_FormsListItem> cancelledItems = [
                               ...cancelledGroups.map(
@@ -486,17 +495,21 @@ class _HistoryTabState extends State<HistoryTab>
         userId: bundle.userId,
         bundleId: bundle.bundleId,
       );
+      widget.onPersonalDraftDeleted(bundleId: bundle.bundleId);
     } else {
       final PersonalSavedDraftEntry entry = item.personalDraftEntry!;
       await widget.repository.deletePersonalDraft(
         userId: entry.form.userId,
         formId: entry.form.formId,
       );
+      widget.onPersonalDraftDeleted(formId: entry.form.formId);
     }
     if (mounted) {
       setState(() {
-        _hiddenDraftItemKeys.add(item.stableKey);
-        _draftDismissGeneration++;
+        if (item.kind == _FormsItemKind.groupDraft) {
+          _hiddenDraftItemKeys.add(item.stableKey);
+          _draftDismissGeneration++;
+        }
       });
     }
     return true;

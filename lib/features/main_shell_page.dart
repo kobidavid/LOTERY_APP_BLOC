@@ -47,8 +47,10 @@ class _MainShellPageState extends State<MainShellPage> {
 
   int _selectedTabIndex = 0;
   int _personalDraftLoadVersion = 0;
+  int _personalDraftDeletedVersion = 0;
   bool _handlingInvite = false;
   PersonalDraftLoadRequest? _personalDraftLoadRequest;
+  PersonalDraftDeletionNotice? _personalDraftDeletedNotice;
 
   @override
   void initState() {
@@ -145,6 +147,8 @@ class _MainShellPageState extends State<MainShellPage> {
                 onOpenMyForms: () => setState(() => _selectedTabIndex = 1),
                 personalDraftLoadRequest: _personalDraftLoadRequest,
                 personalDraftLoadVersion: _personalDraftLoadVersion,
+                personalDraftDeletedNotice: _personalDraftDeletedNotice,
+                personalDraftDeletedVersion: _personalDraftDeletedVersion,
               ),
               HistoryTab(
                 userId: widget.user.uid,
@@ -154,6 +158,7 @@ class _MainShellPageState extends State<MainShellPage> {
                 onPersonalDraftSelected: _handlePersonalDraftSelected,
                 onPersonalDraftBundleSelected:
                     _handlePersonalDraftBundleSelected,
+                onPersonalDraftDeleted: _handlePersonalDraftDeleted,
                 onCancelGroupDraft: _handleCancelGroupDraft,
               ),
               _PersonalAreaTab(user: widget.user),
@@ -223,6 +228,19 @@ class _MainShellPageState extends State<MainShellPage> {
       _personalDraftLoadRequest = PersonalDraftLoadRequest(entries: entries);
       _personalDraftLoadVersion += 1;
       _selectedTabIndex = 0;
+    });
+  }
+
+  void _handlePersonalDraftDeleted({
+    String? formId,
+    String? bundleId,
+  }) {
+    setState(() {
+      _personalDraftDeletedNotice = PersonalDraftDeletionNotice(
+        formId: formId,
+        bundleId: bundleId,
+      );
+      _personalDraftDeletedVersion += 1;
     });
   }
 
