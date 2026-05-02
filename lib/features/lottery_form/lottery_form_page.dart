@@ -1925,215 +1925,269 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         final bool canPrimarySubmit =
             !state.isBusy && firstIncompleteDraftNumber == null;
         final int? gapRowIndex = state.firstGapRowIndex;
-        if (_showDashboard) {
-          return _HomeDashboardView(
-            userId: state.form.userId,
-            displayName: widget.displayName,
-            repository: _paymentRepository,
-            groupRepository: _groupRepository,
-            inviteLinkService: widget.inviteLinkService,
-            onStartPersonal: () => _openWorkspaceForMode(false),
-            onStartGroup: () => _openWorkspaceForMode(true),
-            onOpenActiveForms: widget.onOpenActiveForms,
-            onOpenDraftForms: widget.onOpenDraftForms,
-            onOpenPersonalDraft: _openPersonalDraftFromDashboard,
-            onOpenPersonalDraftBundle: _openPersonalDraftBundleFromDashboard,
-          );
-        }
-        return MediaQuery.removeViewInsets(
-          removeBottom: true,
-          context: context,
-          child: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final _FormPageLayoutMetrics metrics =
-                    _FormPageLayoutMetrics.fromAvailableHeight(
-                  constraints.maxHeight,
-                );
-                final double keyboardHeight = _calculateKeyboardHeight(
-                  context,
-                  constraints.maxHeight,
-                );
-                _scheduleEnsureActiveTableVisible(
-                  state: state,
-                );
+        final Widget screenContent = _showDashboard
+            ? _HomeDashboardView(
+                key: const ValueKey<String>('dashboard-view'),
+                userId: state.form.userId,
+                displayName: widget.displayName,
+                repository: _paymentRepository,
+                groupRepository: _groupRepository,
+                inviteLinkService: widget.inviteLinkService,
+                onStartPersonal: () => _openWorkspaceForMode(false),
+                onStartGroup: () => _openWorkspaceForMode(true),
+                onOpenActiveForms: widget.onOpenActiveForms,
+                onOpenDraftForms: widget.onOpenDraftForms,
+                onOpenPersonalDraft: _openPersonalDraftFromDashboard,
+                onOpenPersonalDraftBundle:
+                    _openPersonalDraftBundleFromDashboard,
+              )
+            : MediaQuery.removeViewInsets(
+                key: const ValueKey<String>('workspace-view'),
+                removeBottom: true,
+                context: context,
+                child: SafeArea(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final _FormPageLayoutMetrics metrics =
+                          _FormPageLayoutMetrics.fromAvailableHeight(
+                        constraints.maxHeight,
+                      );
+                      final double keyboardHeight = _calculateKeyboardHeight(
+                        context,
+                        constraints.maxHeight,
+                      );
+                      _scheduleEnsureActiveTableVisible(
+                        state: state,
+                      );
 
-                return Column(
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        10,
-                        metrics.topPadding,
-                        10,
-                        metrics.topBottomPadding,
-                      ),
-                      child: Column(
+                      return Column(
                         children: [
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton.icon(
-                              onPressed: _openDashboard,
-                              icon: const Icon(Icons.dashboard_outlined),
-                              label: const Text('חזרה לדשבורד'),
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              10,
+                              metrics.topPadding,
+                              10,
+                              metrics.topBottomPadding,
                             ),
-                          ),
-                          SizedBox(height: metrics.sectionGap),
-                          const _CompactTopInfoRow(),
-                          SizedBox(height: metrics.sectionGap),
-                          if (!_isGroupMode) ...[
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: _DraftModeBadge(
-                                label: _personalDraftModeBannerLabel(),
-                              ),
-                            ),
-                            SizedBox(height: metrics.sectionGap),
-                          ],
-                          _CompactControlRow(
-                            metrics: metrics,
-                            isGroupMode: _isGroupMode,
-                            isDoubleMode: _isDoubleMode,
-                            selectedTableCount: state.selectedTableCount,
-                            isBusy: state.isBusy,
-                            onModeChanged: _handleDraftModeChanged,
-                            onPlayTypeChanged: (value) => setState(() {
-                              _isDoubleMode = value;
-                              _syncActiveDraftSnapshot(
-                                context.read<LotteryFormCubit>().state,
-                              );
-                            }),
-                            onTableCountChanged: _handleTableCountChanged,
-                          ),
-                          SizedBox(height: metrics.sectionGap),
-                          _PrimarySubmitButton(
-                            metrics: metrics,
-                            isEnabled: canPrimarySubmit,
-                            onPressed: _handlePrimarySubmit,
-                          ),
-                          SizedBox(height: metrics.sectionGap),
-                          _SecondaryActionRow(
-                            metrics: metrics,
-                            isBusy: state.isBusy,
-                            showSaveDraft: !_isGroupMode,
-                            showDeleteDraft: !_isGroupMode &&
-                                _personalDraftMode !=
-                                    _PersonalDraftMode.newForm,
-                            saveDraftLabel: _personalDraftSaveButtonLabel(),
-                            onClearPressed: _confirmClearForm,
-                            onSaveDraftPressed: _saveExplicitPersonalDraft,
-                            onDeleteDraftPressed: _deleteCurrentPersonalDraft,
-                            onManageDraftsPressed: () =>
-                                _showDraftFormsSheet(state),
-                            onLottomatAction: (action) {
-                              if (action == _LottomatAction.completeRemaining) {
-                                context
-                                    .read<LotteryFormCubit>()
-                                    .completeRemainingTables();
-                              } else {
-                                context
-                                    .read<LotteryFormCubit>()
-                                    .generateFullRandomForm();
-                              }
-                            },
-                          ),
-                          if (gapRowIndex != null) ...[
-                            SizedBox(height: metrics.sectionGap),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: Text(
-                                'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
-                                textAlign: TextAlign.right,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                              ),
-                            ),
-                          ],
-                          if (firstIncompleteDraftNumber != null) ...[
-                            SizedBox(height: metrics.sectionGap),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: Text(
-                                'יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה',
-                                textAlign: TextAlign.right,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                              ),
-                            ),
-                          ],
-                          SizedBox(height: metrics.sectionGap),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Text(
-                              'החלק ימינה ללוטומט בטבלה אחת, שמאלה לניקוי',
-                              textAlign: TextAlign.right,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
-                                    fontWeight: FontWeight.w600,
+                            child: Column(
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: TextButton.icon(
+                                    onPressed: _openDashboard,
+                                    icon: const Icon(Icons.dashboard_outlined),
+                                    label: const Text('חזרה לדשבורד'),
                                   ),
+                                ),
+                                SizedBox(height: metrics.sectionGap),
+                                const _CompactTopInfoRow(),
+                                SizedBox(height: metrics.sectionGap),
+                                if (!_isGroupMode) ...[
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: _DraftModeBadge(
+                                      label: _personalDraftModeBannerLabel(),
+                                    ),
+                                  ),
+                                  SizedBox(height: metrics.sectionGap),
+                                ],
+                                _CompactControlRow(
+                                  metrics: metrics,
+                                  isGroupMode: _isGroupMode,
+                                  isDoubleMode: _isDoubleMode,
+                                  selectedTableCount: state.selectedTableCount,
+                                  isBusy: state.isBusy,
+                                  onModeChanged: _handleDraftModeChanged,
+                                  onPlayTypeChanged: (value) => setState(() {
+                                    _isDoubleMode = value;
+                                    _syncActiveDraftSnapshot(
+                                      context.read<LotteryFormCubit>().state,
+                                    );
+                                  }),
+                                  onTableCountChanged: _handleTableCountChanged,
+                                ),
+                                SizedBox(height: metrics.sectionGap),
+                                _PrimarySubmitButton(
+                                  metrics: metrics,
+                                  isEnabled: canPrimarySubmit,
+                                  onPressed: _handlePrimarySubmit,
+                                ),
+                                SizedBox(height: metrics.sectionGap),
+                                _SecondaryActionRow(
+                                  metrics: metrics,
+                                  isBusy: state.isBusy,
+                                  showSaveDraft: !_isGroupMode,
+                                  showDeleteDraft: !_isGroupMode &&
+                                      _personalDraftMode !=
+                                          _PersonalDraftMode.newForm,
+                                  saveDraftLabel:
+                                      _personalDraftSaveButtonLabel(),
+                                  onClearPressed: _confirmClearForm,
+                                  onSaveDraftPressed:
+                                      _saveExplicitPersonalDraft,
+                                  onDeleteDraftPressed:
+                                      _deleteCurrentPersonalDraft,
+                                  onManageDraftsPressed: () =>
+                                      _showDraftFormsSheet(state),
+                                  onLottomatAction: (action) {
+                                    if (action ==
+                                        _LottomatAction.completeRemaining) {
+                                      context
+                                          .read<LotteryFormCubit>()
+                                          .completeRemainingTables();
+                                    } else {
+                                      context
+                                          .read<LotteryFormCubit>()
+                                          .generateFullRandomForm();
+                                    }
+                                  },
+                                ),
+                                if (gapRowIndex != null) ...[
+                                  SizedBox(height: metrics.sectionGap),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Text(
+                                      'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
+                                      textAlign: TextAlign.right,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                                if (firstIncompleteDraftNumber != null) ...[
+                                  SizedBox(height: metrics.sectionGap),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Text(
+                                      'יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה',
+                                      textAlign: TextAlign.right,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                                SizedBox(height: metrics.sectionGap),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Text(
+                                    'החלק ימינה ללוטומט בטבלה אחת, שמאלה לניקוי',
+                                    textAlign: TextAlign.right,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
+                              child: ListView.separated(
+                                key: _tablesListKey,
+                                controller: _tablesScrollController,
+                                padding: const EdgeInsets.only(bottom: 8),
+                                itemCount: visibleTables.length,
+                                separatorBuilder: (_, __) =>
+                                    SizedBox(height: metrics.listGap),
+                                itemBuilder: (context, index) {
+                                  return _LotteryRowCard(
+                                    key: _tableRowKeyForIndex(index),
+                                    table: visibleTables[index],
+                                    isActive: index == state.activeRowIndex,
+                                    isEnabled: state.isRowInteractable(index),
+                                    isGapTarget: gapRowIndex == index,
+                                    onTap: () => context
+                                        .read<LotteryFormCubit>()
+                                        .selectRow(index),
+                                    onSwipeRight: () => context
+                                        .read<LotteryFormCubit>()
+                                        .randomizeSingleTable(index),
+                                    onSwipeLeft: () =>
+                                        _confirmClearTable(index),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding:
+                                EdgeInsets.only(top: metrics.keyboardTopGap),
+                            child: _LotteryKeyboardSheet(
+                              height: keyboardHeight,
+                              state: state,
+                              visibleTableCount: state.selectedTableCount,
                             ),
                           ),
                         ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: ListView.separated(
-                          key: _tablesListKey,
-                          controller: _tablesScrollController,
-                          padding: const EdgeInsets.only(bottom: 8),
-                          itemCount: visibleTables.length,
-                          separatorBuilder: (_, __) =>
-                              SizedBox(height: metrics.listGap),
-                          itemBuilder: (context, index) {
-                            return _LotteryRowCard(
-                              key: _tableRowKeyForIndex(index),
-                              table: visibleTables[index],
-                              isActive: index == state.activeRowIndex,
-                              isEnabled: state.isRowInteractable(index),
-                              isGapTarget: gapRowIndex == index,
-                              onTap: () => context
-                                  .read<LotteryFormCubit>()
-                                  .selectRow(index),
-                              onSwipeRight: () => context
-                                  .read<LotteryFormCubit>()
-                                  .randomizeSingleTable(index),
-                              onSwipeLeft: () => _confirmClearTable(index),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.only(top: metrics.keyboardTopGap),
-                      child: _LotteryKeyboardSheet(
-                        height: keyboardHeight,
-                        state: state,
-                        visibleTableCount: state.selectedTableCount,
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
+                      );
+                    },
+                  ),
+                ),
+              );
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 280),
+          reverseDuration: const Duration(milliseconds: 240),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (currentChild, previousChildren) {
+            return Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            );
+          },
+          transitionBuilder: (child, animation) {
+            final bool childIsDashboard =
+                child.key == const ValueKey<String>('dashboard-view');
+            final bool enteringDashboard = _showDashboard && childIsDashboard;
+            final bool enteringWorkspace = !_showDashboard && !childIsDashboard;
+            Offset begin = Offset.zero;
+            if (enteringWorkspace) {
+              begin = const Offset(-0.08, 0);
+            } else if (enteringDashboard) {
+              begin = const Offset(0.08, 0);
+            }
+            return ClipRect(
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: begin,
+                  end: Offset.zero,
+                ).animate(animation),
+                child: FadeTransition(
+                  opacity: Tween<double>(
+                    begin: 0.94,
+                    end: 1,
+                  ).animate(animation),
+                  child: child,
+                ),
+              ),
+            );
+          },
+          child: screenContent,
         );
       },
     );
@@ -2902,6 +2956,7 @@ class _DraftMetaText extends StatelessWidget {
 
 class _HomeDashboardView extends StatelessWidget {
   const _HomeDashboardView({
+    super.key,
     required this.userId,
     required this.displayName,
     required this.repository,
@@ -3139,9 +3194,9 @@ class _HomeDashboardView extends StatelessWidget {
   void _openDashboardItem(BuildContext context, _HomeDashboardItem item) {
     switch (item.kind) {
       case _HomeDashboardItemKind.personalActive:
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PersonalFormDetailsPage(
+        Navigator.of(context).push<void>(
+          _buildDashboardSlideRoute(
+            child: PersonalFormDetailsPage(
               ownerUserId: userId,
               formId: item.personalForm!.formId!,
               repository: repository,
@@ -3151,9 +3206,9 @@ class _HomeDashboardView extends StatelessWidget {
         );
         return;
       case _HomeDashboardItemKind.personalBundleActive:
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PersonalSubmissionBundleDetailsPage(
+        Navigator.of(context).push<void>(
+          _buildDashboardSlideRoute(
+            child: PersonalSubmissionBundleDetailsPage(
               ownerUserId: userId,
               bundle: item.personalBundle!,
               repository: repository,
@@ -3163,9 +3218,9 @@ class _HomeDashboardView extends StatelessWidget {
         return;
       case _HomeDashboardItemKind.groupActive:
       case _HomeDashboardItemKind.groupDraft:
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => GroupDetailsPage(
+        Navigator.of(context).push<void>(
+          _buildDashboardSlideRoute(
+            child: GroupDetailsPage(
               groupId: item.groupId!,
               currentUserId: userId,
               inviteLinkService: inviteLinkService,
@@ -3182,6 +3237,36 @@ class _HomeDashboardView extends StatelessWidget {
         return;
     }
   }
+}
+
+PageRoute<T> _buildDashboardSlideRoute<T>({
+  required Widget child,
+}) {
+  return PageRouteBuilder<T>(
+    pageBuilder: (context, animation, secondaryAnimation) => child,
+    transitionDuration: const Duration(milliseconds: 280),
+    reverseTransitionDuration: const Duration(milliseconds: 240),
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final CurvedAnimation curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(-0.14, 0),
+          end: Offset.zero,
+        ).animate(curved),
+        child: FadeTransition(
+          opacity: Tween<double>(
+            begin: 0.92,
+            end: 1,
+          ).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
 }
 
 class _DashboardLotteryInfoCard extends StatefulWidget {
