@@ -23,6 +23,12 @@ enum _LottomatAction {
   fullRandom,
 }
 
+enum _PersonalDraftMode {
+  newForm,
+  editingDraft,
+  savedCurrentSessionDraft,
+}
+
 class LotteryFormPage extends StatefulWidget {
   const LotteryFormPage({
     super.key,
@@ -124,6 +130,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   final List<_LocalDraftForm> _localDrafts = <_LocalDraftForm>[];
   int _activeDraftIndex = 0;
   int _nextDraftNumber = 2;
+  _PersonalDraftMode _personalDraftMode = _PersonalDraftMode.newForm;
   int? _lastAutoScrolledActiveRowIndex;
   int? _lastAutoScrolledSelectedTableCount;
   Timer? _personalDraftPersistDebounce;
@@ -181,9 +188,72 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
   }
 
+  String _personalDraftModeValue(_PersonalDraftMode mode) {
+    switch (mode) {
+      case _PersonalDraftMode.newForm:
+        return 'newFormMode';
+      case _PersonalDraftMode.editingDraft:
+        return 'editingDraftMode';
+      case _PersonalDraftMode.savedCurrentSessionDraft:
+        return 'savedCurrentSessionDraftMode';
+    }
+  }
+
+  String _personalDraftModeBannerLabel() {
+    switch (_personalDraftMode) {
+      case _PersonalDraftMode.newForm:
+        return 'טופס חדש';
+      case _PersonalDraftMode.editingDraft:
+        return 'עורך טיוטה';
+      case _PersonalDraftMode.savedCurrentSessionDraft:
+        return 'טיוטה נשמרה';
+    }
+  }
+
+  String _personalDraftSaveButtonLabel() {
+    switch (_personalDraftMode) {
+      case _PersonalDraftMode.newForm:
+        return 'שמור כטיוטה חדשה';
+      case _PersonalDraftMode.editingDraft:
+      case _PersonalDraftMode.savedCurrentSessionDraft:
+        return 'עדכן טיוטה';
+    }
+  }
+
+  void _setPersonalDraftMode(
+    _PersonalDraftMode mode, {
+    required String reason,
+  }) {
+    if (_personalDraftMode == mode) {
+      return;
+    }
+    _personalDraftMode = mode;
+    debugPrint(
+      '[DraftsDebug] draftMode mode=${_personalDraftModeValue(mode)} draftId=${_currentPersistedDraftFormId() ?? 'null'} bundleId=${_currentPersistedDraftBundleId() ?? 'null'} formId=${context.read<LotteryFormCubit>().state.form.formId ?? 'null'} draftCount=${_localDrafts.length} action=update reason=$reason',
+    );
+  }
+
+  String? _currentPersistedDraftFormId() {
+    if (_localDrafts.isEmpty) {
+      return null;
+    }
+    final String? formId = _localDrafts[_activeDraftIndex].persistedDraftFormId;
+    return formId?.trim().isNotEmpty == true ? formId!.trim() : null;
+  }
+
+  String? _currentPersistedDraftBundleId() {
+    if (_localDrafts.isEmpty) {
+      return null;
+    }
+    final String? bundleId =
+        _localDrafts[_activeDraftIndex].persistedDraftBundleId;
+    return bundleId?.trim().isNotEmpty == true ? bundleId!.trim() : null;
+  }
+
   void _syncActiveDraftSnapshot(LotteryFormState state) {
     _ensureInitialDraftRegistered(state);
-    final bool keepPersistedIds = state.isEditingSavedRecord;
+    final bool keepPersistedIds =
+        _personalDraftMode != _PersonalDraftMode.newForm;
     _localDrafts[_activeDraftIndex] = _localDrafts[_activeDraftIndex].copyWith(
       formState: state.copyWith(clearError: true, clearSuccess: true),
       isGroupMode: _isGroupMode,
@@ -441,6 +511,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         _nextDraftNumber = 2;
         _isGroupMode = false;
         _isDoubleMode = false;
+        _personalDraftMode = _PersonalDraftMode.newForm;
       });
       cubit.loadLocalDraftState(initialState);
       return true;
@@ -487,7 +558,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       if (index != _activeDraftIndex) {
         return _localDrafts[index];
       }
-      final bool keepPersistedIds = state.isEditingSavedRecord;
+      final bool keepPersistedIds =
+          _personalDraftMode != _PersonalDraftMode.newForm;
       return _localDrafts[index].copyWith(
         formState: state.copyWith(clearError: true, clearSuccess: true),
         isGroupMode: _isGroupMode,
@@ -593,8 +665,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   }
 
   Future<void> _loadPersonalDraftRequest(
-    PersonalDraftLoadRequest request,
-  ) async {
+    PersonalDraftLoadRequest request, {
+    _PersonalDraftMode mode = _PersonalDraftMode.editingDraft,
+  }) async {
     if (request.entries.isEmpty) {
       return;
     }
@@ -642,6 +715,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _isGroupMode = false;
       _isDoubleMode = loadedDrafts.first.isDoubleMode;
       _isPersonalPaymentFlowInProgress = false;
+      _personalDraftMode = mode;
     });
     if (!mounted) {
       return;
@@ -651,6 +725,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         );
     debugPrint(
       '[DraftsDebug] loadPersonalDraft success userId=${sortedEntries.first.form.userId} entries=${sortedEntries.length} activeDraft=0',
+    );
+    debugPrint(
+      '[DraftsDebug] draftMode mode=${_personalDraftModeValue(mode)} draftId=${loadedDrafts.first.persistedDraftFormId ?? 'null'} bundleId=${loadedDrafts.first.persistedDraftBundleId ?? 'null'} formId=${loadedDrafts.first.formState.form.formId ?? 'null'} draftCount=${loadedDrafts.length} action=update reason=loadPersonalDraft',
     );
   }
 
@@ -703,6 +780,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       userId: currentState.form.userId,
       formId: (bundleId == null || bundleId.isEmpty) ? formId : null,
       bundleId: bundleId,
+    );
+    debugPrint(
+      '[DraftsDebug] draftMode mode=${_personalDraftModeValue(_PersonalDraftMode.newForm)} draftId=${formId ?? 'null'} bundleId=${bundleId ?? 'null'} formId=${currentState.form.formId ?? 'null'} draftCount=${_localDrafts.length} action=delete reason=deleteCurrentDraft',
     );
     if (!mounted) {
       return;
@@ -777,6 +857,10 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             nextDrafts[activeReplacementIndex!].formState,
           );
     }
+    _setPersonalDraftMode(
+      _PersonalDraftMode.newForm,
+      reason: 'deletedCurrentDraftIdentity',
+    );
   }
 
   Future<void> _saveExplicitPersonalDraft() async {
@@ -798,7 +882,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     if (drafts.length == 1) {
       final _LocalDraftForm draft = drafts.first;
       final bool isEditingExistingDraft =
-          draft.persistedDraftFormId?.trim().isNotEmpty == true;
+          _personalDraftMode == _PersonalDraftMode.editingDraft ||
+              _personalDraftMode == _PersonalDraftMode.savedCurrentSessionDraft;
       final String? currentDraftId = draft.persistedDraftFormId;
       final String? currentFormId = draft.formState.form.formId;
       final bool shouldCreateNewDraft = !isEditingExistingDraft;
@@ -810,6 +895,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       final bool blockedByLimit = shouldCreateNewDraft && savedDraftCount >= 3;
       debugPrint(
         '[DraftsDebug] draftDecision savedDraftCount=$savedDraftCount isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${currentDraftId ?? 'null'} persistedDraftFormId=${draft.persistedDraftFormId ?? 'null'} persistedDraftBundleId=${draft.persistedDraftBundleId ?? 'null'} currentFormId=${currentFormId ?? 'null'} shouldCreateNewDraft=$shouldCreateNewDraft shouldUpdateExistingDraft=$shouldUpdateExistingDraft blockedByLimit=$blockedByLimit',
+      );
+      debugPrint(
+        '[DraftsDebug] draftMode mode=${_personalDraftModeValue(_personalDraftMode)} draftId=${currentDraftId ?? 'null'} bundleId=${draft.persistedDraftBundleId ?? 'null'} formId=${currentFormId ?? 'null'} draftCount=$savedDraftCount action=${blockedByLimit ? 'block' : (shouldCreateNewDraft ? 'create' : 'update')} reason=explicitSaveSingleDraft',
       );
       if (blockedByLimit) {
         if (!mounted) {
@@ -856,6 +944,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       }
       await _loadPersonalDraftRequest(
         PersonalDraftLoadRequest(entries: <PersonalSavedDraftEntry>[saved]),
+        mode: shouldCreateNewDraft
+            ? _PersonalDraftMode.savedCurrentSessionDraft
+            : _PersonalDraftMode.editingDraft,
       );
       if (!mounted) {
         return;
@@ -876,7 +967,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final String? existingBundleId =
         _currentPersonalDraftBundleId(currentState);
     final bool isEditingExistingDraft =
-        existingBundleId != null && existingBundleId.isNotEmpty;
+        _personalDraftMode == _PersonalDraftMode.editingDraft ||
+            _personalDraftMode == _PersonalDraftMode.savedCurrentSessionDraft;
     final bool shouldCreateNewDraft = !isEditingExistingDraft;
     final bool shouldUpdateExistingDraft = isEditingExistingDraft;
     final int savedDraftCount =
@@ -886,6 +978,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final bool blockedByLimit = shouldCreateNewDraft && savedDraftCount >= 3;
     debugPrint(
       '[DraftsDebug] draftDecision savedDraftCount=$savedDraftCount isEditingExistingDraft=$isEditingExistingDraft currentDraftId=${existingBundleId ?? 'null'} persistedDraftFormId=${drafts.first.persistedDraftFormId ?? 'null'} persistedDraftBundleId=${drafts.first.persistedDraftBundleId ?? 'null'} currentFormId=${drafts.first.formState.form.formId ?? 'null'} shouldCreateNewDraft=$shouldCreateNewDraft shouldUpdateExistingDraft=$shouldUpdateExistingDraft blockedByLimit=$blockedByLimit',
+    );
+    debugPrint(
+      '[DraftsDebug] draftMode mode=${_personalDraftModeValue(_personalDraftMode)} draftId=${drafts.first.persistedDraftFormId ?? 'null'} bundleId=${existingBundleId ?? 'null'} formId=${drafts.first.formState.form.formId ?? 'null'} draftCount=$savedDraftCount action=${blockedByLimit ? 'block' : (shouldCreateNewDraft ? 'create' : 'update')} reason=explicitSaveBundleDraft',
     );
     if (blockedByLimit) {
       if (!mounted) {
@@ -921,6 +1016,9 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     }
     await _loadPersonalDraftRequest(
       PersonalDraftLoadRequest(entries: savedEntries),
+      mode: shouldCreateNewDraft
+          ? _PersonalDraftMode.savedCurrentSessionDraft
+          : _PersonalDraftMode.editingDraft,
     );
     if (!mounted) {
       return;
@@ -951,6 +1049,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     _nextDraftNumber = 2;
     _isGroupMode = false;
     _isDoubleMode = false;
+    _personalDraftMode = _PersonalDraftMode.newForm;
     context.read<LotteryFormCubit>().loadLocalDraftState(initialState);
   }
 
@@ -1114,8 +1213,12 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
           clearPersistedDraftFormId: true,
           clearPersistedDraftBundleId: true,
         );
+        _personalDraftMode = _PersonalDraftMode.newForm;
       });
     }
+    debugPrint(
+      '[DraftsDebug] draftMode mode=${_personalDraftModeValue(_PersonalDraftMode.newForm)} draftId=${_currentPersistedDraftFormId() ?? 'null'} bundleId=${_currentPersistedDraftBundleId() ?? 'null'} formId=${context.read<LotteryFormCubit>().state.form.formId ?? 'null'} draftCount=${_localDrafts.length} action=update reason=clearForm',
+    );
     context.read<LotteryFormCubit>().clearForm();
   }
 
@@ -1787,6 +1890,15 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                         children: [
                           const _CompactTopInfoRow(),
                           SizedBox(height: metrics.sectionGap),
+                          if (!_isGroupMode) ...[
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: _DraftModeBadge(
+                                label: _personalDraftModeBannerLabel(),
+                              ),
+                            ),
+                            SizedBox(height: metrics.sectionGap),
+                          ],
                           _CompactControlRow(
                             metrics: metrics,
                             isGroupMode: _isGroupMode,
@@ -1813,8 +1925,10 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                             metrics: metrics,
                             isBusy: state.isBusy,
                             showSaveDraft: !_isGroupMode,
-                            showDeleteDraft:
-                                !_isGroupMode && state.isEditingSavedRecord,
+                            showDeleteDraft: !_isGroupMode &&
+                                _personalDraftMode !=
+                                    _PersonalDraftMode.newForm,
+                            saveDraftLabel: _personalDraftSaveButtonLabel(),
                             onClearPressed: _confirmClearForm,
                             onSaveDraftPressed: _saveExplicitPersonalDraft,
                             onDeleteDraftPressed: _deleteCurrentPersonalDraft,
@@ -2471,6 +2585,7 @@ class _SecondaryActionRow extends StatelessWidget {
     required this.isBusy,
     required this.showSaveDraft,
     required this.showDeleteDraft,
+    required this.saveDraftLabel,
     required this.onClearPressed,
     required this.onSaveDraftPressed,
     required this.onDeleteDraftPressed,
@@ -2482,6 +2597,7 @@ class _SecondaryActionRow extends StatelessWidget {
   final bool isBusy;
   final bool showSaveDraft;
   final bool showDeleteDraft;
+  final String saveDraftLabel;
   final VoidCallback onClearPressed;
   final VoidCallback onSaveDraftPressed;
   final VoidCallback onDeleteDraftPressed;
@@ -2517,7 +2633,7 @@ class _SecondaryActionRow extends StatelessWidget {
         Expanded(
           child: _ActionChip(
             metrics: metrics,
-            label: 'שמור טיוטה',
+            label: saveDraftLabel,
             icon: Icons.bookmark_outline,
             onTap: isBusy ? null : onSaveDraftPressed,
           ),
@@ -2554,6 +2670,40 @@ class _SecondaryActionRow extends StatelessWidget {
       ),
     ];
     return Row(children: children);
+  }
+}
+
+class _DraftModeBadge extends StatelessWidget {
+  const _DraftModeBadge({
+    required this.label,
+  });
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: colorScheme.outlineVariant,
+          ),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.right,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: colorScheme.onSurface,
+              ),
+        ),
+      ),
+    );
   }
 }
 

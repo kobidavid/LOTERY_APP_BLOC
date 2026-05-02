@@ -614,7 +614,15 @@ class _HistoryTabState extends State<HistoryTab>
       );
     }
 
-    return items;
+    items.sort((a, b) => b.sortDate.compareTo(a.sortDate));
+    int draftOrdinal = 1;
+    return items.map((_FormsListItem item) {
+      if (item.kind != _FormsItemKind.personalDraft &&
+          item.kind != _FormsItemKind.personalDraftBundle) {
+        return item;
+      }
+      return item.copyWith(personalDraftNumber: draftOrdinal++);
+    }).toList(growable: false);
   }
 
   PersonalSubmittedBundle _derivePersonalBundleFromForms({
@@ -829,6 +837,7 @@ class _FormsListItem {
   const _FormsListItem._({
     required this.kind,
     required this.sortDate,
+    this.personalDraftNumber,
     this.personalDraftEntry,
     this.personalDraftBundle,
     this.personalForm,
@@ -901,6 +910,7 @@ class _FormsListItem {
 
   final _FormsItemKind kind;
   final DateTime sortDate;
+  final int? personalDraftNumber;
   final PersonalSavedDraftEntry? personalDraftEntry;
   final _PersonalDraftBundleSummary? personalDraftBundle;
   final LotteryForm? personalForm;
@@ -930,6 +940,23 @@ class _FormsListItem {
       case _FormsItemKind.groupCancelled:
         return 'group-cancelled-${cancelledGroup?.groupId ?? sortDate.toIso8601String()}';
     }
+  }
+
+  _FormsListItem copyWith({
+    int? personalDraftNumber,
+  }) {
+    return _FormsListItem._(
+      kind: kind,
+      sortDate: sortDate,
+      personalDraftNumber: personalDraftNumber ?? this.personalDraftNumber,
+      personalDraftEntry: personalDraftEntry,
+      personalDraftBundle: personalDraftBundle,
+      personalForm: personalForm,
+      personalSubmissionBundle: personalSubmissionBundle,
+      submittedGroup: submittedGroup,
+      activeGroup: activeGroup,
+      cancelledGroup: cancelledGroup,
+    );
   }
 }
 
@@ -1312,9 +1339,13 @@ class _FormsSummaryTileState extends State<_FormsSummaryTile> {
       case _FormsItemKind.personalSubmitted:
         return 'טופס אישי';
       case _FormsItemKind.personalDraft:
-        return 'טופס אישי · טיוטה';
+        return widget.item.personalDraftNumber != null
+            ? 'טופס אישי · טיוטה ${widget.item.personalDraftNumber}'
+            : 'טופס אישי · טיוטה';
       case _FormsItemKind.personalDraftBundle:
-        return 'שליחת טפסים אישיים · טיוטה';
+        return widget.item.personalDraftNumber != null
+            ? 'שליחת טפסים אישיים · טיוטה ${widget.item.personalDraftNumber}'
+            : 'שליחת טפסים אישיים · טיוטה';
       case _FormsItemKind.personalSubmissionBundle:
         return 'שליחת טפסים אישיים';
       case _FormsItemKind.groupSubmitted:
