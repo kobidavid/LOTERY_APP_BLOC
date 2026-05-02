@@ -46,6 +46,7 @@ class _MainShellPageState extends State<MainShellPage> {
   StreamSubscription<GroupInviteLink>? _inviteSubscription;
 
   int _selectedTabIndex = 0;
+  int _homeDashboardFocusVersion = 0;
   int _personalDraftLoadVersion = 0;
   int _personalDraftDeletedVersion = 0;
   bool _handlingInvite = false;
@@ -145,6 +146,8 @@ class _MainShellPageState extends State<MainShellPage> {
               LotteryFormPage(
                 inviteLinkService: widget.inviteLinkService,
                 onOpenMyForms: () => setState(() => _selectedTabIndex = 1),
+                dashboardFocusVersion: _homeDashboardFocusVersion,
+                displayName: widget.user.displayName,
                 personalDraftLoadRequest: _personalDraftLoadRequest,
                 personalDraftLoadVersion: _personalDraftLoadVersion,
                 personalDraftDeletedNotice: _personalDraftDeletedNotice,
@@ -165,28 +168,36 @@ class _MainShellPageState extends State<MainShellPage> {
             ],
           ),
         ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _selectedTabIndex,
-          onDestinationSelected: (index) {
-            setState(() => _selectedTabIndex = index);
-          },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home_rounded),
-              label: 'מסך הבית',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.description_outlined),
-              selectedIcon: Icon(Icons.description_rounded),
-              label: 'הטפסים שלי',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.person_outline_rounded),
-              selectedIcon: Icon(Icons.person_rounded),
-              label: 'איזור אישי',
-            ),
-          ],
+        bottomNavigationBar: Directionality(
+          textDirection: TextDirection.rtl,
+          child: NavigationBar(
+            selectedIndex: _selectedTabIndex,
+            onDestinationSelected: (index) {
+              setState(() {
+                _selectedTabIndex = index;
+                if (index == 0) {
+                  _homeDashboardFocusVersion += 1;
+                }
+              });
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home_rounded),
+                label: 'בית',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.description_outlined),
+                selectedIcon: Icon(Icons.description_rounded),
+                label: 'הטפסים שלי',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.person_outline_rounded),
+                selectedIcon: Icon(Icons.person_rounded),
+                label: 'אזור אישי',
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -204,10 +215,10 @@ class _MainShellPageState extends State<MainShellPage> {
       case 1:
         return 'הטפסים שלי';
       case 2:
-        return 'איזור אישי';
+        return 'אזור אישי';
       case 0:
       default:
-        return 'מסך הבית';
+        return 'בית';
     }
   }
 

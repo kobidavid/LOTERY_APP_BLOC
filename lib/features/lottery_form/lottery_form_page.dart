@@ -13,6 +13,9 @@ import '../../repositories/lottery_form_repository.dart';
 import '../../repositories/lottery_group_repository.dart';
 import '../../services/group_invite_link_service.dart';
 import '../../models/lottery_table.dart';
+import '../form_presentation_utils.dart';
+import '../history/personal_form_details_page.dart';
+import '../history/personal_submission_bundle_details_page.dart';
 import '../payments/payment_options_page.dart';
 import 'group_details_page.dart';
 import 'lottery_form_cubit.dart';
@@ -34,6 +37,8 @@ class LotteryFormPage extends StatefulWidget {
     super.key,
     required this.inviteLinkService,
     required this.onOpenMyForms,
+    this.displayName,
+    this.dashboardFocusVersion = 0,
     this.personalDraftLoadRequest,
     this.personalDraftLoadVersion = 0,
     this.personalDraftDeletedNotice,
@@ -43,6 +48,8 @@ class LotteryFormPage extends StatefulWidget {
   static const double rowLabelWidth = 98;
   final GroupInviteLinkService inviteLinkService;
   final VoidCallback onOpenMyForms;
+  final String? displayName;
+  final int dashboardFocusVersion;
   final PersonalDraftLoadRequest? personalDraftLoadRequest;
   final int personalDraftLoadVersion;
   final PersonalDraftDeletionNotice? personalDraftDeletedNotice;
@@ -127,6 +134,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   final Map<int, GlobalKey> _tableRowKeys = <int, GlobalKey>{};
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
+  bool _showDashboard = true;
   final List<_LocalDraftForm> _localDrafts = <_LocalDraftForm>[];
   int _activeDraftIndex = 0;
   int _nextDraftNumber = 2;
@@ -139,12 +147,20 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   @override
   void didUpdateWidget(covariant LotteryFormPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.dashboardFocusVersion != oldWidget.dashboardFocusVersion) {
+      setState(() {
+        _showDashboard = true;
+      });
+    }
     if (widget.personalDraftLoadVersion != oldWidget.personalDraftLoadVersion &&
         widget.personalDraftLoadRequest != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
           return;
         }
+        setState(() {
+          _showDashboard = false;
+        });
         unawaited(_loadPersonalDraftRequest(widget.personalDraftLoadRequest!));
       });
     }
@@ -408,6 +424,52 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _isGroupMode = nextIsGroupMode;
       _syncActiveDraftSnapshot(state);
     });
+  }
+
+  void _openDashboard() {
+    setState(() {
+      _showDashboard = true;
+    });
+  }
+
+  void _openWorkspaceForMode(bool nextIsGroupMode) {
+    final LotteryFormState state = context.read<LotteryFormCubit>().state;
+    if (_canChangeDraftGroupMode(
+      nextIsGroupMode: nextIsGroupMode,
+      state: state,
+    )) {
+      setState(() {
+        _showDashboard = false;
+        _isGroupMode = nextIsGroupMode;
+        _syncActiveDraftSnapshot(state);
+      });
+      return;
+    }
+    _showDraftMixingMessage();
+  }
+
+  Future<void> _openPersonalDraftFromDashboard(
+    PersonalSavedDraftEntry entry,
+  ) async {
+    setState(() {
+      _showDashboard = false;
+    });
+    await _loadPersonalDraftRequest(
+      PersonalDraftLoadRequest(entries: <PersonalSavedDraftEntry>[entry]),
+      mode: _PersonalDraftMode.editingDraft,
+    );
+  }
+
+  Future<void> _openPersonalDraftBundleFromDashboard(
+    List<PersonalSavedDraftEntry> entries,
+  ) async {
+    setState(() {
+      _showDashboard = false;
+    });
+    await _loadPersonalDraftRequest(
+      PersonalDraftLoadRequest(entries: entries),
+      mode: _PersonalDraftMode.editingDraft,
+    );
   }
 
   Future<void> _createAdditionalLocalDraft() async {
@@ -1859,6 +1921,20 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         final bool canPrimarySubmit =
             !state.isBusy && firstIncompleteDraftNumber == null;
         final int? gapRowIndex = state.firstGapRowIndex;
+        if (_showDashboard) {
+          return _HomeDashboardView(
+            userId: state.form.userId,
+            displayName: widget.displayName,
+            repository: _paymentRepository,
+            groupRepository: _groupRepository,
+            inviteLinkService: widget.inviteLinkService,
+            onStartPersonal: () => _openWorkspaceForMode(false),
+            onStartGroup: () => _openWorkspaceForMode(true),
+            onOpenMyForms: widget.onOpenMyForms,
+            onOpenPersonalDraft: _openPersonalDraftFromDashboard,
+            onOpenPersonalDraftBundle: _openPersonalDraftBundleFromDashboard,
+          );
+        }
         return MediaQuery.removeViewInsets(
           removeBottom: true,
           context: context,
@@ -1888,6 +1964,15 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                       ),
                       child: Column(
                         children: [
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: _openDashboard,
+                              icon: const Icon(Icons.dashboard_outlined),
+                              label: const Text('חזרה לדשבורד'),
+                            ),
+                          ),
+                          SizedBox(height: metrics.sectionGap),
                           const _CompactTopInfoRow(),
                           SizedBox(height: metrics.sectionGap),
                           if (!_isGroupMode) ...[
@@ -2202,6 +2287,22 @@ class _UpcomingLotteryMetadata {
       includeUntil: true,
     );
     return 'ההגרלה הקרובה: $dateLabel | לוטו: $lottoLabel | דאבל: $doubleLabel';
+  }
+
+  String get compactDateLabel {
+    final String value = (displayDate ?? '').trim();
+    return value.isEmpty ? 'תאריך יעדכן בקרוב' : value;
+  }
+
+  String get compactPrizeLabel {
+    final String doubleLabel = _formatPrize(
+      doubleLottoPrize,
+      includeUntil: true,
+    );
+    if (doubleLabel != 'טרם פורסם') {
+      return doubleLabel;
+    }
+    return _formatPrize(regularLottoPrize, includeUntil: true);
   }
 }
 
@@ -2728,6 +2829,913 @@ class _DraftMetaText extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
     );
+  }
+}
+
+class _HomeDashboardView extends StatelessWidget {
+  const _HomeDashboardView({
+    required this.userId,
+    required this.displayName,
+    required this.repository,
+    required this.groupRepository,
+    required this.inviteLinkService,
+    required this.onStartPersonal,
+    required this.onStartGroup,
+    required this.onOpenMyForms,
+    required this.onOpenPersonalDraft,
+    required this.onOpenPersonalDraftBundle,
+  });
+
+  final String userId;
+  final String? displayName;
+  final LotteryFormRepository repository;
+  final LotteryGroupRepository groupRepository;
+  final GroupInviteLinkService inviteLinkService;
+  final VoidCallback onStartPersonal;
+  final VoidCallback onStartGroup;
+  final VoidCallback onOpenMyForms;
+  final ValueChanged<PersonalSavedDraftEntry> onOpenPersonalDraft;
+  final ValueChanged<List<PersonalSavedDraftEntry>> onOpenPersonalDraftBundle;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final String greetingName = (displayName ?? '').trim().isEmpty
+        ? 'שלום'
+        : 'שלום, ${(displayName ?? '').trim().split(' ').first}';
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: SafeArea(
+        child: StreamBuilder<List<LotteryForm>>(
+          stream: repository.watchSubmittedForms(userId),
+          builder: (context, submittedFormsSnapshot) {
+            return StreamBuilder<List<PersonalSubmittedBundle>>(
+              stream: repository.watchPersonalSubmissionBundles(userId),
+              builder: (context, bundlesSnapshot) {
+                return StreamBuilder<List<SubmittedGroupHistoryItem>>(
+                  stream: groupRepository.watchSubmittedGroupsForUser(userId),
+                  builder: (context, submittedGroupsSnapshot) {
+                    return StreamBuilder<List<PersonalSavedDraftEntry>>(
+                      stream: repository.watchSavedPersonalDraftEntries(userId),
+                      builder: (context, draftsSnapshot) {
+                        return StreamBuilder<List<UserGroupListItem>>(
+                          stream: groupRepository.watchGroupsForUser(userId),
+                          builder: (context, groupDraftsSnapshot) {
+                            final List<_HomeDashboardItem> activeItems =
+                                _buildDashboardActiveItems(
+                              submittedForms: submittedFormsSnapshot.data ??
+                                  const <LotteryForm>[],
+                              bundles: bundlesSnapshot.data ??
+                                  const <PersonalSubmittedBundle>[],
+                              groups: submittedGroupsSnapshot.data ??
+                                  const <SubmittedGroupHistoryItem>[],
+                            );
+                            final List<_HomeDashboardItem> draftItems =
+                                _buildDashboardDraftItems(
+                              personalDrafts: draftsSnapshot.data ??
+                                  const <PersonalSavedDraftEntry>[],
+                              groupDrafts: groupDraftsSnapshot.data ??
+                                  const <UserGroupListItem>[],
+                            );
+
+                            return ListView(
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                16,
+                                16,
+                                24,
+                              ),
+                              children: [
+                                const _DashboardLotteryInfoCard(),
+                                const SizedBox(height: 18),
+                                Text(
+                                  greetingName,
+                                  textAlign: TextAlign.right,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineSmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w900,
+                                        color: colorScheme.onSurface,
+                                      ),
+                                ),
+                                const SizedBox(height: 16),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final bool stackCards =
+                                        constraints.maxWidth < 620;
+                                    final Widget personalCard =
+                                        _DashboardActionCard(
+                                      title: 'טופס אישי',
+                                      subtitle: 'מילוי מהיר של טופס אישי חדש',
+                                      icon: Icons.description_outlined,
+                                      onTap: onStartPersonal,
+                                    );
+                                    final Widget groupCard =
+                                        _DashboardActionCard(
+                                      title: 'טופס קבוצתי',
+                                      subtitle: 'פתיחה או המשך של טופס קבוצתי',
+                                      icon: Icons.groups_2_outlined,
+                                      onTap: onStartGroup,
+                                    );
+                                    return stackCards
+                                        ? Column(
+                                            children: [
+                                              personalCard,
+                                              const SizedBox(height: 12),
+                                              groupCard,
+                                            ],
+                                          )
+                                        : Row(
+                                            children: [
+                                              Expanded(child: personalCard),
+                                              const SizedBox(width: 12),
+                                              Expanded(child: groupCard),
+                                            ],
+                                          );
+                                  },
+                                ),
+                                const SizedBox(height: 24),
+                                _DashboardSection(
+                                  title: 'טפסים פעילים',
+                                  actionLabel: activeItems.isEmpty
+                                      ? null
+                                      : 'לכל הטפסים שלי',
+                                  onActionTap: activeItems.isEmpty
+                                      ? null
+                                      : onOpenMyForms,
+                                  child: activeItems.isEmpty
+                                      ? const _DashboardEmptyState(
+                                          text: 'אין כרגע טפסים פעילים',
+                                        )
+                                      : Column(
+                                          children: activeItems
+                                              .take(3)
+                                              .map(
+                                                (item) => Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                    bottom: 10,
+                                                  ),
+                                                  child: _DashboardPreviewCard(
+                                                    item: item,
+                                                    onTap: () =>
+                                                        _openDashboardItem(
+                                                      context,
+                                                      item,
+                                                    ),
+                                                  ),
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                ),
+                                const SizedBox(height: 24),
+                                _DashboardSection(
+                                  title: 'טיוטות',
+                                  actionLabel: draftItems.isEmpty
+                                      ? null
+                                      : 'לכל הטפסים שלי',
+                                  onActionTap:
+                                      draftItems.isEmpty ? null : onOpenMyForms,
+                                  child: draftItems.isEmpty
+                                      ? const _DashboardEmptyState(
+                                          text: 'אין כרגע טיוטות פעילות',
+                                        )
+                                      : Column(
+                                          children: draftItems
+                                              .take(3)
+                                              .map(
+                                                (item) => Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                    bottom: 10,
+                                                  ),
+                                                  child: _DashboardPreviewCard(
+                                                    item: item,
+                                                    onTap: () =>
+                                                        _openDashboardItem(
+                                                      context,
+                                                      item,
+                                                    ),
+                                                  ),
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _openDashboardItem(BuildContext context, _HomeDashboardItem item) {
+    switch (item.kind) {
+      case _HomeDashboardItemKind.personalActive:
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PersonalFormDetailsPage(
+              ownerUserId: userId,
+              formId: item.personalForm!.formId!,
+              repository: repository,
+              title: 'טופס אישי',
+            ),
+          ),
+        );
+        return;
+      case _HomeDashboardItemKind.personalBundleActive:
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PersonalSubmissionBundleDetailsPage(
+              ownerUserId: userId,
+              bundle: item.personalBundle!,
+              repository: repository,
+            ),
+          ),
+        );
+        return;
+      case _HomeDashboardItemKind.groupActive:
+      case _HomeDashboardItemKind.groupDraft:
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => GroupDetailsPage(
+              groupId: item.groupId!,
+              currentUserId: userId,
+              inviteLinkService: inviteLinkService,
+              repository: groupRepository,
+            ),
+          ),
+        );
+        return;
+      case _HomeDashboardItemKind.personalDraft:
+        onOpenPersonalDraft(item.personalDraftEntry!);
+        return;
+      case _HomeDashboardItemKind.personalDraftBundle:
+        onOpenPersonalDraftBundle(item.personalDraftBundleEntries!);
+        return;
+    }
+  }
+}
+
+class _DashboardLotteryInfoCard extends StatefulWidget {
+  const _DashboardLotteryInfoCard();
+
+  @override
+  State<_DashboardLotteryInfoCard> createState() =>
+      _DashboardLotteryInfoCardState();
+}
+
+class _DashboardLotteryInfoCardState extends State<_DashboardLotteryInfoCard> {
+  late final Future<_UpcomingLotteryMetadata> _metadataFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _metadataFuture = _loadMetadata();
+  }
+
+  Future<_UpcomingLotteryMetadata> _loadMetadata() async {
+    final HttpsCallable callable =
+        FirebaseFunctions.instanceFor(region: 'us-central1')
+            .httpsCallable('getUpcomingLotteryMetadata');
+    final HttpsCallableResult<dynamic> result = await callable.call();
+    final Map<String, dynamic> data =
+        Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
+    return _UpcomingLotteryMetadata.fromMap(data);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return FutureBuilder<_UpcomingLotteryMetadata>(
+      future: _metadataFuture,
+      builder: (context, snapshot) {
+        final String dateLabel = snapshot.data?.compactDateLabel ?? 'טוען...';
+        final String amountLabel =
+            snapshot.data?.compactPrizeLabel ?? 'סכום יעדכן בקרוב';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: colorScheme.outlineVariant),
+          ),
+          child: Wrap(
+            alignment: WrapAlignment.start,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              Text(
+                'ההגרלה הקרובה',
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      color: colorScheme.onSurface,
+                    ),
+              ),
+              Text(
+                '·',
+                style: TextStyle(
+                  color: colorScheme.outline,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                dateLabel,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+              ),
+              Text(
+                '·',
+                style: TextStyle(
+                  color: colorScheme.outline,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                amountLabel,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      color: colorScheme.primary,
+                    ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DashboardSection extends StatelessWidget {
+  const _DashboardSection({
+    required this.title,
+    required this.child,
+    this.actionLabel,
+    this.onActionTap,
+  });
+
+  final String title;
+  final Widget child;
+  final String? actionLabel;
+  final VoidCallback? onActionTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          textDirection: TextDirection.rtl,
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                textAlign: TextAlign.right,
+                style: textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            if (actionLabel != null && onActionTap != null)
+              TextButton(
+                onPressed: onActionTap,
+                child: Text(actionLabel!),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        child,
+      ],
+    );
+  }
+}
+
+class _DashboardActionCard extends StatelessWidget {
+  const _DashboardActionCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: Ink(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: colorScheme.outlineVariant),
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.shadow.withValues(alpha: 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            textDirection: TextDirection.rtl,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  icon,
+                  color: colorScheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      title,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w900,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Icon(
+                Icons.arrow_back_ios_new_rounded,
+                size: 18,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardPreviewCard extends StatelessWidget {
+  const _DashboardPreviewCard({
+    required this.item,
+    required this.onTap,
+  });
+
+  final _HomeDashboardItem item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: colorScheme.outlineVariant),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                textDirection: TextDirection.rtl,
+                children: [
+                  Expanded(
+                    child: Text(
+                      item.title,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w900,
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    item.icon,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...item.rows
+                  .map(
+                    (row) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _DashboardInfoRow(
+                        label: row.label,
+                        value: row.value,
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardInfoRow extends StatelessWidget {
+  const _DashboardInfoRow({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Row(
+        textDirection: TextDirection.rtl,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$label:',
+            textAlign: TextAlign.right,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DashboardEmptyState extends StatelessWidget {
+  const _DashboardEmptyState({
+    required this.text,
+  });
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.right,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+  }
+}
+
+enum _HomeDashboardItemKind {
+  personalActive,
+  personalBundleActive,
+  groupActive,
+  personalDraft,
+  personalDraftBundle,
+  groupDraft,
+}
+
+class _DashboardRowValue {
+  const _DashboardRowValue({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+}
+
+class _HomeDashboardItem {
+  const _HomeDashboardItem({
+    required this.kind,
+    required this.title,
+    required this.rows,
+    required this.sortDate,
+    required this.icon,
+    this.personalForm,
+    this.personalBundle,
+    this.groupId,
+    this.personalDraftEntry,
+    this.personalDraftBundleEntries,
+  });
+
+  final _HomeDashboardItemKind kind;
+  final String title;
+  final List<_DashboardRowValue> rows;
+  final DateTime sortDate;
+  final IconData icon;
+  final LotteryForm? personalForm;
+  final PersonalSubmittedBundle? personalBundle;
+  final String? groupId;
+  final PersonalSavedDraftEntry? personalDraftEntry;
+  final List<PersonalSavedDraftEntry>? personalDraftBundleEntries;
+}
+
+List<_HomeDashboardItem> _buildDashboardActiveItems({
+  required List<LotteryForm> submittedForms,
+  required List<PersonalSubmittedBundle> bundles,
+  required List<SubmittedGroupHistoryItem> groups,
+}) {
+  final Set<String> bundleIds =
+      bundles.map((bundle) => bundle.submissionId).toSet();
+  final List<_HomeDashboardItem> items = <_HomeDashboardItem>[
+    ...submittedForms
+        .where(
+          (form) =>
+              form.status == LotteryFormStatus.submitted &&
+              (form.submissionId == null ||
+                  !bundleIds.contains(form.submissionId)) &&
+              !_isDashboardPersonalResultPublished(form),
+        )
+        .map(
+          (form) => _HomeDashboardItem(
+            kind: _HomeDashboardItemKind.personalActive,
+            title: 'טופס אישי',
+            rows: <_DashboardRowValue>[
+              _DashboardRowValue(
+                label: 'סטטוס',
+                value: _dashboardPersonalOperationalStatus(form),
+              ),
+              if (form.salesCloseAt != null)
+                _DashboardRowValue(
+                  label: 'תאריך הגרלה',
+                  value: formatPresentationDateTime(form.salesCloseAt),
+                ),
+            ],
+            sortDate: form.submittedAt ?? form.updatedAt ?? DateTime(0),
+            icon: Icons.description_outlined,
+            personalForm: form,
+          ),
+        ),
+    ...bundles
+        .where((bundle) => !bundle.forms.any(_isDashboardBundleResultPublished))
+        .map(
+          (bundle) => _HomeDashboardItem(
+            kind: _HomeDashboardItemKind.personalBundleActive,
+            title: 'שליחת טפסים אישיים',
+            rows: <_DashboardRowValue>[
+              _DashboardRowValue(
+                label: 'סטטוס',
+                value: _dashboardPersonalBundleOperationalStatus(bundle),
+              ),
+              if (bundle.salesCloseAt != null)
+                _DashboardRowValue(
+                  label: 'תאריך הגרלה',
+                  value: formatPresentationDateTime(bundle.salesCloseAt),
+                ),
+            ],
+            sortDate: bundle.submittedAt ?? DateTime(0),
+            icon: Icons.layers_outlined,
+            personalBundle: bundle,
+          ),
+        ),
+    ...groups.where((group) => group.resultPublishedAt == null).map(
+          (group) => _HomeDashboardItem(
+            kind: _HomeDashboardItemKind.groupActive,
+            title: group.groupName,
+            rows: <_DashboardRowValue>[
+              _DashboardRowValue(
+                label: 'סטטוס',
+                value: _dashboardGroupOperationalStatus(group),
+              ),
+            ],
+            sortDate: group.submittedAt ?? DateTime(0),
+            icon: Icons.groups_2_outlined,
+            groupId: group.groupId,
+          ),
+        ),
+  ]..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+  return items;
+}
+
+List<_HomeDashboardItem> _buildDashboardDraftItems({
+  required List<PersonalSavedDraftEntry> personalDrafts,
+  required List<UserGroupListItem> groupDrafts,
+}) {
+  final Map<String, List<PersonalSavedDraftEntry>> bundleEntries =
+      <String, List<PersonalSavedDraftEntry>>{};
+  final List<PersonalSavedDraftEntry> standaloneEntries =
+      <PersonalSavedDraftEntry>[];
+  for (final PersonalSavedDraftEntry entry in personalDrafts) {
+    final String? bundleId = entry.draftBundleId;
+    if (bundleId == null || bundleId.isEmpty) {
+      standaloneEntries.add(entry);
+      continue;
+    }
+    bundleEntries
+        .putIfAbsent(bundleId, () => <PersonalSavedDraftEntry>[])
+        .add(entry);
+  }
+
+  final List<_HomeDashboardItem> items = <_HomeDashboardItem>[
+    ...standaloneEntries.map(
+      (entry) => _HomeDashboardItem(
+        kind: _HomeDashboardItemKind.personalDraft,
+        title: 'טופס אישי',
+        rows: <_DashboardRowValue>[
+          const _DashboardRowValue(label: 'סטטוס', value: 'טיוטה'),
+          _DashboardRowValue(label: 'טבלאות', value: '${entry.tableCount}'),
+          _DashboardRowValue(
+            label: 'עודכן',
+            value: formatPresentationDateTime(entry.savedAt ?? entry.updatedAt),
+          ),
+        ],
+        sortDate: entry.sortDate,
+        icon: Icons.bookmark_outline,
+        personalDraftEntry: entry,
+      ),
+    ),
+    ...bundleEntries.entries.map((entry) {
+      final List<PersonalSavedDraftEntry> entries =
+          List<PersonalSavedDraftEntry>.from(entry.value)
+            ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+      final DateTime updatedAt =
+          entries.map((item) => item.savedAt ?? item.updatedAt).fold<DateTime>(
+                DateTime.fromMillisecondsSinceEpoch(0),
+                (latest, current) => current.isAfter(latest) ? current : latest,
+              );
+      return _HomeDashboardItem(
+        kind: _HomeDashboardItemKind.personalDraftBundle,
+        title: 'שליחת טפסים אישיים',
+        rows: <_DashboardRowValue>[
+          const _DashboardRowValue(label: 'סטטוס', value: 'טיוטה'),
+          _DashboardRowValue(label: 'מספר טפסים', value: '${entries.length}'),
+          _DashboardRowValue(
+            label: 'עודכן',
+            value: formatPresentationDateTime(updatedAt),
+          ),
+        ],
+        sortDate: updatedAt,
+        icon: Icons.layers_outlined,
+        personalDraftBundleEntries: entries,
+      );
+    }),
+    ...groupDrafts
+        .where(
+          (group) =>
+              group.groupStatus != 'submitted' &&
+              group.groupStatus != 'cancelled',
+        )
+        .map(
+          (group) => _HomeDashboardItem(
+            kind: _HomeDashboardItemKind.groupDraft,
+            title: group.groupName,
+            rows: <_DashboardRowValue>[
+              const _DashboardRowValue(label: 'סטטוס', value: 'בהקמה'),
+              _DashboardRowValue(
+                label: 'עודכן',
+                value: formatPresentationDateTime(group.updatedAt),
+              ),
+            ],
+            sortDate: group.updatedAt ?? DateTime(0),
+            icon: Icons.groups_outlined,
+            groupId: group.groupId,
+          ),
+        ),
+  ]..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+
+  return items;
+}
+
+bool _isDashboardPersonalResultPublished(LotteryForm form) {
+  return form.resultPublishedAt != null ||
+      form.resultStatus == LotteryResultStatus.winner ||
+      form.resultStatus == LotteryResultStatus.loser ||
+      form.resultStatus == LotteryResultStatus.checked;
+}
+
+bool _isDashboardBundleResultPublished(PersonalSubmittedBundleForm form) {
+  return form.resultPublishedAt != null ||
+      form.resultStatus == LotteryResultStatus.winner ||
+      form.resultStatus == LotteryResultStatus.loser ||
+      form.resultStatus == LotteryResultStatus.checked;
+}
+
+String _dashboardPersonalOperationalStatus(LotteryForm form) {
+  final String dispatchStatus = (form.dispatchStatus ?? '').trim();
+  if ((dispatchStatus == 'queued_for_print' ||
+          dispatchStatus == 'ready_for_print' ||
+          (form.printReadyGeneratedAt != null && form.printedAt == null)) &&
+      form.submittedToStationAt == null) {
+    return 'ממתין להדפסה';
+  }
+  if ((dispatchStatus == 'printed' ||
+          dispatchStatus == 'print_ready' ||
+          dispatchStatus == 'ready_for_station' ||
+          form.printedAt != null) &&
+      form.submittedToStationAt == null) {
+    return 'ממתין למסירה בתחנה';
+  }
+  if (dispatchStatus == 'submitted_to_station' ||
+      form.submittedToStationAt != null) {
+    return 'ממתין להגרלה';
+  }
+  if (form.resultStatus == LotteryResultStatus.waitingForResults) {
+    return 'ממתין לתוצאות';
+  }
+  return 'ממתין לעיבוד';
+}
+
+String _dashboardPersonalBundleOperationalStatus(
+    PersonalSubmittedBundle bundle) {
+  for (final PersonalSubmittedBundleForm form in bundle.forms) {
+    if (_isDashboardBundleResultPublished(form)) {
+      continue;
+    }
+    if (form.receiptUrl != null && form.printedAt == null) {
+      return 'ממתין להדפסה';
+    }
+    if (form.printedAt != null && form.submittedToStationAt == null) {
+      return 'ממתין למסירה בתחנה';
+    }
+    if (form.submittedToStationAt != null) {
+      return 'ממתין להגרלה';
+    }
+    if (form.resultStatus == LotteryResultStatus.waitingForResults) {
+      return 'ממתין לתוצאות';
+    }
+  }
+  return 'ממתין לעיבוד';
+}
+
+String _dashboardGroupOperationalStatus(SubmittedGroupHistoryItem group) {
+  switch (group.dispatchStatus) {
+    case LotteryGroupRepository.dispatchStatusQueuedForPrint:
+      return 'ממתין להדפסה';
+    case LotteryGroupRepository.dispatchStatusPrinted:
+      return 'ממתין למסירה בתחנה';
+    case LotteryGroupRepository.dispatchStatusSubmittedToStation:
+      return 'ממתין להגרלה';
+    default:
+      return group.groupStatus == 'submitted'
+          ? 'ממתין לתוצאות'
+          : 'ממתין לעיבוד';
   }
 }
 
