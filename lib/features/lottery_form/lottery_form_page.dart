@@ -3458,10 +3458,13 @@ class _DashboardActionCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Icon(
-                      Icons.chevron_left,
-                      size: 22,
-                      color: colorScheme.onSurfaceVariant,
+                    Text(
+                      '←',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w900,
+                          ),
                     ),
                   ],
                 ),
