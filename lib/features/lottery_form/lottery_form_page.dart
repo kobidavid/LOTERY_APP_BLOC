@@ -37,6 +37,8 @@ class LotteryFormPage extends StatefulWidget {
     super.key,
     required this.inviteLinkService,
     required this.onOpenMyForms,
+    required this.onOpenActiveForms,
+    required this.onOpenDraftForms,
     this.displayName,
     this.dashboardFocusVersion = 0,
     this.personalDraftLoadRequest,
@@ -48,6 +50,8 @@ class LotteryFormPage extends StatefulWidget {
   static const double rowLabelWidth = 98;
   final GroupInviteLinkService inviteLinkService;
   final VoidCallback onOpenMyForms;
+  final VoidCallback onOpenActiveForms;
+  final VoidCallback onOpenDraftForms;
   final String? displayName;
   final int dashboardFocusVersion;
   final PersonalDraftLoadRequest? personalDraftLoadRequest;
@@ -1930,7 +1934,8 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
             inviteLinkService: widget.inviteLinkService,
             onStartPersonal: () => _openWorkspaceForMode(false),
             onStartGroup: () => _openWorkspaceForMode(true),
-            onOpenMyForms: widget.onOpenMyForms,
+            onOpenActiveForms: widget.onOpenActiveForms,
+            onOpenDraftForms: widget.onOpenDraftForms,
             onOpenPersonalDraft: _openPersonalDraftFromDashboard,
             onOpenPersonalDraftBundle: _openPersonalDraftBundleFromDashboard,
           );
@@ -2303,6 +2308,69 @@ class _UpcomingLotteryMetadata {
       return doubleLabel;
     }
     return _formatPrize(regularLottoPrize, includeUntil: true);
+  }
+
+  DateTime? get _parsedDisplayDate {
+    final String raw = (displayDate ?? '').trim();
+    if (raw.isEmpty) {
+      return null;
+    }
+    final RegExpMatch? match = RegExp(
+      r'(\d{2})\/(\d{2})\/(\d{2,4})',
+    ).firstMatch(raw);
+    if (match == null) {
+      return null;
+    }
+    final int? day = int.tryParse(match.group(1)!);
+    final int? month = int.tryParse(match.group(2)!);
+    final int? yearValue = int.tryParse(match.group(3)!);
+    if (day == null || month == null || yearValue == null) {
+      return null;
+    }
+    final int year = yearValue < 100 ? 2000 + yearValue : yearValue;
+    return DateTime(year, month, day);
+  }
+
+  String get dashboardDayLabel {
+    const List<String> weekdayLabels = <String>[
+      'יום ב׳',
+      'יום ג׳',
+      'יום ד׳',
+      'יום ה׳',
+      'יום ו׳',
+      'שבת',
+      'יום א׳',
+    ];
+    final DateTime? parsed = _parsedDisplayDate;
+    if (parsed == null) {
+      return 'יום --';
+    }
+    return weekdayLabels[parsed.weekday - 1];
+  }
+
+  String get dashboardShortDateLabel {
+    final DateTime? parsed = _parsedDisplayDate;
+    if (parsed == null) {
+      return '--/--/--';
+    }
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    return '${twoDigits(parsed.day)}/${twoDigits(parsed.month)}/${(parsed.year % 100).toString().padLeft(2, '0')}';
+  }
+
+  String get dashboardPrizeLabel {
+    final String source = compactPrizeLabel;
+    final String digits = source.replaceAll(RegExp(r'[^0-9]'), '');
+    final int? numeric = digits.isEmpty ? null : int.tryParse(digits);
+    if (numeric != null && numeric >= 1000000) {
+      final double millions = numeric / 1000000;
+      final bool hasFraction =
+          (millions - millions.truncateToDouble()).abs() > 0.001;
+      final String displayMillions = hasFraction
+          ? millions.toStringAsFixed(1)
+          : millions.toStringAsFixed(0);
+      return 'עד $displayMillions מיליון ₪';
+    }
+    return source;
   }
 }
 
@@ -2841,7 +2909,8 @@ class _HomeDashboardView extends StatelessWidget {
     required this.inviteLinkService,
     required this.onStartPersonal,
     required this.onStartGroup,
-    required this.onOpenMyForms,
+    required this.onOpenActiveForms,
+    required this.onOpenDraftForms,
     required this.onOpenPersonalDraft,
     required this.onOpenPersonalDraftBundle,
   });
@@ -2853,7 +2922,8 @@ class _HomeDashboardView extends StatelessWidget {
   final GroupInviteLinkService inviteLinkService;
   final VoidCallback onStartPersonal;
   final VoidCallback onStartGroup;
-  final VoidCallback onOpenMyForms;
+  final VoidCallback onOpenActiveForms;
+  final VoidCallback onOpenDraftForms;
   final ValueChanged<PersonalSavedDraftEntry> onOpenPersonalDraft;
   final ValueChanged<List<PersonalSavedDraftEntry>> onOpenPersonalDraftBundle;
 
@@ -2898,131 +2968,161 @@ class _HomeDashboardView extends StatelessWidget {
                                   const <UserGroupListItem>[],
                             );
 
-                            return ListView(
-                              padding: const EdgeInsets.fromLTRB(
-                                16,
-                                16,
-                                16,
-                                24,
-                              ),
-                              children: [
-                                const _DashboardLotteryInfoCard(),
-                                const SizedBox(height: 18),
-                                Text(
-                                  greetingName,
-                                  textAlign: TextAlign.right,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .headlineSmall
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w900,
-                                        color: colorScheme.onSurface,
-                                      ),
+                            return CustomScrollView(
+                              slivers: [
+                                const SliverPersistentHeader(
+                                  pinned: true,
+                                  delegate: _DashboardLotteryBarDelegate(),
                                 ),
-                                const SizedBox(height: 16),
-                                LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final bool stackCards =
-                                        constraints.maxWidth < 620;
-                                    final Widget personalCard =
-                                        _DashboardActionCard(
-                                      title: 'טופס אישי',
-                                      subtitle: 'מילוי מהיר של טופס אישי חדש',
-                                      icon: Icons.description_outlined,
-                                      onTap: onStartPersonal,
-                                    );
-                                    final Widget groupCard =
-                                        _DashboardActionCard(
-                                      title: 'טופס קבוצתי',
-                                      subtitle: 'פתיחה או המשך של טופס קבוצתי',
-                                      icon: Icons.groups_2_outlined,
-                                      onTap: onStartGroup,
-                                    );
-                                    return stackCards
-                                        ? Column(
-                                            children: [
-                                              personalCard,
-                                              const SizedBox(height: 12),
-                                              groupCard,
-                                            ],
-                                          )
-                                        : Row(
-                                            children: [
-                                              Expanded(child: personalCard),
-                                              const SizedBox(width: 12),
-                                              Expanded(child: groupCard),
-                                            ],
-                                          );
-                                  },
-                                ),
-                                const SizedBox(height: 24),
-                                _DashboardSection(
-                                  title: 'טפסים פעילים',
-                                  actionLabel: activeItems.isEmpty
-                                      ? null
-                                      : 'לכל הטפסים שלי',
-                                  onActionTap: activeItems.isEmpty
-                                      ? null
-                                      : onOpenMyForms,
-                                  child: activeItems.isEmpty
-                                      ? const _DashboardEmptyState(
-                                          text: 'אין כרגע טפסים פעילים',
-                                        )
-                                      : Column(
-                                          children: activeItems
-                                              .take(3)
-                                              .map(
-                                                (item) => Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                    bottom: 10,
-                                                  ),
-                                                  child: _DashboardPreviewCard(
-                                                    item: item,
-                                                    onTap: () =>
-                                                        _openDashboardItem(
-                                                      context,
-                                                      item,
-                                                    ),
-                                                  ),
-                                                ),
-                                              )
-                                              .toList(),
+                                SliverPadding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    18,
+                                    16,
+                                    24,
+                                  ),
+                                  sliver: SliverList(
+                                    delegate: SliverChildListDelegate(
+                                      [
+                                        Text(
+                                          greetingName,
+                                          textAlign: TextAlign.right,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .headlineSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w900,
+                                                color: colorScheme.onSurface,
+                                              ),
                                         ),
-                                ),
-                                const SizedBox(height: 24),
-                                _DashboardSection(
-                                  title: 'טיוטות',
-                                  actionLabel: draftItems.isEmpty
-                                      ? null
-                                      : 'לכל הטפסים שלי',
-                                  onActionTap:
-                                      draftItems.isEmpty ? null : onOpenMyForms,
-                                  child: draftItems.isEmpty
-                                      ? const _DashboardEmptyState(
-                                          text: 'אין כרגע טיוטות פעילות',
-                                        )
-                                      : Column(
-                                          children: draftItems
-                                              .take(3)
-                                              .map(
-                                                (item) => Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                    bottom: 10,
-                                                  ),
-                                                  child: _DashboardPreviewCard(
-                                                    item: item,
-                                                    onTap: () =>
-                                                        _openDashboardItem(
-                                                      context,
-                                                      item,
-                                                    ),
-                                                  ),
-                                                ),
-                                              )
-                                              .toList(),
+                                        const SizedBox(height: 18),
+                                        LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final bool stackCards =
+                                                constraints.maxWidth < 620;
+                                            final Widget personalCard =
+                                                _DashboardActionCard(
+                                              title: 'טופס אישי',
+                                              subtitle:
+                                                  'מילוי מהיר של טופס אישי חדש',
+                                              icon: Icons.description_outlined,
+                                              illustrationAsset:
+                                                  'assets/images/form-lotto.png',
+                                              onTap: onStartPersonal,
+                                            );
+                                            final Widget groupCard =
+                                                _DashboardActionCard(
+                                              title: 'טופס קבוצתי',
+                                              subtitle:
+                                                  'פתיחה או המשך של טופס קבוצתי',
+                                              icon: Icons.groups_2_outlined,
+                                              illustrationAsset:
+                                                  'assets/images/form-lotto.png',
+                                              onTap: onStartGroup,
+                                            );
+                                            return stackCards
+                                                ? Column(
+                                                    children: [
+                                                      personalCard,
+                                                      const SizedBox(
+                                                        height: 12,
+                                                      ),
+                                                      groupCard,
+                                                    ],
+                                                  )
+                                                : Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: personalCard,
+                                                      ),
+                                                      const SizedBox(
+                                                        width: 12,
+                                                      ),
+                                                      Expanded(
+                                                        child: groupCard,
+                                                      ),
+                                                    ],
+                                                  );
+                                          },
                                         ),
+                                        const SizedBox(height: 24),
+                                        _DashboardSection(
+                                          title: 'טפסים פעילים',
+                                          actionLabel: activeItems.isEmpty
+                                              ? null
+                                              : 'לכל הטפסים הפעילים שלי',
+                                          onActionTap: activeItems.isEmpty
+                                              ? null
+                                              : onOpenActiveForms,
+                                          child: activeItems.isEmpty
+                                              ? const _DashboardEmptyState(
+                                                  text: 'אין כרגע טפסים פעילים',
+                                                )
+                                              : Column(
+                                                  children: activeItems
+                                                      .take(3)
+                                                      .map(
+                                                        (item) => Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                            bottom: 10,
+                                                          ),
+                                                          child:
+                                                              _DashboardPreviewCard(
+                                                            item: item,
+                                                            onTap: () =>
+                                                                _openDashboardItem(
+                                                              context,
+                                                              item,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      )
+                                                      .toList(),
+                                                ),
+                                        ),
+                                        const SizedBox(height: 24),
+                                        _DashboardSection(
+                                          title: 'טיוטות',
+                                          actionLabel: draftItems.isEmpty
+                                              ? null
+                                              : 'לכל הטיוטות שלי',
+                                          onActionTap: draftItems.isEmpty
+                                              ? null
+                                              : onOpenDraftForms,
+                                          child: draftItems.isEmpty
+                                              ? const _DashboardEmptyState(
+                                                  text:
+                                                      'אין כרגע טיוטות פעילות',
+                                                )
+                                              : Column(
+                                                  children: draftItems
+                                                      .take(3)
+                                                      .map(
+                                                        (item) => Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                            bottom: 10,
+                                                          ),
+                                                          child:
+                                                              _DashboardPreviewCard(
+                                                            item: item,
+                                                            onTap: () =>
+                                                                _openDashboardItem(
+                                                              context,
+                                                              item,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      )
+                                                      .toList(),
+                                                ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ],
                             );
@@ -3121,66 +3221,97 @@ class _DashboardLotteryInfoCardState extends State<_DashboardLotteryInfoCard> {
     return FutureBuilder<_UpcomingLotteryMetadata>(
       future: _metadataFuture,
       builder: (context, snapshot) {
-        final String dateLabel = snapshot.data?.compactDateLabel ?? 'טוען...';
+        final _UpcomingLotteryMetadata? metadata = snapshot.data;
+        final String dayLabel = metadata?.dashboardDayLabel ?? 'יום --';
+        final String dateLabel =
+            metadata?.dashboardShortDateLabel ?? '--/--/--';
         final String amountLabel =
-            snapshot.data?.compactPrizeLabel ?? 'סכום יעדכן בקרוב';
+            metadata?.dashboardPrizeLabel ?? 'סכום יעדכן בקרוב';
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: colorScheme.outlineVariant),
-          ),
-          child: Wrap(
-            alignment: WrapAlignment.start,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              Text(
-                'ההגרלה הקרובה',
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w900,
-                      color: colorScheme.onSurface,
-                    ),
-              ),
-              Text(
-                '·',
-                style: TextStyle(
-                  color: colorScheme.outline,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                dateLabel,
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              Text(
-                '·',
-                style: TextStyle(
-                  color: colorScheme.outline,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                amountLabel,
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
-                      color: colorScheme.primary,
-                    ),
+            color: colorScheme.surface.withValues(alpha: 0.96),
+            border: Border(
+              bottom: BorderSide(color: colorScheme.outlineVariant),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.shadow.withValues(alpha: 0.05),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
               ),
             ],
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: RichText(
+              textDirection: TextDirection.rtl,
+              maxLines: 1,
+              overflow: TextOverflow.visible,
+              text: TextSpan(
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                      height: 1.0,
+                    ),
+                children: [
+                  TextSpan(
+                    text: 'הגרלה הקרובה',
+                    style: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const TextSpan(text: ' · '),
+                  TextSpan(text: dayLabel),
+                  const TextSpan(text: ' · '),
+                  TextSpan(text: dateLabel),
+                  const TextSpan(text: ' · '),
+                  TextSpan(
+                    text: amountLabel,
+                    style: TextStyle(
+                      color: colorScheme.primary,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         );
       },
     );
   }
+}
+
+class _DashboardLotteryBarDelegate extends SliverPersistentHeaderDelegate {
+  const _DashboardLotteryBarDelegate();
+
+  static const double _height = 58;
+
+  @override
+  double get minExtent => _height;
+
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return ColoredBox(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: const _DashboardLotteryInfoCard(),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _DashboardLotteryBarDelegate oldDelegate) =>
+      false;
 }
 
 class _DashboardSection extends StatelessWidget {
@@ -3233,24 +3364,27 @@ class _DashboardActionCard extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.icon,
+    required this.illustrationAsset,
     required this.onTap,
   });
 
   final String title;
   final String subtitle;
   final IconData icon;
+  final String illustrationAsset;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final double textScale = MediaQuery.textScalerOf(context).scale(1);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(24),
         child: Ink(
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 16, 16, 16),
           decoration: BoxDecoration(
             color: colorScheme.surface,
             borderRadius: BorderRadius.circular(24),
@@ -3263,52 +3397,85 @@ class _DashboardActionCard extends StatelessWidget {
               ),
             ],
           ),
-          child: Row(
-            textDirection: TextDirection.rtl,
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  icon,
-                  color: colorScheme.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final bool showIllustration =
+                  constraints.maxWidth >= 290 && textScale <= 1.35;
+              return Directionality(
+                textDirection: TextDirection.rtl,
+                child: Row(
+                  textDirection: TextDirection.rtl,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
-                      title,
-                      textAlign: TextAlign.right,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w900,
-                          ),
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Icon(
+                        icon,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      textAlign: TextAlign.right,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w600,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            title,
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w900,
+                                ),
                           ),
+                          const SizedBox(height: 4),
+                          Text(
+                            subtitle,
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (showIllustration) ...[
+                      const SizedBox(width: 10),
+                      ExcludeSemantics(
+                        child: Opacity(
+                          opacity:
+                              Theme.of(context).brightness == Brightness.dark
+                                  ? 0.18
+                                  : 0.22,
+                          child: Image.asset(
+                            illustrationAsset,
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
+                    Icon(
+                      Icons.arrow_left_rounded,
+                      size: 22,
+                      color: colorScheme.onSurfaceVariant,
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Icon(
-                Icons.arrow_back_ios_new_rounded,
-                size: 18,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ],
+              );
+            },
           ),
         ),
       ),

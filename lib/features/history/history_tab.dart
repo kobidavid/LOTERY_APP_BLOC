@@ -32,6 +32,8 @@ class HistoryTab extends StatefulWidget {
     required this.onPersonalDraftBundleSelected,
     required this.onPersonalDraftDeleted,
     required this.onCancelGroupDraft,
+    this.initialTabIndex = 0,
+    this.initialTabVersion = 0,
   });
 
   final String userId;
@@ -44,6 +46,8 @@ class HistoryTab extends StatefulWidget {
   final void Function({String? formId, String? bundleId})
       onPersonalDraftDeleted;
   final Future<bool> Function(String groupId) onCancelGroupDraft;
+  final int initialTabIndex;
+  final int initialTabVersion;
 
   @override
   State<HistoryTab> createState() => _HistoryTabState();
@@ -58,7 +62,22 @@ class _HistoryTabState extends State<HistoryTab>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant HistoryTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialTabVersion != oldWidget.initialTabVersion) {
+      final int nextIndex = widget.initialTabIndex.clamp(0, 2);
+      if (_tabController.index != nextIndex) {
+        _tabController.animateTo(nextIndex);
+      }
+    }
   }
 
   @override

@@ -47,6 +47,8 @@ class _MainShellPageState extends State<MainShellPage> {
 
   int _selectedTabIndex = 0;
   int _homeDashboardFocusVersion = 0;
+  int _historyInitialTabIndex = 0;
+  int _historyInitialTabVersion = 0;
   int _personalDraftLoadVersion = 0;
   int _personalDraftDeletedVersion = 0;
   bool _handlingInvite = false;
@@ -145,7 +147,9 @@ class _MainShellPageState extends State<MainShellPage> {
             children: [
               LotteryFormPage(
                 inviteLinkService: widget.inviteLinkService,
-                onOpenMyForms: () => setState(() => _selectedTabIndex = 1),
+                onOpenMyForms: () => _openHistoryTab(0),
+                onOpenActiveForms: () => _openHistoryTab(0),
+                onOpenDraftForms: () => _openHistoryTab(2),
                 dashboardFocusVersion: _homeDashboardFocusVersion,
                 displayName: widget.user.displayName,
                 personalDraftLoadRequest: _personalDraftLoadRequest,
@@ -163,6 +167,8 @@ class _MainShellPageState extends State<MainShellPage> {
                     _handlePersonalDraftBundleSelected,
                 onPersonalDraftDeleted: _handlePersonalDraftDeleted,
                 onCancelGroupDraft: _handleCancelGroupDraft,
+                initialTabIndex: _historyInitialTabIndex,
+                initialTabVersion: _historyInitialTabVersion,
               ),
               _PersonalAreaTab(user: widget.user),
             ],
@@ -220,6 +226,14 @@ class _MainShellPageState extends State<MainShellPage> {
       default:
         return 'בית';
     }
+  }
+
+  void _openHistoryTab(int index) {
+    setState(() {
+      _historyInitialTabIndex = index.clamp(0, 2);
+      _historyInitialTabVersion += 1;
+      _selectedTabIndex = 1;
+    });
   }
 
   void _handlePersonalDraftSelected(PersonalSavedDraftEntry entry) {
