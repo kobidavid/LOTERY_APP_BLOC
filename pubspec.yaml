@@ -63,9 +63,15 @@ dependencies:
   url_launcher: ^6.3.2
   file_picker: ^10.3.2
   http_parser: ^4.0.2
+  flutter_launcher_icons: ^0.13.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  
+flutter_launcher_icons:
+  android: false
+  ios: true
+  image_path: "assets/images/app_icon.png"
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -116,7 +122,3 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/custom-fonts/#from-packages
-flutter_launcher_icons:
-  android: false
-  ios: true
-  image_path: "assets/images/app_icon.png"
