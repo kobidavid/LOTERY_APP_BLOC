@@ -3006,8 +3006,6 @@ class _HomeDashboardView extends StatelessWidget {
                                               subtitle:
                                                   'מילוי מהיר של טופס אישי חדש',
                                               icon: Icons.description_outlined,
-                                              illustrationAsset:
-                                                  'assets/images/form-lotto.png',
                                               onTap: onStartPersonal,
                                             );
                                             final Widget groupCard =
@@ -3016,8 +3014,6 @@ class _HomeDashboardView extends StatelessWidget {
                                               subtitle:
                                                   'פתיחה או המשך של טופס קבוצתי',
                                               icon: Icons.groups_2_outlined,
-                                              illustrationAsset:
-                                                  'assets/images/form-lotto.png',
                                               onTap: onStartGroup,
                                             );
                                             return stackCards
@@ -3364,14 +3360,12 @@ class _DashboardActionCard extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.icon,
-    required this.illustrationAsset,
     required this.onTap,
   });
 
   final String title;
   final String subtitle;
   final IconData icon;
-  final String illustrationAsset;
   final VoidCallback onTap;
 
   @override
@@ -3399,8 +3393,6 @@ class _DashboardActionCard extends StatelessWidget {
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final bool showIllustration =
-                  constraints.maxWidth >= 290 && textScale <= 1.35;
               return Directionality(
                 textDirection: TextDirection.rtl,
                 child: Row(
@@ -3408,15 +3400,23 @@ class _DashboardActionCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Container(
-                      width: 48,
-                      height: 48,
+                      width: 54,
+                      height: 54,
                       decoration: BoxDecoration(
                         color: colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: colorScheme.primary.withValues(alpha: 0.14),
+                            blurRadius: 14,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
                       ),
                       child: Icon(
                         icon,
                         color: colorScheme.onPrimaryContainer,
+                        size: 28,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -3433,6 +3433,8 @@ class _DashboardActionCard extends StatelessWidget {
                                 ?.copyWith(
                                   fontWeight: FontWeight.w900,
                                 ),
+                            maxLines: textScale > 1.35 ? 2 : 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
                           Text(
@@ -3445,27 +3447,12 @@ class _DashboardActionCard extends StatelessWidget {
                                   color: colorScheme.onSurfaceVariant,
                                   fontWeight: FontWeight.w600,
                                 ),
+                            maxLines: textScale > 1.25 ? 3 : 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
                     ),
-                    if (showIllustration) ...[
-                      const SizedBox(width: 10),
-                      ExcludeSemantics(
-                        child: Opacity(
-                          opacity:
-                              Theme.of(context).brightness == Brightness.dark
-                                  ? 0.18
-                                  : 0.22,
-                          child: Image.asset(
-                            illustrationAsset,
-                            width: 56,
-                            height: 56,
-                            fit: BoxFit.contain,
-                          ),
-                        ),
-                      ),
-                    ],
                     const SizedBox(width: 8),
                     Icon(
                       Icons.arrow_left_rounded,
