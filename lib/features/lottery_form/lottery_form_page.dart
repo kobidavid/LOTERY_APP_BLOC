@@ -2147,44 +2147,29 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                 ),
               );
         return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 280),
-          reverseDuration: const Duration(milliseconds: 240),
+          duration: const Duration(milliseconds: 240),
+          reverseDuration: const Duration(milliseconds: 220),
           switchInCurve: Curves.easeOutCubic,
           switchOutCurve: Curves.easeInCubic,
           layoutBuilder: (currentChild, previousChildren) {
-            return Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                ...previousChildren,
-                if (currentChild != null) currentChild,
-              ],
+            return ClipRect(
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  ...previousChildren,
+                  if (currentChild != null) currentChild,
+                ],
+              ),
             );
           },
           transitionBuilder: (child, animation) {
-            final bool childIsDashboard =
-                child.key == const ValueKey<String>('dashboard-view');
-            final bool enteringDashboard = _showDashboard && childIsDashboard;
-            final bool enteringWorkspace = !_showDashboard && !childIsDashboard;
-            Offset begin = Offset.zero;
-            if (enteringWorkspace) {
-              begin = const Offset(-0.08, 0);
-            } else if (enteringDashboard) {
-              begin = const Offset(0.08, 0);
-            }
-            return ClipRect(
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: begin,
-                  end: Offset.zero,
-                ).animate(animation),
-                child: FadeTransition(
-                  opacity: Tween<double>(
-                    begin: 0.94,
-                    end: 1,
-                  ).animate(animation),
-                  child: child,
-                ),
+            return FadeTransition(
+              opacity: CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOutCubic,
+                reverseCurve: Curves.easeInCubic,
               ),
+              child: child,
             );
           },
           child: screenContent,
