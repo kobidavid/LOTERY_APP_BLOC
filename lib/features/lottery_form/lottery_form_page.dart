@@ -1304,7 +1304,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                     label: 'לוטומט מלא',
                     onTap: () {
                       Navigator.of(context).pop();
-                      context.read<LotteryFormCubit>().generateFullRandomForm();
+                      _runFullRandomForm();
                     },
                   ),
                   _WorkspaceActionSheetTile(
@@ -1312,9 +1312,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                     label: 'השלם טבלאות ריקות',
                     onTap: () {
                       Navigator.of(context).pop();
-                      context
-                          .read<LotteryFormCubit>()
-                          .completeRemainingTables();
+                      _completeRemainingTables();
                     },
                   ),
                   _WorkspaceActionSheetTile(
@@ -1351,6 +1349,14 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         );
       },
     );
+  }
+
+  void _runFullRandomForm() {
+    context.read<LotteryFormCubit>().generateFullRandomForm();
+  }
+
+  void _completeRemainingTables() {
+    context.read<LotteryFormCubit>().completeRemainingTables();
   }
 
   Future<void> _confirmClearTable(int rowIndex) async {
@@ -1824,19 +1830,42 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                     onBackPressed: _openDashboard,
                                   ),
                                   SizedBox(height: metrics.sectionGap + 1),
-                                  _WorkspaceDraftTabs(
-                                    drafts: effectiveDrafts,
-                                    activeDraftIndex: _activeDraftIndex,
-                                    showDeleteOnActive:
-                                        effectiveDrafts.length > 1,
-                                    onDraftSelected: _switchToLocalDraft,
-                                    onAddDraft: _createAdditionalLocalDraft,
-                                    onDeleteActiveDraft:
-                                        effectiveDrafts.length > 1
-                                            ? () => _deleteLocalDraft(
-                                                  _activeDraftIndex,
-                                                )
-                                            : null,
+                                  Row(
+                                    textDirection: TextDirection.rtl,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      _WorkspaceActionsFab(
+                                        onTap: () => _showWorkspaceActionsSheet(
+                                          showSaveDraft: !_isGroupMode,
+                                          showDeleteDraft: !_isGroupMode &&
+                                              _personalDraftMode !=
+                                                  _PersonalDraftMode.newForm,
+                                          saveDraftLabel:
+                                              _personalDraftSaveButtonLabel(),
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: metrics.sectionGap + 4,
+                                      ),
+                                      Expanded(
+                                        child: _WorkspaceDraftTabs(
+                                          drafts: effectiveDrafts,
+                                          activeDraftIndex: _activeDraftIndex,
+                                          showDeleteOnActive:
+                                              effectiveDrafts.length > 1,
+                                          onDraftSelected: _switchToLocalDraft,
+                                          onAddDraft:
+                                              _createAdditionalLocalDraft,
+                                          onDeleteActiveDraft:
+                                              effectiveDrafts.length > 1
+                                                  ? () => _deleteLocalDraft(
+                                                        _activeDraftIndex,
+                                                      )
+                                                  : null,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   SizedBox(height: metrics.sectionGap + 2),
                                   _CompactControlRow(
@@ -1978,15 +2007,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                           canPrimarySubmit: canPrimarySubmit,
                                           onPrimaryPressed:
                                               _handlePrimarySubmit,
-                                          onActionsPressed: () =>
-                                              _showWorkspaceActionsSheet(
-                                            showSaveDraft: !_isGroupMode,
-                                            showDeleteDraft: !_isGroupMode &&
-                                                _personalDraftMode !=
-                                                    _PersonalDraftMode.newForm,
-                                            saveDraftLabel:
-                                                _personalDraftSaveButtonLabel(),
-                                          ),
                                         ),
                                       ),
                                     ),
@@ -2514,30 +2534,34 @@ class _WorkspaceDraftTabs extends StatelessWidget {
   Widget build(BuildContext context) {
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          textDirection: TextDirection.rtl,
-          children: [
-            ...List<Widget>.generate(drafts.length, (index) {
-              final bool isActive = index == activeDraftIndex;
-              return Padding(
-                padding: EdgeInsetsDirectional.only(
-                  start: index == drafts.length - 1 ? 0 : 8,
-                ),
-                child: _DraftTabChip(
-                  label: 'טופס ${drafts[index].number}',
-                  isActive: isActive,
-                  onTap: () => onDraftSelected(index),
-                  onDelete: isActive && showDeleteOnActive
-                      ? onDeleteActiveDraft
-                      : null,
-                ),
-              );
-            }),
-            const SizedBox(width: 8),
-            _DraftTabAddChip(onTap: onAddDraft),
-          ],
+      child: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            textDirection: TextDirection.rtl,
+            children: [
+              ...List<Widget>.generate(drafts.length, (index) {
+                final bool isActive = index == activeDraftIndex;
+                return Padding(
+                  padding: EdgeInsetsDirectional.only(
+                    start: index == drafts.length - 1 ? 0 : 8,
+                  ),
+                  child: _DraftTabChip(
+                    label: 'טופס ${drafts[index].number}',
+                    isActive: isActive,
+                    onTap: () => onDraftSelected(index),
+                    onDelete: isActive && showDeleteOnActive
+                        ? onDeleteActiveDraft
+                        : null,
+                  ),
+                );
+              }),
+              const SizedBox(width: 8),
+              _DraftTabAddChip(onTap: onAddDraft),
+            ],
+          ),
         ),
       ),
     );
@@ -2681,7 +2705,6 @@ class _WorkspaceFooterBar extends StatelessWidget {
     required this.primaryLabel,
     required this.canPrimarySubmit,
     required this.onPrimaryPressed,
-    required this.onActionsPressed,
   });
 
   final _FormPageLayoutMetrics metrics;
@@ -2689,7 +2712,6 @@ class _WorkspaceFooterBar extends StatelessWidget {
   final String primaryLabel;
   final bool canPrimarySubmit;
   final VoidCallback onPrimaryPressed;
-  final VoidCallback onActionsPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -2713,19 +2735,6 @@ class _WorkspaceFooterBar extends StatelessWidget {
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w900,
                   ),
-            );
-            final Widget actionsButton = OutlinedButton.icon(
-              onPressed: onActionsPressed,
-              icon: const Icon(Icons.more_horiz_rounded),
-              label: const Text('פעולות'),
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                minimumSize: Size(0, metrics.secondaryButtonHeight),
-                padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 0),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
             );
             final Widget primaryButton = FilledButton(
               onPressed: canPrimarySubmit ? onPrimaryPressed : null,
@@ -2753,14 +2762,7 @@ class _WorkspaceFooterBar extends StatelessWidget {
                 children: [
                   priceText,
                   const SizedBox(height: 8),
-                  Row(
-                    textDirection: TextDirection.rtl,
-                    children: [
-                      Expanded(child: primaryButton),
-                      const SizedBox(width: 8),
-                      actionsButton,
-                    ],
-                  ),
+                  primaryButton,
                 ],
               );
             }
@@ -2769,9 +2771,7 @@ class _WorkspaceFooterBar extends StatelessWidget {
               textDirection: TextDirection.rtl,
               children: [
                 Expanded(child: priceText),
-                const SizedBox(width: 10),
-                actionsButton,
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
                 Flexible(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(minWidth: 150),
@@ -2781,6 +2781,35 @@ class _WorkspaceFooterBar extends StatelessWidget {
               ],
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceActionsFab extends StatelessWidget {
+  const _WorkspaceActionsFab({
+    required this.onTap,
+  });
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.surfaceContainerHighest,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Icon(
+            Icons.more_horiz_rounded,
+            color: colorScheme.onSurface,
+            size: 22,
+          ),
         ),
       ),
     );
