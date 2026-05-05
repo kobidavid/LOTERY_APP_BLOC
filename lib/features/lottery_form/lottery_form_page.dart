@@ -139,6 +139,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
   bool _showDashboard = true;
+  int _draftTabTransitionDirection = 0;
   final List<_LocalDraftForm> _localDrafts = <_LocalDraftForm>[];
   int _activeDraftIndex = 0;
   int _nextDraftNumber = 2;
@@ -414,22 +415,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         .every((entry) => entry.value.isGroupMode == nextIsGroupMode);
   }
 
-  void _handleDraftModeChanged(bool nextIsGroupMode) {
-    final LotteryFormState state = context.read<LotteryFormCubit>().state;
-    if (!_canChangeDraftGroupMode(
-      nextIsGroupMode: nextIsGroupMode,
-      state: state,
-    )) {
-      _showDraftMixingMessage();
-      return;
-    }
-
-    setState(() {
-      _isGroupMode = nextIsGroupMode;
-      _syncActiveDraftSnapshot(state);
-    });
-  }
-
   void _openDashboard() {
     setState(() {
       _showDashboard = true;
@@ -502,6 +487,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     );
     setState(() {
       _localDrafts.add(draft);
+      _draftTabTransitionDirection = 1;
       _activeDraftIndex = _localDrafts.length - 1;
       _nextDraftNumber += 1;
       _isGroupMode = draft.isGroupMode;
@@ -521,7 +507,10 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       await _persistLocalDraftAtIndex(_activeDraftIndex);
     }
     final _LocalDraftForm draft = _localDrafts[index];
+    final int previousIndex = _activeDraftIndex;
     setState(() {
+      _draftTabTransitionDirection =
+          index == previousIndex ? 0 : (index > previousIndex ? 1 : -1);
       _activeDraftIndex = index;
       _isGroupMode = draft.isGroupMode;
       _isDoubleMode = draft.isDoubleMode;
@@ -606,6 +595,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _localDrafts
         ..clear()
         ..addAll(renumberedDrafts);
+      _draftTabTransitionDirection = deletedActiveDraft ? -1 : 0;
       _activeDraftIndex = nextActiveDraftIndex;
       _nextDraftNumber = renumberedDrafts.length + 1;
       _isGroupMode = nextActiveDraft.isGroupMode;
@@ -776,6 +766,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       _localDrafts
         ..clear()
         ..addAll(loadedDrafts);
+      _draftTabTransitionDirection = 0;
       _activeDraftIndex = 0;
       _nextDraftNumber = loadedDrafts.length + 1;
       _isGroupMode = false;
@@ -1288,277 +1279,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     context.read<LotteryFormCubit>().clearForm();
   }
 
-  Future<void> _showDraftFormsSheet(LotteryFormState state) async {
-    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
-    _syncActiveDraftSnapshot(state);
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Directionality(
-          textDirection: TextDirection.rtl,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 460),
-                  child: Material(
-                    color: Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(28),
-                    elevation: 16,
-                    child: StatefulBuilder(
-                      builder: (context, sheetSetState) {
-                        final List<_LocalDraftForm> drafts =
-                            _effectiveLocalDrafts(cubit.state);
-                        final bool canDeleteDrafts = drafts.length > 1;
-                        final num totalDraftsCost =
-                            _calculateDraftsTotalCost(drafts);
-                        return SingleChildScrollView(
-                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Text(
-                                'הטפסים שלי',
-                                textAlign: TextAlign.right,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleLarge
-                                    ?.copyWith(fontWeight: FontWeight.w900),
-                              ),
-                              const SizedBox(height: 16),
-                              ...List.generate(drafts.length, (index) {
-                                final _LocalDraftForm draft = drafts[index];
-                                final bool isActive =
-                                    index == _activeDraftIndex;
-                                final bool isDraftComplete =
-                                    _isDraftComplete(draft);
-                                final num draftCost =
-                                    _calculateDraftCost(draft);
-                                return Padding(
-                                  padding: EdgeInsets.only(
-                                    bottom: index == drafts.length - 1 ? 0 : 10,
-                                  ),
-                                  child: Material(
-                                    color: isActive
-                                        ? Theme.of(context)
-                                            .colorScheme
-                                            .primaryContainer
-                                            .withValues(alpha: 0.7)
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(18),
-                                    child: InkWell(
-                                      onTap: () {
-                                        Navigator.of(context).pop();
-                                        _switchToLocalDraft(index);
-                                      },
-                                      borderRadius: BorderRadius.circular(18),
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 12,
-                                        ),
-                                        child: Row(
-                                          textDirection: TextDirection.rtl,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            IconButton(
-                                              onPressed: canDeleteDrafts
-                                                  ? () async {
-                                                      final bool deleted =
-                                                          await _deleteLocalDraft(
-                                                              index);
-                                                      if (deleted &&
-                                                          context.mounted) {
-                                                        sheetSetState(() {});
-                                                      }
-                                                    }
-                                                  : null,
-                                              tooltip: canDeleteDrafts
-                                                  ? 'מחק טופס'
-                                                  : 'לא ניתן למחוק את הטופס האחרון',
-                                              icon: const Icon(
-                                                  Icons.delete_outline),
-                                            ),
-                                            const SizedBox(width: 6),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.end,
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment.end,
-                                                    textDirection:
-                                                        TextDirection.rtl,
-                                                    children: [
-                                                      if (isActive) ...[
-                                                        Container(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .symmetric(
-                                                            horizontal: 8,
-                                                            vertical: 3,
-                                                          ),
-                                                          decoration:
-                                                              BoxDecoration(
-                                                            color: Theme.of(
-                                                                    context)
-                                                                .colorScheme
-                                                                .primary
-                                                                .withValues(
-                                                                    alpha:
-                                                                        0.14),
-                                                            borderRadius:
-                                                                BorderRadius
-                                                                    .circular(
-                                                                        999),
-                                                          ),
-                                                          child: Text(
-                                                            'פעיל',
-                                                            style: Theme.of(
-                                                                    context)
-                                                                .textTheme
-                                                                .labelMedium
-                                                                ?.copyWith(
-                                                                  color: Theme.of(
-                                                                          context)
-                                                                      .colorScheme
-                                                                      .primary,
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .w800,
-                                                                ),
-                                                          ),
-                                                        ),
-                                                        const SizedBox(
-                                                            width: 8),
-                                                      ],
-                                                      Text(
-                                                        'טופס ${draft.number}',
-                                                        textAlign:
-                                                            TextAlign.right,
-                                                        style: Theme.of(context)
-                                                            .textTheme
-                                                            .titleMedium
-                                                            ?.copyWith(
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w800,
-                                                            ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  const SizedBox(height: 6),
-                                                  Wrap(
-                                                    alignment:
-                                                        WrapAlignment.end,
-                                                    spacing: 8,
-                                                    runSpacing: 4,
-                                                    children: [
-                                                      _DraftMetaText(
-                                                        value: draft.isGroupMode
-                                                            ? 'קבוצתי'
-                                                            : 'אישי',
-                                                      ),
-                                                      _DraftMetaText(
-                                                        value:
-                                                            draft.isDoubleMode
-                                                                ? 'דאבל'
-                                                                : 'רגיל',
-                                                      ),
-                                                      _DraftMetaText(
-                                                        value:
-                                                            '${draft.formState.selectedTableCount} טבלאות',
-                                                      ),
-                                                      _DraftMetaText(
-                                                        value: isDraftComplete
-                                                            ? 'מלא'
-                                                            : 'לא מלא',
-                                                        accent: isDraftComplete
-                                                            ? Theme.of(context)
-                                                                .colorScheme
-                                                                .primary
-                                                            : Theme.of(context)
-                                                                .colorScheme
-                                                                .onSurfaceVariant,
-                                                      ),
-                                                      _DraftMetaText(
-                                                        value:
-                                                            'עלות: ${_formatNisAmount(draftCost)} ש״ח',
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }),
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 12,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest
-                                      .withValues(alpha: 0.8),
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: Text(
-                                  'סה״כ: ${_formatNisAmount(totalDraftsCost)} ש״ח',
-                                  textAlign: TextAlign.right,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              OutlinedButton.icon(
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                  _createAdditionalLocalDraft();
-                                },
-                                icon: const Icon(Icons.add_rounded),
-                                label: const Text('+ טופס נוסף'),
-                              ),
-                              const SizedBox(height: 10),
-                              FilledButton.tonal(
-                                onPressed: () => Navigator.of(context).pop(),
-                                child: const Text('סגירה'),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _confirmClearTable(int rowIndex) async {
     final bool confirmed = await showDialog<bool>(
           context: context,
@@ -1920,6 +1640,12 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
       builder: (context, state) {
         _ensureInitialDraftRegistered(state);
         final List<LotteryTable> visibleTables = state.visibleTables;
+        final List<_LocalDraftForm> effectiveDrafts = _effectiveLocalDrafts(
+          state,
+        );
+        final num totalWorkspaceCost = _calculateDraftsTotalCost(
+          effectiveDrafts,
+        );
         final int? firstIncompleteDraftNumber =
             _firstIncompleteDraftNumber(state);
         final bool canPrimarySubmit =
@@ -1963,7 +1689,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                       return Column(
                         children: [
                           Padding(
-                            padding: EdgeInsets.fromLTRB(
+                            padding: EdgeInsetsDirectional.fromSTEB(
                               10,
                               metrics.topPadding,
                               10,
@@ -1971,33 +1697,36 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                             ),
                             child: Column(
                               children: [
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: TextButton.icon(
-                                    onPressed: _openDashboard,
-                                    icon: const Icon(Icons.dashboard_outlined),
-                                    label: const Text('חזרה לדשבורד'),
-                                  ),
+                                _WorkspaceHeader(
+                                  title: _isGroupMode
+                                      ? 'טופס קבוצתי'
+                                      : 'טופס אישי',
+                                  onBackPressed: _openDashboard,
+                                  modeLabel: !_isGroupMode
+                                      ? _personalDraftModeBannerLabel()
+                                      : null,
                                 ),
-                                SizedBox(height: metrics.sectionGap),
-                                const _CompactTopInfoRow(),
-                                SizedBox(height: metrics.sectionGap),
-                                if (!_isGroupMode) ...[
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: _DraftModeBadge(
-                                      label: _personalDraftModeBannerLabel(),
-                                    ),
-                                  ),
-                                  SizedBox(height: metrics.sectionGap),
-                                ],
+                                SizedBox(height: metrics.sectionGap + 2),
+                                _WorkspaceDraftTabs(
+                                  drafts: effectiveDrafts,
+                                  activeDraftIndex: _activeDraftIndex,
+                                  showDeleteOnActive:
+                                      effectiveDrafts.length > 1,
+                                  onDraftSelected: _switchToLocalDraft,
+                                  onAddDraft: _createAdditionalLocalDraft,
+                                  onDeleteActiveDraft:
+                                      effectiveDrafts.length > 1
+                                          ? () => _deleteLocalDraft(
+                                                _activeDraftIndex,
+                                              )
+                                          : null,
+                                ),
+                                SizedBox(height: metrics.sectionGap + 4),
                                 _CompactControlRow(
                                   metrics: metrics,
-                                  isGroupMode: _isGroupMode,
                                   isDoubleMode: _isDoubleMode,
                                   selectedTableCount: state.selectedTableCount,
                                   isBusy: state.isBusy,
-                                  onModeChanged: _handleDraftModeChanged,
                                   onPlayTypeChanged: (value) => setState(() {
                                     _isDoubleMode = value;
                                     _syncActiveDraftSnapshot(
@@ -2006,29 +1735,16 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                   }),
                                   onTableCountChanged: _handleTableCountChanged,
                                 ),
-                                SizedBox(height: metrics.sectionGap),
-                                _PrimarySubmitButton(
-                                  metrics: metrics,
-                                  isEnabled: canPrimarySubmit,
-                                  onPressed: _handlePrimarySubmit,
-                                ),
-                                SizedBox(height: metrics.sectionGap),
-                                _SecondaryActionRow(
+                                SizedBox(height: metrics.sectionGap + 2),
+                                _WorkspaceToolsRow(
                                   metrics: metrics,
                                   isBusy: state.isBusy,
-                                  showSaveDraft: !_isGroupMode,
                                   showDeleteDraft: !_isGroupMode &&
                                       _personalDraftMode !=
                                           _PersonalDraftMode.newForm,
-                                  saveDraftLabel:
-                                      _personalDraftSaveButtonLabel(),
                                   onClearPressed: _confirmClearForm,
-                                  onSaveDraftPressed:
-                                      _saveExplicitPersonalDraft,
                                   onDeleteDraftPressed:
                                       _deleteCurrentPersonalDraft,
-                                  onManageDraftsPressed: () =>
-                                      _showDraftFormsSheet(state),
                                   onLottomatAction: (action) {
                                     if (action ==
                                         _LottomatAction.completeRemaining) {
@@ -2080,64 +1796,111 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                     ),
                                   ),
                                 ],
-                                SizedBox(height: metrics.sectionGap),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: Text(
-                                    'החלק ימינה ללוטומט בטבלה אחת, שמאלה לניקוי',
-                                    textAlign: TextAlign.right,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onSurfaceVariant,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                  ),
-                                ),
                               ],
                             ),
                           ),
                           Expanded(
-                            child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 10),
-                              child: ListView.separated(
-                                key: _tablesListKey,
-                                controller: _tablesScrollController,
-                                padding: const EdgeInsets.only(bottom: 8),
-                                itemCount: visibleTables.length,
-                                separatorBuilder: (_, __) =>
-                                    SizedBox(height: metrics.listGap),
-                                itemBuilder: (context, index) {
-                                  return _LotteryRowCard(
-                                    key: _tableRowKeyForIndex(index),
-                                    table: visibleTables[index],
-                                    isActive: index == state.activeRowIndex,
-                                    isEnabled: state.isRowInteractable(index),
-                                    isGapTarget: gapRowIndex == index,
-                                    onTap: () => context
-                                        .read<LotteryFormCubit>()
-                                        .selectRow(index),
-                                    onSwipeRight: () => context
-                                        .read<LotteryFormCubit>()
-                                        .randomizeSingleTable(index),
-                                    onSwipeLeft: () =>
-                                        _confirmClearTable(index),
-                                  );
-                                },
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 220),
+                              reverseDuration:
+                                  const Duration(milliseconds: 200),
+                              switchInCurve: Curves.easeOutCubic,
+                              switchOutCurve: Curves.easeInCubic,
+                              transitionBuilder: (child, animation) {
+                                final Offset begin = Offset(
+                                  _draftTabTransitionDirection > 0
+                                      ? -0.03
+                                      : _draftTabTransitionDirection < 0
+                                          ? 0.03
+                                          : 0,
+                                  0,
+                                );
+                                return ClipRect(
+                                  child: SlideTransition(
+                                    position: Tween<Offset>(
+                                      begin: begin,
+                                      end: Offset.zero,
+                                    ).animate(animation),
+                                    child: FadeTransition(
+                                      opacity: animation,
+                                      child: child,
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: KeyedSubtree(
+                                key: ValueKey<int>(_activeDraftIndex),
+                                child: Column(
+                                  children: [
+                                    Expanded(
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10),
+                                        child: ListView.separated(
+                                          key: _tablesListKey,
+                                          controller: _tablesScrollController,
+                                          padding:
+                                              const EdgeInsets.only(bottom: 8),
+                                          itemCount: visibleTables.length,
+                                          separatorBuilder: (_, __) =>
+                                              SizedBox(height: metrics.listGap),
+                                          itemBuilder: (context, index) {
+                                            return _LotteryRowCard(
+                                              key: _tableRowKeyForIndex(index),
+                                              table: visibleTables[index],
+                                              isActive:
+                                                  index == state.activeRowIndex,
+                                              isEnabled: state
+                                                  .isRowInteractable(index),
+                                              isGapTarget: gapRowIndex == index,
+                                              onTap: () => context
+                                                  .read<LotteryFormCubit>()
+                                                  .selectRow(index),
+                                              onSwipeRight: () => context
+                                                  .read<LotteryFormCubit>()
+                                                  .randomizeSingleTable(index),
+                                              onSwipeLeft: () =>
+                                                  _confirmClearTable(index),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                      ),
+                                      child: _WorkspaceSummaryBar(
+                                        totalPrice:
+                                            '${_formatNisAmount(totalWorkspaceCost)} ₪',
+                                      ),
+                                    ),
+                                    SizedBox(height: metrics.sectionGap),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                      ),
+                                      child: _WorkspacePrimaryActions(
+                                        isGroupMode: _isGroupMode,
+                                        saveDraftLabel:
+                                            _personalDraftSaveButtonLabel(),
+                                        showSaveDraft: !_isGroupMode,
+                                        canPrimarySubmit: canPrimarySubmit,
+                                        onPrimaryPressed: _handlePrimarySubmit,
+                                        onSaveDraftPressed:
+                                            _saveExplicitPersonalDraft,
+                                      ),
+                                    ),
+                                    SizedBox(height: metrics.keyboardTopGap),
+                                    _LotteryKeyboardSheet(
+                                      height: keyboardHeight,
+                                      state: state,
+                                      visibleTableCount:
+                                          state.selectedTableCount,
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ),
-                          Padding(
-                            padding:
-                                EdgeInsets.only(top: metrics.keyboardTopGap),
-                            child: _LotteryKeyboardSheet(
-                              height: keyboardHeight,
-                              state: state,
-                              visibleTableCount: state.selectedTableCount,
                             ),
                           ),
                         ],
@@ -2413,214 +2176,58 @@ class _UpcomingLotteryMetadata {
   }
 }
 
-class _CompactTopInfoRow extends StatefulWidget {
-  const _CompactTopInfoRow();
-
-  @override
-  State<_CompactTopInfoRow> createState() => _CompactTopInfoRowState();
-}
-
-class _CompactTopInfoRowState extends State<_CompactTopInfoRow> {
-  late final Future<_UpcomingLotteryMetadata> _metadataFuture;
-  late final ScrollController _scrollController;
-  bool _scrollLoopStarted = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _metadataFuture = _loadMetadata();
-    _scrollController = ScrollController();
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  Future<_UpcomingLotteryMetadata> _loadMetadata() async {
-    final HttpsCallable callable =
-        FirebaseFunctions.instanceFor(region: 'us-central1')
-            .httpsCallable('getUpcomingLotteryMetadata');
-    final HttpsCallableResult<dynamic> result = await callable.call();
-    debugPrint(
-      '[HomeTopRow] getUpcomingLotteryMetadata raw payload: ${result.data}',
-    );
-    final Map<String, dynamic> data =
-        Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
-    return _UpcomingLotteryMetadata.fromMap(data);
-  }
-
-  void _ensureScrollLoop() {
-    if (_scrollLoopStarted) {
-      return;
-    }
-    _scrollLoopStarted = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      while (mounted) {
-        if (!_scrollController.hasClients) {
-          await Future<void>.delayed(const Duration(seconds: 1));
-          continue;
-        }
-        final double maxExtent = _scrollController.position.maxScrollExtent;
-        if (maxExtent <= 4) {
-          await Future<void>.delayed(const Duration(seconds: 2));
-          continue;
-        }
-        final int durationMs = (maxExtent * 32).round().clamp(10000, 18000);
-        await Future<void>.delayed(const Duration(milliseconds: 900));
-        if (!mounted || !_scrollController.hasClients) {
-          return;
-        }
-        await _scrollController.animateTo(
-          maxExtent,
-          duration: Duration(milliseconds: durationMs),
-          curve: Curves.easeInOut,
-        );
-        if (!mounted || !_scrollController.hasClients) {
-          return;
-        }
-        await Future<void>.delayed(const Duration(seconds: 2));
-        if (!mounted || !_scrollController.hasClients) {
-          return;
-        }
-        _scrollController.jumpTo(0);
-        await Future<void>.delayed(const Duration(seconds: 1));
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<_UpcomingLotteryMetadata>(
-      future: _metadataFuture,
-      builder: (context, snapshot) {
-        final String tickerText = snapshot.hasData
-            ? snapshot.data!.tickerText
-            : snapshot.hasError
-                ? 'ההגרלה הקרובה: הנתונים אינם זמינים כרגע'
-                : 'ההגרלה הקרובה: טוען נתונים...';
-        if (snapshot.hasData) {
-          _ensureScrollLoop();
-        }
-        return Row(
-          children: [
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(Icons.notifications_none_rounded),
-              tooltip: 'התראות',
-              visualDensity: VisualDensity.compact,
-            ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: ClipRect(
-                child: Directionality(
-                  textDirection: TextDirection.rtl,
-                  child: SingleChildScrollView(
-                    controller: _scrollController,
-                    scrollDirection: Axis.horizontal,
-                    physics: const NeverScrollableScrollPhysics(),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Text(
-                        tickerText,
-                        maxLines: 1,
-                        textAlign: TextAlign.right,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 13,
-                            ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
 class _CompactControlRow extends StatelessWidget {
   const _CompactControlRow({
     required this.metrics,
-    required this.isGroupMode,
     required this.isDoubleMode,
     required this.selectedTableCount,
     required this.isBusy,
-    required this.onModeChanged,
     required this.onPlayTypeChanged,
     required this.onTableCountChanged,
   });
 
   final _FormPageLayoutMetrics metrics;
-  final bool isGroupMode;
   final bool isDoubleMode;
   final int selectedTableCount;
   final bool isBusy;
-  final ValueChanged<bool> onModeChanged;
   final ValueChanged<bool> onPlayTypeChanged;
   final ValueChanged<int?> onTableCountChanged;
 
   @override
   Widget build(BuildContext context) {
+    final List<int> availableCounts = isDoubleMode
+        ? const <int>[10, 8, 6, 4, 2]
+        : const <int>[14, 12, 10, 8, 6, 4, 2];
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: _CompactFieldShell(
+          _CompactFieldShell(
+            metrics: metrics,
+            child: _TwoOptionToggle(
               metrics: metrics,
-              child: _TwoOptionToggle(
-                metrics: metrics,
-                isBusy: isBusy,
-                leftLabel: 'אישי',
-                rightLabel: 'קבוצתי',
-                selectedRight: isGroupMode,
-                onChanged: onModeChanged,
-              ),
+              isBusy: isBusy,
+              leftLabel: 'רגיל',
+              rightLabel: 'דאבל',
+              selectedRight: isDoubleMode,
+              onChanged: onPlayTypeChanged,
             ),
           ),
-          SizedBox(width: metrics.sectionGap),
-          Expanded(
-            child: _CompactFieldShell(
-              metrics: metrics,
-              child: _TwoOptionToggle(
-                metrics: metrics,
-                isBusy: isBusy,
-                leftLabel: 'רגיל',
-                rightLabel: 'דאבל',
-                selectedRight: isDoubleMode,
-                onChanged: onPlayTypeChanged,
-              ),
-            ),
-          ),
-          SizedBox(width: metrics.sectionGap),
-          Expanded(
-            child: _CompactFieldShell(
-              metrics: metrics,
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<int>(
-                  isExpanded: true,
-                  value: selectedTableCount,
-                  borderRadius: BorderRadius.circular(16),
-                  alignment: AlignmentDirectional.centerEnd,
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                  items: const [2, 4, 6, 8, 10, 12, 14]
-                      .map(
-                        (count) => DropdownMenuItem<int>(
-                          value: count,
-                          alignment: Alignment.centerRight,
-                          child: Text('$count טבלאות'),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: isBusy ? null : onTableCountChanged,
-                ),
-              ),
-            ),
+          SizedBox(height: metrics.sectionGap + 2),
+          Wrap(
+            alignment: WrapAlignment.end,
+            runSpacing: 8,
+            spacing: 8,
+            children: availableCounts
+                .map(
+                  (count) => _CountSelectionChip(
+                    label: '$count',
+                    selected: selectedTableCount == count,
+                    onTap: isBusy ? null : () => onTableCountChanged(count),
+                  ),
+                )
+                .toList(),
           ),
         ],
       ),
@@ -2740,46 +2347,168 @@ class _CompactFieldShell extends StatelessWidget {
   }
 }
 
-class _PrimarySubmitButton extends StatelessWidget {
-  const _PrimarySubmitButton({
-    required this.metrics,
-    required this.isEnabled,
-    required this.onPressed,
+class _WorkspaceHeader extends StatelessWidget {
+  const _WorkspaceHeader({
+    required this.title,
+    required this.onBackPressed,
+    this.modeLabel,
   });
 
-  final _FormPageLayoutMetrics metrics;
-  final bool isEnabled;
-  final VoidCallback onPressed;
+  final String title;
+  final VoidCallback onBackPressed;
+  final String? modeLabel;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(18),
-          child: Ink(
-            height: metrics.primaryButtonHeight,
-            decoration: BoxDecoration(
-              color: isEnabled
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withValues(alpha: 0.45),
-              borderRadius: BorderRadius.circular(18),
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Row(
+        textDirection: TextDirection.rtl,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  title,
+                  textAlign: TextAlign.right,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                ),
+                if (modeLabel != null) ...[
+                  const SizedBox(height: 4),
+                  _DraftModeBadge(label: modeLabel!),
+                ],
+              ],
             ),
-            child: Center(
-              child: Text(
-                'שליחה',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.onPrimary,
-                      fontWeight: FontWeight.w900,
+          ),
+          const SizedBox(width: 12),
+          IconButton.filledTonal(
+            onPressed: onBackPressed,
+            icon: const Icon(Icons.arrow_forward_rounded),
+            tooltip: 'חזרה לדשבורד',
+            style: IconButton.styleFrom(
+              foregroundColor: colorScheme.onSurface,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkspaceDraftTabs extends StatelessWidget {
+  const _WorkspaceDraftTabs({
+    required this.drafts,
+    required this.activeDraftIndex,
+    required this.onDraftSelected,
+    required this.onAddDraft,
+    this.onDeleteActiveDraft,
+    this.showDeleteOnActive = false,
+  });
+
+  final List<_LocalDraftForm> drafts;
+  final int activeDraftIndex;
+  final ValueChanged<int> onDraftSelected;
+  final VoidCallback onAddDraft;
+  final VoidCallback? onDeleteActiveDraft;
+  final bool showDeleteOnActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          textDirection: TextDirection.rtl,
+          children: [
+            ...List<Widget>.generate(drafts.length, (index) {
+              final bool isActive = index == activeDraftIndex;
+              return Padding(
+                padding: EdgeInsetsDirectional.only(
+                  start: index == drafts.length - 1 ? 0 : 8,
+                ),
+                child: _DraftTabChip(
+                  label: 'טופס ${drafts[index].number}',
+                  isActive: isActive,
+                  onTap: () => onDraftSelected(index),
+                  onDelete: isActive && showDeleteOnActive
+                      ? onDeleteActiveDraft
+                      : null,
+                ),
+              );
+            }),
+            const SizedBox(width: 8),
+            _DraftTabAddChip(onTap: onAddDraft),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DraftTabChip extends StatelessWidget {
+  const _DraftTabChip({
+    required this.label,
+    required this.isActive,
+    required this.onTap,
+    this.onDelete,
+  });
+
+  final String label;
+  final bool isActive;
+  final VoidCallback onTap;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: isActive
+          ? colorScheme.primaryContainer
+          : colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            textDirection: TextDirection.rtl,
+            children: [
+              Text(
+                label,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: isActive
+                          ? colorScheme.onPrimaryContainer
+                          : colorScheme.onSurface,
                     ),
               ),
-            ),
+              if (onDelete != null) ...[
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: onDelete,
+                  borderRadius: BorderRadius.circular(999),
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: isActive
+                          ? colorScheme.onPrimaryContainer
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
@@ -2787,36 +2516,91 @@ class _PrimarySubmitButton extends StatelessWidget {
   }
 }
 
-class _SecondaryActionRow extends StatelessWidget {
-  const _SecondaryActionRow({
+class _DraftTabAddChip extends StatelessWidget {
+  const _DraftTabAddChip({
+    required this.onTap,
+  });
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+      ),
+      child: const Text('+'),
+    );
+  }
+}
+
+class _CountSelectionChip extends StatelessWidget {
+  const _CountSelectionChip({
+    required this.label,
+    required this.selected,
+    this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color:
+          selected ? colorScheme.primary : colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(14, 8, 14, 8),
+          child: Text(
+            label,
+            textAlign: TextAlign.right,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color:
+                      selected ? colorScheme.onPrimary : colorScheme.onSurface,
+                ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceToolsRow extends StatelessWidget {
+  const _WorkspaceToolsRow({
     required this.metrics,
     required this.isBusy,
-    required this.showSaveDraft,
-    required this.showDeleteDraft,
-    required this.saveDraftLabel,
     required this.onClearPressed,
-    required this.onSaveDraftPressed,
-    required this.onDeleteDraftPressed,
-    required this.onManageDraftsPressed,
     required this.onLottomatAction,
+    this.showDeleteDraft = false,
+    this.onDeleteDraftPressed,
   });
 
   final _FormPageLayoutMetrics metrics;
   final bool isBusy;
-  final bool showSaveDraft;
   final bool showDeleteDraft;
-  final String saveDraftLabel;
   final VoidCallback onClearPressed;
-  final VoidCallback onSaveDraftPressed;
-  final VoidCallback onDeleteDraftPressed;
-  final VoidCallback onManageDraftsPressed;
+  final VoidCallback? onDeleteDraftPressed;
   final ValueChanged<_LottomatAction> onLottomatAction;
 
   @override
   Widget build(BuildContext context) {
-    final List<Widget> children = <Widget>[
-      Expanded(
-        child: PopupMenuButton<_LottomatAction>(
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: metrics.sectionGap + 2,
+      runSpacing: metrics.sectionGap,
+      children: [
+        PopupMenuButton<_LottomatAction>(
           enabled: !isBusy,
           onSelected: onLottomatAction,
           itemBuilder: (context) => const [
@@ -2829,55 +2613,161 @@ class _SecondaryActionRow extends StatelessWidget {
               child: Text('לוטומט מלא'),
             ),
           ],
-          child: _ActionChip(
-            metrics: metrics,
+          child: _InlineUtilityChip(
             label: 'לוטומט',
             icon: Icons.auto_awesome,
           ),
         ),
-      ),
-      SizedBox(width: metrics.sectionGap + 2),
-      if (showSaveDraft) ...<Widget>[
-        Expanded(
-          child: _ActionChip(
-            metrics: metrics,
-            label: saveDraftLabel,
-            icon: Icons.bookmark_outline,
-            onTap: isBusy ? null : onSaveDraftPressed,
-          ),
-        ),
-        SizedBox(width: metrics.sectionGap + 2),
-      ],
-      if (showDeleteDraft) ...<Widget>[
-        Expanded(
-          child: _ActionChip(
-            metrics: metrics,
-            label: 'מחק טיוטה',
-            icon: Icons.delete_sweep_outlined,
-            onTap: isBusy ? null : onDeleteDraftPressed,
-          ),
-        ),
-        SizedBox(width: metrics.sectionGap + 2),
-      ],
-      Expanded(
-        child: _ActionChip(
-          metrics: metrics,
-          label: 'ניהול טפסים',
-          icon: Icons.layers_outlined,
-          onTap: onManageDraftsPressed,
-        ),
-      ),
-      SizedBox(width: metrics.sectionGap + 2),
-      Expanded(
-        child: _ActionChip(
-          metrics: metrics,
+        _InlineUtilityChip(
           label: 'נקה טופס',
           icon: Icons.delete_outline,
           onTap: isBusy ? null : onClearPressed,
         ),
+        if (showDeleteDraft)
+          _InlineUtilityChip(
+            label: 'מחק טיוטה',
+            icon: Icons.delete_sweep_outlined,
+            onTap: isBusy ? null : onDeleteDraftPressed,
+          ),
+      ],
+    );
+  }
+}
+
+class _InlineUtilityChip extends StatelessWidget {
+  const _InlineUtilityChip({
+    required this.label,
+    required this.icon,
+    this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 9, 12, 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            textDirection: TextDirection.rtl,
+            children: [
+              Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onSurface,
+                    ),
+              ),
+            ],
+          ),
+        ),
       ),
-    ];
-    return Row(children: children);
+    );
+  }
+}
+
+class _WorkspaceSummaryBar extends StatelessWidget {
+  const _WorkspaceSummaryBar({
+    required this.totalPrice,
+  });
+
+  final String totalPrice;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Text(
+        'סה״כ: $totalPrice',
+        textAlign: TextAlign.right,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+      ),
+    );
+  }
+}
+
+class _WorkspacePrimaryActions extends StatelessWidget {
+  const _WorkspacePrimaryActions({
+    required this.isGroupMode,
+    required this.saveDraftLabel,
+    required this.showSaveDraft,
+    required this.canPrimarySubmit,
+    required this.onPrimaryPressed,
+    required this.onSaveDraftPressed,
+  });
+
+  final bool isGroupMode;
+  final String saveDraftLabel;
+  final bool showSaveDraft;
+  final bool canPrimarySubmit;
+  final VoidCallback onPrimaryPressed;
+  final VoidCallback onSaveDraftPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilledButton(
+            onPressed: canPrimarySubmit ? onPrimaryPressed : null,
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+            ),
+            child: Text(
+              isGroupMode ? 'המשך לקבוצה' : 'המשך לתשלום',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+            ),
+          ),
+          if (showSaveDraft) ...[
+            const SizedBox(height: 10),
+            OutlinedButton(
+              onPressed: onSaveDraftPressed,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+              child: Text(
+                saveDraftLabel,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -2911,30 +2801,6 @@ class _DraftModeBadge extends StatelessWidget {
               ),
         ),
       ),
-    );
-  }
-}
-
-class _DraftMetaText extends StatelessWidget {
-  const _DraftMetaText({
-    required this.value,
-    this.accent,
-  });
-
-  final String value;
-  final Color? accent;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color effectiveAccent =
-        accent ?? Theme.of(context).colorScheme.onSurfaceVariant;
-    return Text(
-      value,
-      textAlign: TextAlign.right,
-      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            color: effectiveAccent,
-            fontWeight: FontWeight.w700,
-          ),
     );
   }
 }
@@ -4008,54 +3874,6 @@ class _LocalDraftForm {
       persistedDraftBundleId: clearPersistedDraftBundleId
           ? null
           : (persistedDraftBundleId ?? this.persistedDraftBundleId),
-    );
-  }
-}
-
-class _ActionChip extends StatelessWidget {
-  const _ActionChip({
-    required this.metrics,
-    required this.label,
-    required this.icon,
-    this.onTap,
-  });
-
-  final _FormPageLayoutMetrics metrics;
-  final String label;
-  final IconData icon;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          height: metrics.secondaryButtonHeight,
-          padding:
-              EdgeInsets.symmetric(horizontal: metrics.actionHorizontalPadding),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 20),
-              SizedBox(width: metrics.actionLabelSpacing),
-              Flexible(
-                child: Text(
-                  label,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
