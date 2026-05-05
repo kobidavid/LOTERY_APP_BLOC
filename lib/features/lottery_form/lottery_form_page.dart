@@ -21,11 +21,6 @@ import 'group_details_page.dart';
 import 'lottery_form_cubit.dart';
 import 'lottery_form_state.dart';
 
-enum _LottomatAction {
-  completeRemaining,
-  fullRandom,
-}
-
 enum _PersonalDraftMode {
   newForm,
   editingDraft,
@@ -139,10 +134,13 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   bool _isGroupMode = false;
   bool _isDoubleMode = false;
   bool _showDashboard = true;
+  bool _isKeyboardVisible = false;
   int _draftTabTransitionDirection = 0;
   final List<_LocalDraftForm> _localDrafts = <_LocalDraftForm>[];
   int _activeDraftIndex = 0;
   int _nextDraftNumber = 2;
+  int _lastRegularSelectedTableCount = 14;
+  int _lastDoubleSelectedTableCount = 10;
   _PersonalDraftMode _personalDraftMode = _PersonalDraftMode.newForm;
   int? _lastAutoScrolledActiveRowIndex;
   int? _lastAutoScrolledSelectedTableCount;
@@ -217,17 +215,6 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
         return 'editingDraftMode';
       case _PersonalDraftMode.savedCurrentSessionDraft:
         return 'savedCurrentSessionDraftMode';
-    }
-  }
-
-  String _personalDraftModeBannerLabel() {
-    switch (_personalDraftMode) {
-      case _PersonalDraftMode.newForm:
-        return 'טופס חדש';
-      case _PersonalDraftMode.editingDraft:
-        return 'עורך טיוטה';
-      case _PersonalDraftMode.savedCurrentSessionDraft:
-        return 'טיוטה נשמרה';
     }
   }
 
@@ -418,6 +405,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   void _openDashboard() {
     setState(() {
       _showDashboard = true;
+      _isKeyboardVisible = false;
     });
   }
 
@@ -429,6 +417,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     )) {
       setState(() {
         _showDashboard = false;
+        _isKeyboardVisible = false;
         _isGroupMode = nextIsGroupMode;
         _syncActiveDraftSnapshot(state);
       });
@@ -442,6 +431,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   ) async {
     setState(() {
       _showDashboard = false;
+      _isKeyboardVisible = false;
     });
     await _loadPersonalDraftRequest(
       PersonalDraftLoadRequest(entries: <PersonalSavedDraftEntry>[entry]),
@@ -454,6 +444,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   ) async {
     setState(() {
       _showDashboard = false;
+      _isKeyboardVisible = false;
     });
     await _loadPersonalDraftRequest(
       PersonalDraftLoadRequest(entries: entries),
@@ -1279,6 +1270,89 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     context.read<LotteryFormCubit>().clearForm();
   }
 
+  Future<void> _showWorkspaceActionsSheet({
+    required bool showSaveDraft,
+    required bool showDeleteDraft,
+    required String saveDraftLabel,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(20, 8, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'פעולות',
+                    textAlign: TextAlign.right,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  _WorkspaceActionSheetTile(
+                    icon: Icons.auto_awesome,
+                    label: 'לוטומט מלא',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      context.read<LotteryFormCubit>().generateFullRandomForm();
+                    },
+                  ),
+                  _WorkspaceActionSheetTile(
+                    icon: Icons.auto_fix_high_outlined,
+                    label: 'השלם טבלאות ריקות',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      context
+                          .read<LotteryFormCubit>()
+                          .completeRemainingTables();
+                    },
+                  ),
+                  _WorkspaceActionSheetTile(
+                    icon: Icons.delete_outline,
+                    label: 'נקה טופס',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _confirmClearForm();
+                    },
+                  ),
+                  if (showSaveDraft)
+                    _WorkspaceActionSheetTile(
+                      icon: Icons.bookmark_outline,
+                      label: saveDraftLabel,
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        _saveExplicitPersonalDraft();
+                      },
+                    ),
+                  if (showDeleteDraft)
+                    _WorkspaceActionSheetTile(
+                      icon: Icons.delete_sweep_outlined,
+                      label: 'מחק טיוטה',
+                      destructive: true,
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        _deleteCurrentPersonalDraft();
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _confirmClearTable(int rowIndex) async {
     final bool confirmed = await showDialog<bool>(
           context: context,
@@ -1428,7 +1502,50 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     if (count == null) {
       return;
     }
+    if (_isDoubleMode) {
+      _lastDoubleSelectedTableCount = count;
+    } else {
+      _lastRegularSelectedTableCount = count;
+    }
     context.read<LotteryFormCubit>().setSelectedTableCount(count);
+  }
+
+  void _handlePlayTypeChanged(bool isDoubleMode) {
+    final LotteryFormCubit cubit = context.read<LotteryFormCubit>();
+    final LotteryFormState state = cubit.state;
+    if (_isDoubleMode == isDoubleMode) {
+      return;
+    }
+    if (_isDoubleMode) {
+      _lastDoubleSelectedTableCount = state.selectedTableCount;
+    } else {
+      _lastRegularSelectedTableCount = state.selectedTableCount;
+    }
+    final int nextCount = isDoubleMode
+        ? _lastDoubleSelectedTableCount.clamp(2, 10)
+        : _lastRegularSelectedTableCount.clamp(2, 14);
+    setState(() {
+      _isDoubleMode = isDoubleMode;
+    });
+    cubit.setSelectedTableCount(nextCount);
+  }
+
+  void _showKeyboard() {
+    if (_isKeyboardVisible) {
+      return;
+    }
+    setState(() {
+      _isKeyboardVisible = true;
+    });
+  }
+
+  void _hideKeyboard() {
+    if (!_isKeyboardVisible) {
+      return;
+    }
+    setState(() {
+      _isKeyboardVisible = false;
+    });
   }
 
   bool _areSelectedTablesComplete(
@@ -1688,115 +1805,90 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
 
                       return Column(
                         children: [
-                          Padding(
-                            padding: EdgeInsetsDirectional.fromSTEB(
-                              10,
-                              metrics.topPadding,
-                              10,
-                              metrics.topBottomPadding,
-                            ),
-                            child: Column(
-                              children: [
-                                _WorkspaceHeader(
-                                  title: _isGroupMode
-                                      ? 'טופס קבוצתי'
-                                      : 'טופס אישי',
-                                  onBackPressed: _openDashboard,
-                                  modeLabel: !_isGroupMode
-                                      ? _personalDraftModeBannerLabel()
-                                      : null,
-                                ),
-                                SizedBox(height: metrics.sectionGap + 2),
-                                _WorkspaceDraftTabs(
-                                  drafts: effectiveDrafts,
-                                  activeDraftIndex: _activeDraftIndex,
-                                  showDeleteOnActive:
-                                      effectiveDrafts.length > 1,
-                                  onDraftSelected: _switchToLocalDraft,
-                                  onAddDraft: _createAdditionalLocalDraft,
-                                  onDeleteActiveDraft:
-                                      effectiveDrafts.length > 1
-                                          ? () => _deleteLocalDraft(
-                                                _activeDraftIndex,
-                                              )
-                                          : null,
-                                ),
-                                SizedBox(height: metrics.sectionGap + 4),
-                                _CompactControlRow(
-                                  metrics: metrics,
-                                  isDoubleMode: _isDoubleMode,
-                                  selectedTableCount: state.selectedTableCount,
-                                  isBusy: state.isBusy,
-                                  onPlayTypeChanged: (value) => setState(() {
-                                    _isDoubleMode = value;
-                                    _syncActiveDraftSnapshot(
-                                      context.read<LotteryFormCubit>().state,
-                                    );
-                                  }),
-                                  onTableCountChanged: _handleTableCountChanged,
-                                ),
-                                SizedBox(height: metrics.sectionGap + 2),
-                                _WorkspaceToolsRow(
-                                  metrics: metrics,
-                                  isBusy: state.isBusy,
-                                  showDeleteDraft: !_isGroupMode &&
-                                      _personalDraftMode !=
-                                          _PersonalDraftMode.newForm,
-                                  onClearPressed: _confirmClearForm,
-                                  onDeleteDraftPressed:
-                                      _deleteCurrentPersonalDraft,
-                                  onLottomatAction: (action) {
-                                    if (action ==
-                                        _LottomatAction.completeRemaining) {
-                                      context
-                                          .read<LotteryFormCubit>()
-                                          .completeRemainingTables();
-                                    } else {
-                                      context
-                                          .read<LotteryFormCubit>()
-                                          .generateFullRandomForm();
-                                    }
-                                  },
-                                ),
-                                if (gapRowIndex != null) ...[
-                                  SizedBox(height: metrics.sectionGap),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Text(
-                                      'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
-                                      textAlign: TextAlign.right,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .primary,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
+                          GestureDetector(
+                            onTap: _hideKeyboard,
+                            behavior: HitTestBehavior.opaque,
+                            child: Padding(
+                              padding: EdgeInsetsDirectional.fromSTEB(
+                                10,
+                                metrics.topPadding,
+                                10,
+                                metrics.topBottomPadding,
+                              ),
+                              child: Column(
+                                children: [
+                                  _WorkspaceHeader(
+                                    title: _isGroupMode
+                                        ? 'טופס קבוצתי'
+                                        : 'טופס אישי',
+                                    onBackPressed: _openDashboard,
                                   ),
-                                ],
-                                if (firstIncompleteDraftNumber != null) ...[
-                                  SizedBox(height: metrics.sectionGap),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Text(
-                                      'יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה',
-                                      textAlign: TextAlign.right,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .primary,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
+                                  SizedBox(height: metrics.sectionGap + 1),
+                                  _WorkspaceDraftTabs(
+                                    drafts: effectiveDrafts,
+                                    activeDraftIndex: _activeDraftIndex,
+                                    showDeleteOnActive:
+                                        effectiveDrafts.length > 1,
+                                    onDraftSelected: _switchToLocalDraft,
+                                    onAddDraft: _createAdditionalLocalDraft,
+                                    onDeleteActiveDraft:
+                                        effectiveDrafts.length > 1
+                                            ? () => _deleteLocalDraft(
+                                                  _activeDraftIndex,
+                                                )
+                                            : null,
                                   ),
+                                  SizedBox(height: metrics.sectionGap + 2),
+                                  _CompactControlRow(
+                                    metrics: metrics,
+                                    isDoubleMode: _isDoubleMode,
+                                    selectedTableCount:
+                                        state.selectedTableCount,
+                                    isBusy: state.isBusy,
+                                    onPlayTypeChanged: _handlePlayTypeChanged,
+                                    onTableCountChanged:
+                                        _handleTableCountChanged,
+                                  ),
+                                  if (gapRowIndex != null) ...[
+                                    SizedBox(height: metrics.sectionGap),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Text(
+                                        'יש להשלים טבלה ${gapRowIndex + 1} לפני המשך',
+                                        textAlign: TextAlign.right,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                  ],
+                                  if (firstIncompleteDraftNumber != null) ...[
+                                    SizedBox(height: metrics.sectionGap),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Text(
+                                        'יש להשלים את טופס $firstIncompleteDraftNumber לפני השליחה',
+                                        textAlign: TextAlign.right,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
                           ),
                           Expanded(
@@ -1853,9 +1945,12 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                               isEnabled: state
                                                   .isRowInteractable(index),
                                               isGapTarget: gapRowIndex == index,
-                                              onTap: () => context
-                                                  .read<LotteryFormCubit>()
-                                                  .selectRow(index),
+                                              onTap: () {
+                                                _showKeyboard();
+                                                context
+                                                    .read<LotteryFormCubit>()
+                                                    .selectRow(index);
+                                              },
                                               onSwipeRight: () => context
                                                   .read<LotteryFormCubit>()
                                                   .randomizeSingleTable(index),
@@ -1866,38 +1961,46 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
                                         ),
                                       ),
                                     ),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                      ),
-                                      child: _WorkspaceSummaryBar(
-                                        totalPrice:
-                                            '${_formatNisAmount(totalWorkspaceCost)} ₪',
+                                    GestureDetector(
+                                      onTap: _hideKeyboard,
+                                      behavior: HitTestBehavior.opaque,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                        ),
+                                        child: _WorkspaceFooterBar(
+                                          metrics: metrics,
+                                          totalPrice:
+                                              '${_formatNisAmount(totalWorkspaceCost)} ₪',
+                                          primaryLabel: _isGroupMode
+                                              ? 'המשך לקבוצה'
+                                              : 'המשך לתשלום',
+                                          canPrimarySubmit: canPrimarySubmit,
+                                          onPrimaryPressed:
+                                              _handlePrimarySubmit,
+                                          onActionsPressed: () =>
+                                              _showWorkspaceActionsSheet(
+                                            showSaveDraft: !_isGroupMode,
+                                            showDeleteDraft: !_isGroupMode &&
+                                                _personalDraftMode !=
+                                                    _PersonalDraftMode.newForm,
+                                            saveDraftLabel:
+                                                _personalDraftSaveButtonLabel(),
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                    SizedBox(height: metrics.sectionGap),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
+                                    if (_isKeyboardVisible) ...[
+                                      SizedBox(
+                                        height: metrics.keyboardTopGap,
                                       ),
-                                      child: _WorkspacePrimaryActions(
-                                        isGroupMode: _isGroupMode,
-                                        saveDraftLabel:
-                                            _personalDraftSaveButtonLabel(),
-                                        showSaveDraft: !_isGroupMode,
-                                        canPrimarySubmit: canPrimarySubmit,
-                                        onPrimaryPressed: _handlePrimarySubmit,
-                                        onSaveDraftPressed:
-                                            _saveExplicitPersonalDraft,
+                                      _LotteryKeyboardSheet(
+                                        height: keyboardHeight,
+                                        state: state,
+                                        visibleTableCount:
+                                            state.selectedTableCount,
                                       ),
-                                    ),
-                                    SizedBox(height: metrics.keyboardTopGap),
-                                    _LotteryKeyboardSheet(
-                                      height: keyboardHeight,
-                                      state: state,
-                                      visibleTableCount:
-                                          state.selectedTableCount,
-                                    ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -2200,34 +2303,35 @@ class _CompactControlRow extends StatelessWidget {
         : const <int>[14, 12, 10, 8, 6, 4, 2];
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _CompactFieldShell(
-            metrics: metrics,
-            child: _TwoOptionToggle(
+          Expanded(
+            flex: 7,
+            child: _CompactFieldShell(
               metrics: metrics,
-              isBusy: isBusy,
-              leftLabel: 'רגיל',
-              rightLabel: 'דאבל',
-              selectedRight: isDoubleMode,
-              onChanged: onPlayTypeChanged,
+              child: _TwoOptionToggle(
+                metrics: metrics,
+                isBusy: isBusy,
+                leftLabel: 'רגיל',
+                rightLabel: 'דאבל',
+                selectedRight: isDoubleMode,
+                onChanged: onPlayTypeChanged,
+              ),
             ),
           ),
-          SizedBox(height: metrics.sectionGap + 2),
-          Wrap(
-            alignment: WrapAlignment.end,
-            runSpacing: 8,
-            spacing: 8,
-            children: availableCounts
-                .map(
-                  (count) => _CountSelectionChip(
-                    label: '$count',
-                    selected: selectedTableCount == count,
-                    onTap: isBusy ? null : () => onTableCountChanged(count),
-                  ),
-                )
-                .toList(),
+          SizedBox(width: metrics.sectionGap + 6),
+          Expanded(
+            flex: 5,
+            child: _CompactFieldShell(
+              metrics: metrics,
+              child: _CompactTableCountSelector(
+                value: selectedTableCount,
+                availableCounts: availableCounts,
+                enabled: !isBusy,
+                onChanged: onTableCountChanged,
+              ),
+            ),
           ),
         ],
       ),
@@ -2351,12 +2455,10 @@ class _WorkspaceHeader extends StatelessWidget {
   const _WorkspaceHeader({
     required this.title,
     required this.onBackPressed,
-    this.modeLabel,
   });
 
   final String title;
   final VoidCallback onBackPressed;
-  final String? modeLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -2368,24 +2470,15 @@ class _WorkspaceHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  title,
-                  textAlign: TextAlign.right,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                      ),
-                ),
-                if (modeLabel != null) ...[
-                  const SizedBox(height: 4),
-                  _DraftModeBadge(label: modeLabel!),
-                ],
-              ],
+            child: Text(
+              title,
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           IconButton.filledTonal(
             onPressed: onBackPressed,
             icon: const Icon(Icons.arrow_forward_rounded),
@@ -2476,7 +2569,7 @@ class _DraftTabChip extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
         child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+          padding: const EdgeInsetsDirectional.fromSTEB(10, 8, 10, 8),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             textDirection: TextDirection.rtl,
@@ -2528,7 +2621,9 @@ class _DraftTabAddChip extends StatelessWidget {
     return OutlinedButton(
       onPressed: onTap,
       style: OutlinedButton.styleFrom(
-        padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+        visualDensity: VisualDensity.compact,
+        minimumSize: const Size(0, 34),
+        padding: const EdgeInsetsDirectional.fromSTEB(10, 8, 10, 8),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
         ),
@@ -2538,269 +2633,190 @@ class _DraftTabAddChip extends StatelessWidget {
   }
 }
 
-class _CountSelectionChip extends StatelessWidget {
-  const _CountSelectionChip({
-    required this.label,
-    required this.selected,
-    this.onTap,
+class _CompactTableCountSelector extends StatelessWidget {
+  const _CompactTableCountSelector({
+    required this.value,
+    required this.availableCounts,
+    required this.enabled,
+    required this.onChanged,
   });
 
-  final String label;
-  final bool selected;
-  final VoidCallback? onTap;
+  final int value;
+  final List<int> availableCounts;
+  final bool enabled;
+  final ValueChanged<int?> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final ColorScheme colorScheme = Theme.of(context).colorScheme;
-    return Material(
-      color:
-          selected ? colorScheme.primary : colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(14, 8, 14, 8),
-          child: Text(
-            label,
-            textAlign: TextAlign.right,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color:
-                      selected ? colorScheme.onPrimary : colorScheme.onSurface,
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<int>(
+        value: value,
+        isExpanded: true,
+        alignment: AlignmentDirectional.centerEnd,
+        icon: const Icon(Icons.expand_more_rounded),
+        borderRadius: BorderRadius.circular(16),
+        items: availableCounts
+            .map(
+              (count) => DropdownMenuItem<int>(
+                value: count,
+                alignment: AlignmentDirectional.centerEnd,
+                child: Text(
+                  '$count טבלאות',
+                  textAlign: TextAlign.right,
+                  overflow: TextOverflow.ellipsis,
                 ),
-          ),
-        ),
+              ),
+            )
+            .toList(),
+        onChanged: enabled ? onChanged : null,
       ),
     );
   }
 }
 
-class _WorkspaceToolsRow extends StatelessWidget {
-  const _WorkspaceToolsRow({
+class _WorkspaceFooterBar extends StatelessWidget {
+  const _WorkspaceFooterBar({
     required this.metrics,
-    required this.isBusy,
-    required this.onClearPressed,
-    required this.onLottomatAction,
-    this.showDeleteDraft = false,
-    this.onDeleteDraftPressed,
+    required this.totalPrice,
+    required this.primaryLabel,
+    required this.canPrimarySubmit,
+    required this.onPrimaryPressed,
+    required this.onActionsPressed,
   });
 
   final _FormPageLayoutMetrics metrics;
-  final bool isBusy;
-  final bool showDeleteDraft;
-  final VoidCallback onClearPressed;
-  final VoidCallback? onDeleteDraftPressed;
-  final ValueChanged<_LottomatAction> onLottomatAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      alignment: WrapAlignment.end,
-      spacing: metrics.sectionGap + 2,
-      runSpacing: metrics.sectionGap,
-      children: [
-        PopupMenuButton<_LottomatAction>(
-          enabled: !isBusy,
-          onSelected: onLottomatAction,
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: _LottomatAction.completeRemaining,
-              child: Text('השלם את שאר הטבלאות'),
-            ),
-            PopupMenuItem(
-              value: _LottomatAction.fullRandom,
-              child: Text('לוטומט מלא'),
-            ),
-          ],
-          child: _InlineUtilityChip(
-            label: 'לוטומט',
-            icon: Icons.auto_awesome,
-          ),
-        ),
-        _InlineUtilityChip(
-          label: 'נקה טופס',
-          icon: Icons.delete_outline,
-          onTap: isBusy ? null : onClearPressed,
-        ),
-        if (showDeleteDraft)
-          _InlineUtilityChip(
-            label: 'מחק טיוטה',
-            icon: Icons.delete_sweep_outlined,
-            onTap: isBusy ? null : onDeleteDraftPressed,
-          ),
-      ],
-    );
-  }
-}
-
-class _InlineUtilityChip extends StatelessWidget {
-  const _InlineUtilityChip({
-    required this.label,
-    required this.icon,
-    this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme colorScheme = Theme.of(context).colorScheme;
-    return Material(
-      color: colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(12, 9, 12, 9),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            textDirection: TextDirection.rtl,
-            children: [
-              Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: colorScheme.onSurface,
-                    ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _WorkspaceSummaryBar extends StatelessWidget {
-  const _WorkspaceSummaryBar({
-    required this.totalPrice,
-  });
-
   final String totalPrice;
+  final String primaryLabel;
+  final bool canPrimarySubmit;
+  final VoidCallback onPrimaryPressed;
+  final VoidCallback onActionsPressed;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 12),
+      padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 8),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: colorScheme.outlineVariant),
       ),
-      child: Text(
-        'סה״כ: $totalPrice',
-        textAlign: TextAlign.right,
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w900,
-            ),
-      ),
-    );
-  }
-}
-
-class _WorkspacePrimaryActions extends StatelessWidget {
-  const _WorkspacePrimaryActions({
-    required this.isGroupMode,
-    required this.saveDraftLabel,
-    required this.showSaveDraft,
-    required this.canPrimarySubmit,
-    required this.onPrimaryPressed,
-    required this.onSaveDraftPressed,
-  });
-
-  final bool isGroupMode;
-  final String saveDraftLabel;
-  final bool showSaveDraft;
-  final bool canPrimarySubmit;
-  final VoidCallback onPrimaryPressed;
-  final VoidCallback onSaveDraftPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          FilledButton(
-            onPressed: canPrimarySubmit ? onPrimaryPressed : null,
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-            ),
-            child: Text(
-              isGroupMode ? 'המשך לקבוצה' : 'המשך לתשלום',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onPrimary,
+      child: Directionality(
+        textDirection: TextDirection.rtl,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final bool stack = constraints.maxWidth < 380;
+            final Widget priceText = Text(
+              'סה״כ: $totalPrice',
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w900,
                   ),
-            ),
-          ),
-          if (showSaveDraft) ...[
-            const SizedBox(height: 10),
-            OutlinedButton(
-              onPressed: onSaveDraftPressed,
+            );
+            final Widget actionsButton = OutlinedButton.icon(
+              onPressed: onActionsPressed,
+              icon: const Icon(Icons.more_horiz_rounded),
+              label: const Text('פעולות'),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
+                visualDensity: VisualDensity.compact,
+                minimumSize: Size(0, metrics.secondaryButtonHeight),
+                padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 0),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            );
+            final Widget primaryButton = FilledButton(
+              onPressed: canPrimarySubmit ? onPrimaryPressed : null,
+              style: FilledButton.styleFrom(
+                minimumSize: Size(0, metrics.primaryButtonHeight),
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 0),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
               ),
               child: Text(
-                saveDraftLabel,
+                primaryLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
+                      color: colorScheme.onPrimary,
+                      fontWeight: FontWeight.w900,
                     ),
               ),
-            ),
-          ],
-        ],
+            );
+
+            if (stack) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  priceText,
+                  const SizedBox(height: 8),
+                  Row(
+                    textDirection: TextDirection.rtl,
+                    children: [
+                      Expanded(child: primaryButton),
+                      const SizedBox(width: 8),
+                      actionsButton,
+                    ],
+                  ),
+                ],
+              );
+            }
+
+            return Row(
+              textDirection: TextDirection.rtl,
+              children: [
+                Expanded(child: priceText),
+                const SizedBox(width: 10),
+                actionsButton,
+                const SizedBox(width: 8),
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 150),
+                    child: primaryButton,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 }
 
-class _DraftModeBadge extends StatelessWidget {
-  const _DraftModeBadge({
+class _WorkspaceActionSheetTile extends StatelessWidget {
+  const _WorkspaceActionSheetTile({
+    required this.icon,
     required this.label,
+    required this.onTap,
+    this.destructive = false,
   });
 
+  final IconData icon;
   final String label;
+  final VoidCallback onTap;
+  final bool destructive;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: colorScheme.outlineVariant,
-          ),
-        ),
-        child: Text(
-          label,
-          textAlign: TextAlign.right,
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-                color: colorScheme.onSurface,
-              ),
-        ),
+    final Color foreground =
+        destructive ? colorScheme.error : colorScheme.onSurface;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: foreground),
+      title: Text(
+        label,
+        textAlign: TextAlign.right,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: foreground,
+              fontWeight: FontWeight.w700,
+            ),
       ),
+      onTap: onTap,
     );
   }
 }
