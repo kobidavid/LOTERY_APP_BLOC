@@ -2959,47 +2959,66 @@ class _HomeDashboardView extends StatelessWidget {
                                         const SizedBox(height: 18),
                                         LayoutBuilder(
                                           builder: (context, constraints) {
-                                            final bool stackCards =
-                                                constraints.maxWidth < 620;
+                                            final double textScale =
+                                                MediaQuery.textScalerOf(
+                                              context,
+                                            ).scale(1);
+                                            const double spacing = 12;
+                                            const double minimumCardWidth = 150;
+                                            final bool canShowTwoCards =
+                                                constraints.maxWidth >=
+                                                        (minimumCardWidth * 2) +
+                                                            spacing &&
+                                                    textScale <= 1.35;
+                                            final double cardWidth =
+                                                canShowTwoCards
+                                                    ? ((constraints.maxWidth -
+                                                                spacing) /
+                                                            2)
+                                                        .clamp(
+                                                        minimumCardWidth,
+                                                        constraints.maxWidth,
+                                                      )
+                                                    : constraints.maxWidth;
                                             final Widget personalCard =
-                                                _DashboardActionCard(
-                                              title: 'טופס אישי',
-                                              subtitle:
-                                                  'מילוי מהיר של טופס אישי חדש',
-                                              icon: Icons.description_outlined,
-                                              onTap: onStartPersonal,
+                                                SizedBox(
+                                              width: cardWidth,
+                                              child: _DashboardActionCard(
+                                                title: 'טופס אישי',
+                                                subtitle:
+                                                    'מילוי מהיר של טופס אישי חדש',
+                                                icon:
+                                                    Icons.description_outlined,
+                                                onTap: onStartPersonal,
+                                              ),
                                             );
-                                            final Widget groupCard =
-                                                _DashboardActionCard(
-                                              title: 'טופס קבוצתי',
-                                              subtitle:
-                                                  'פתיחה או המשך של טופס קבוצתי',
-                                              icon: Icons.groups_2_outlined,
-                                              onTap: onStartGroup,
+                                            final Widget groupCard = SizedBox(
+                                              width: cardWidth,
+                                              child: _DashboardActionCard(
+                                                title: 'טופס קבוצתי',
+                                                subtitle:
+                                                    'פתיחה או המשך של טופס קבוצתי',
+                                                icon: Icons.groups_2_outlined,
+                                                onTap: onStartGroup,
+                                              ),
                                             );
-                                            return stackCards
-                                                ? Column(
-                                                    children: [
-                                                      personalCard,
-                                                      const SizedBox(
-                                                        height: 12,
-                                                      ),
-                                                      groupCard,
-                                                    ],
-                                                  )
-                                                : Row(
-                                                    children: [
-                                                      Expanded(
-                                                        child: personalCard,
-                                                      ),
-                                                      const SizedBox(
-                                                        width: 12,
-                                                      ),
-                                                      Expanded(
-                                                        child: groupCard,
-                                                      ),
-                                                    ],
-                                                  );
+                                            return Align(
+                                              alignment: AlignmentDirectional
+                                                  .centerStart,
+                                              child: Wrap(
+                                                textDirection:
+                                                    TextDirection.rtl,
+                                                alignment: WrapAlignment.start,
+                                                runAlignment:
+                                                    WrapAlignment.start,
+                                                spacing: spacing,
+                                                runSpacing: 12,
+                                                children: [
+                                                  personalCard,
+                                                  groupCard,
+                                                ],
+                                              ),
+                                            );
                                           },
                                         ),
                                         const SizedBox(height: 24),
