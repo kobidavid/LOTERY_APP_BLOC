@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
-import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -2191,14 +2191,20 @@ class _UpcomingLotteryMetadata {
     required this.displayTime,
     required this.regularLottoPrize,
     required this.doubleLottoPrize,
+    required this.updatedAt,
   });
 
   factory _UpcomingLotteryMetadata.fromMap(Map<String, dynamic> data) {
     return _UpcomingLotteryMetadata(
       displayDate: (data['displayDate'] as String?)?.trim(),
       displayTime: (data['displayTime'] as String?)?.trim(),
-      regularLottoPrize: (data['regularLottoPrize'] as String?)?.trim(),
-      doubleLottoPrize: (data['doubleLottoPrize'] as String?)?.trim(),
+      regularLottoPrize: ((data['regularFirstPrize'] as String?) ??
+              (data['regularLottoPrize'] as String?))
+          ?.trim(),
+      doubleLottoPrize: ((data['doubleFirstPrize'] as String?) ??
+              (data['doubleLottoPrize'] as String?))
+          ?.trim(),
+      updatedAt: _metadataAsDateTime(data['updatedAt']),
     );
   }
 
@@ -2206,6 +2212,27 @@ class _UpcomingLotteryMetadata {
   final String? displayTime;
   final String? regularLottoPrize;
   final String? doubleLottoPrize;
+  final DateTime? updatedAt;
+
+  static DateTime? _metadataAsDateTime(dynamic value) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+    if (value is DateTime) {
+      return value;
+    }
+    if (value is String) {
+      return DateTime.tryParse(value);
+    }
+    return null;
+  }
+
+  bool get isStale {
+    if (updatedAt == null) {
+      return true;
+    }
+    return DateTime.now().difference(updatedAt!) > const Duration(hours: 36);
+  }
 
   String _formatPrize(String? value, {bool includeUntil = false}) {
     final String normalized = (value ?? '').trim();
@@ -3194,45 +3221,28 @@ PageRoute<T> _buildDashboardSlideRoute<T>({
   );
 }
 
-class _DashboardLotteryInfoCard extends StatefulWidget {
+class _DashboardLotteryInfoCard extends StatelessWidget {
   const _DashboardLotteryInfoCard();
-
-  @override
-  State<_DashboardLotteryInfoCard> createState() =>
-      _DashboardLotteryInfoCardState();
-}
-
-class _DashboardLotteryInfoCardState extends State<_DashboardLotteryInfoCard> {
-  late final Future<_UpcomingLotteryMetadata> _metadataFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _metadataFuture = _loadMetadata();
-  }
-
-  Future<_UpcomingLotteryMetadata> _loadMetadata() async {
-    final HttpsCallable callable =
-        FirebaseFunctions.instanceFor(region: 'us-central1')
-            .httpsCallable('getUpcomingLotteryMetadata');
-    final HttpsCallableResult<dynamic> result = await callable.call();
-    final Map<String, dynamic> data =
-        Map<String, dynamic>.from(result.data as Map<dynamic, dynamic>);
-    return _UpcomingLotteryMetadata.fromMap(data);
-  }
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
-    return FutureBuilder<_UpcomingLotteryMetadata>(
-      future: _metadataFuture,
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('upcoming_lottery')
+          .snapshots(),
       builder: (context, snapshot) {
-        final _UpcomingLotteryMetadata? metadata = snapshot.data;
-        final String dayLabel = metadata?.dashboardDayLabel ?? 'יום --';
+        final Map<String, dynamic>? data = snapshot.data?.data();
+        final _UpcomingLotteryMetadata? metadata =
+            data == null ? null : _UpcomingLotteryMetadata.fromMap(data);
+        final bool useFallback = metadata == null || metadata.isStale;
+        final String dayLabel =
+            useFallback ? 'יום --' : metadata.dashboardDayLabel;
         final String dateLabel =
-            metadata?.dashboardShortDateLabel ?? '--/--/--';
+            useFallback ? '--/--/--' : metadata.dashboardShortDateLabel;
         final String amountLabel =
-            metadata?.dashboardPrizeLabel ?? 'סכום יעדכן בקרוב';
+            useFallback ? 'סכום יעדכן בקרוב' : metadata.dashboardPrizeLabel;
         return Container(
           alignment: Alignment.centerRight,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

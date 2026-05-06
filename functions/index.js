@@ -47,6 +47,9 @@ const DEBUG_GROUP_RESULT_GROUP_IDS = new Set([
 ]);
 const DEFAULT_REPAIR_STAGE_LIMIT = 100;
 const DEFAULT_RESULT_FORM_LIMIT = 100;
+const UPCOMING_LOTTERY_CACHE_DOC = firestore
+    .collection("app_config")
+    .doc("upcoming_lottery");
 
 exports.sendMail = functions.https.onCall((data) => {
   const {to, subject, text, html} = data;
@@ -826,6 +829,18 @@ exports.checkLotteryResults = functions.pubsub
         await processWaitingLotteryResults();
       } catch (error) {
         console.error("checkLotteryResults scheduler failed", error);
+      }
+      return null;
+    });
+
+exports.refreshUpcomingLotteryCache = functions.pubsub
+    .schedule("every 6 hours")
+    .timeZone("Asia/Jerusalem")
+    .onRun(async () => {
+      try {
+        await syncUpcomingLotteryCache({reason: "scheduled_refresh"});
+      } catch (error) {
+        console.error("refreshUpcomingLotteryCache scheduler failed", error);
       }
       return null;
     });
@@ -3868,6 +3883,39 @@ async function fetchNextLotteryMetadata() {
     console.error("fetchNextLotteryMetadata failed", error);
     throw error;
   }
+}
+
+function buildUpcomingLotteryCachePayload(metadata, reason = "unknown") {
+  return {
+    lotteryId: metadata.lotteryId,
+    drawNumber: metadata.lotteryId,
+    drawDate: metadata.salesCloseAt,
+    salesCloseAt: metadata.salesCloseAt,
+    displayDate: metadata.displayDate || null,
+    displayTime: metadata.displayTime || null,
+    regularFirstPrize: metadata.regularLottoPrize || null,
+    doubleFirstPrize: metadata.doubleLottoPrize || null,
+    regularLottoPrize: metadata.regularLottoPrize || null,
+    doubleLottoPrize: metadata.doubleLottoPrize || null,
+    source: `fetchNextLotteryMetadata:${reason}`,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+async function syncUpcomingLotteryCache({reason = "manual"} = {}) {
+  const metadata = await fetchNextLotteryMetadata();
+  const payload = buildUpcomingLotteryCachePayload(metadata, reason);
+  await UPCOMING_LOTTERY_CACHE_DOC.set(payload, {merge: true});
+  console.log("syncUpcomingLotteryCache success", {
+    reason,
+    lotteryId: metadata.lotteryId,
+    salesCloseAt: metadata.salesCloseAt ?
+      metadata.salesCloseAt.toISOString() :
+      null,
+    displayDate: metadata.displayDate || null,
+    displayTime: metadata.displayTime || null,
+  });
+  return metadata;
 }
 
 async function fetchLotteryResult(lotteryId) {
