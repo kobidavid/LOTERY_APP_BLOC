@@ -628,13 +628,25 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
     final List<LotteryTable> selectedTables = draft.formState.form.tables
         .take(draft.formState.selectedTableCount)
         .toList();
-    return _paymentRepository.calculateTicketCost(selectedTables);
+    return _paymentRepository.calculateTicketCost(
+      selectedTables,
+      isDoubleMode: draft.isDoubleMode,
+    );
   }
 
   num _calculateDraftsTotalCost(List<_LocalDraftForm> drafts) {
     return drafts.fold<num>(
       0,
       (num total, _LocalDraftForm draft) => total + _calculateDraftCost(draft),
+    );
+  }
+
+  num _calculateActiveWorkspaceCost(LotteryFormState state) {
+    final List<LotteryTable> selectedTables =
+        state.form.tables.take(state.selectedTableCount).toList();
+    return _paymentRepository.calculateTicketCost(
+      selectedTables,
+      isDoubleMode: _isDoubleMode,
     );
   }
 
@@ -1389,9 +1401,7 @@ class _LotteryFormPageState extends State<LotteryFormPage> {
   Future<void> _startPersonalSubmitFlow() async {
     final LotteryFormState currentState =
         context.read<LotteryFormCubit>().state;
-    final List<LotteryTable> selectedTables =
-        currentState.form.tables.take(currentState.selectedTableCount).toList();
-    final num formCost = _paymentRepository.calculateTicketCost(selectedTables);
+    final num formCost = _calculateActiveWorkspaceCost(currentState);
 
     final bool? paymentConfirmed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -2806,7 +2816,7 @@ class _WorkspaceActionsFab extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Icon(
-            Icons.more_horiz_rounded,
+            Icons.tune_rounded,
             color: colorScheme.onSurface,
             size: 22,
           ),

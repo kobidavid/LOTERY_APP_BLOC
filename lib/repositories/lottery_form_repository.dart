@@ -1096,10 +1096,15 @@ class LotteryFormRepository {
     return value;
   }
 
-  num calculateTicketCost(List<LotteryTable> tables) {
+  num calculateTicketCost(
+    List<LotteryTable> tables, {
+    bool isDoubleMode = false,
+  }) {
     final int populatedTableCount =
         tables.where((table) => !table.isEmpty).length;
-    return _calculateRegularLottoBaseTicketCost(populatedTableCount);
+    final num baseCost =
+        _calculateRegularLottoBaseTicketCost(populatedTableCount);
+    return isDoubleMode ? baseCost * 2 : baseCost;
   }
 
   Future<void> _stabilizeAuthBeforeSubmit(String expectedUserId) async {
