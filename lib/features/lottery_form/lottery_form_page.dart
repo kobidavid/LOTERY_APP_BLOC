@@ -3234,9 +3234,22 @@ class _DashboardLotteryInfoCard extends StatelessWidget {
           .snapshots(),
       builder: (context, snapshot) {
         final Map<String, dynamic>? data = snapshot.data?.data();
+        debugPrint(
+          '[DashboardLotteryCache] exists=${snapshot.data?.exists ?? false} hasData=${data != null} keys=${data?.keys.toList() ?? const <String>[]} updatedAtRaw=${data?['updatedAt']}',
+        );
         final _UpcomingLotteryMetadata? metadata =
             data == null ? null : _UpcomingLotteryMetadata.fromMap(data);
         final bool useFallback = metadata == null || metadata.isStale;
+        final String fallbackReason = metadata == null
+            ? 'missing_cache_doc_or_data'
+            : metadata.isStale
+                ? 'stale_cache'
+                : 'none';
+        if (useFallback) {
+          debugPrint(
+            '[DashboardLotteryCache] fallback reason=$fallbackReason updatedAt=${metadata?.updatedAt?.toIso8601String() ?? 'null'}',
+          );
+        }
         final String dayLabel =
             useFallback ? 'יום --' : metadata.dashboardDayLabel;
         final String dateLabel =

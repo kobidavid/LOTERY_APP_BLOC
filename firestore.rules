@@ -108,6 +108,11 @@ service cloud.firestore {
       allow read, write: if isOperator();
     }
 
+    match /app_config/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isOperator();
+    }
+
     match /lottery_groups/{groupId} {
       // כל משתמש מחובר יכול ליצור קבוצה רק עבור עצמו
       allow create: if isSignedIn() &&

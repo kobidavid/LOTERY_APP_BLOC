@@ -845,6 +845,48 @@ exports.refreshUpcomingLotteryCache = functions.pubsub
       return null;
     });
 
+exports.refreshUpcomingLotteryCacheAdmin = functions
+    .runWith({secrets: ["LOTTO_ADMIN_SECRET"]})
+    .https.onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({success: false, error: "method-not-allowed"});
+    return;
+  }
+
+  try {
+    validateAdminSecret(req);
+    const metadata = await syncUpcomingLotteryCache({reason: "admin_http_refresh"});
+    res.json({
+      success: true,
+      lotteryId: metadata.lotteryId,
+      drawNumber: metadata.lotteryId,
+      salesCloseAt: metadata.salesCloseAt ?
+        metadata.salesCloseAt.toISOString() :
+        null,
+      displayDate: metadata.displayDate || null,
+      displayTime: metadata.displayTime || null,
+      regularLottoPrize: metadata.regularLottoPrize || null,
+      doubleLottoPrize: metadata.doubleLottoPrize || null,
+      cachePath: UPCOMING_LOTTERY_CACHE_DOC.path,
+    });
+  } catch (error) {
+    console.error("refreshUpcomingLotteryCacheAdmin failed", error);
+    if (error instanceof functions.https.HttpsError) {
+      res.status(mapHttpsErrorCodeToStatus(error.code)).json({
+        success: false,
+        error: error.code,
+        message: error.message,
+      });
+      return;
+    }
+    res.status(500).json({
+      success: false,
+      error: "internal",
+      message: "Upcoming lottery cache refresh failed.",
+    });
+  }
+    });
+
 exports.checkLotteryResultsNow = functions.https.onCall(async (_, context) => {
   try {
     if (!context.auth) {
@@ -3874,6 +3916,7 @@ async function fetchNextLotteryMetadata() {
     return {
       lotteryId,
       salesCloseAt,
+      nextLottoryDate: asTrimmedString(nextLottery.nextLottoryDate),
       displayDate,
       displayTime,
       regularLottoPrize,
@@ -3886,11 +3929,19 @@ async function fetchNextLotteryMetadata() {
 }
 
 function buildUpcomingLotteryCachePayload(metadata, reason = "unknown") {
+  const normalizedSalesCloseAt =
+    normalizeDateTime(metadata.salesCloseAt) ||
+    parsePaisDateTime(
+        metadata.nextLottoryDate,
+        metadata.displayDate,
+        metadata.displayTime,
+    ) ||
+    normalizeDateTime(metadata.drawDate);
   return {
     lotteryId: metadata.lotteryId,
     drawNumber: metadata.lotteryId,
-    drawDate: metadata.salesCloseAt,
-    salesCloseAt: metadata.salesCloseAt,
+    drawDate: normalizedSalesCloseAt,
+    salesCloseAt: normalizedSalesCloseAt,
     displayDate: metadata.displayDate || null,
     displayTime: metadata.displayTime || null,
     regularFirstPrize: metadata.regularLottoPrize || null,
@@ -3904,18 +3955,40 @@ function buildUpcomingLotteryCachePayload(metadata, reason = "unknown") {
 
 async function syncUpcomingLotteryCache({reason = "manual"} = {}) {
   const metadata = await fetchNextLotteryMetadata();
-  const payload = buildUpcomingLotteryCachePayload(metadata, reason);
+  const normalizedSalesCloseAt =
+    normalizeDateTime(metadata.salesCloseAt) ||
+    parsePaisDateTime(
+        metadata.nextLottoryDate,
+        metadata.displayDate,
+        metadata.displayTime,
+    ) ||
+    normalizeDateTime(metadata.drawDate);
+  console.log("syncUpcomingLotteryCache normalize", {
+    reason,
+    rawSalesCloseAtType: describeDateValueType(metadata.salesCloseAt),
+    rawSalesCloseAtValue: metadata.salesCloseAt || null,
+    normalizedSalesCloseAt: normalizedSalesCloseAt ?
+      normalizedSalesCloseAt.toISOString() :
+      null,
+  });
+  const normalizedMetadata = {
+    ...metadata,
+    salesCloseAt: normalizedSalesCloseAt,
+    drawDate: normalizedSalesCloseAt,
+  };
+  const payload = buildUpcomingLotteryCachePayload(normalizedMetadata, reason);
   await UPCOMING_LOTTERY_CACHE_DOC.set(payload, {merge: true});
   console.log("syncUpcomingLotteryCache success", {
     reason,
-    lotteryId: metadata.lotteryId,
-    salesCloseAt: metadata.salesCloseAt ?
-      metadata.salesCloseAt.toISOString() :
+    lotteryId: normalizedMetadata.lotteryId,
+    salesCloseAt: normalizedSalesCloseAt ?
+      normalizedSalesCloseAt.toISOString() :
       null,
-    displayDate: metadata.displayDate || null,
-    displayTime: metadata.displayTime || null,
+    displayDate: normalizedMetadata.displayDate || null,
+    displayTime: normalizedMetadata.displayTime || null,
+    cachePath: UPCOMING_LOTTERY_CACHE_DOC.path,
   });
-  return metadata;
+  return normalizedMetadata;
 }
 
 async function fetchLotteryResult(lotteryId) {
@@ -4568,6 +4641,49 @@ function getAdminCheckSecret() {
   return null;
 }
 
+function validateAdminSecret(req) {
+  const configuredSecret = getAdminCheckSecret();
+  const providedSecret = req.get(ADMIN_SECRET_HEADER);
+
+  if (!configuredSecret) {
+    throw new functions.https.HttpsError(
+        "internal",
+        "Admin secret is not configured.",
+    );
+  }
+
+  if (!providedSecret) {
+    throw new functions.https.HttpsError(
+        "unauthenticated",
+        "Missing admin secret header.",
+    );
+  }
+
+  if (providedSecret !== configuredSecret) {
+    throw new functions.https.HttpsError(
+        "permission-denied",
+        "Invalid admin secret.",
+    );
+  }
+}
+
+function mapHttpsErrorCodeToStatus(code) {
+  switch (code) {
+    case "invalid-argument":
+      return 400;
+    case "unauthenticated":
+      return 401;
+    case "permission-denied":
+      return 403;
+    case "not-found":
+      return 404;
+    case "failed-precondition":
+      return 412;
+    default:
+      return 500;
+  }
+}
+
 function validateSubmitPayload(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new functions.https.HttpsError(
@@ -4636,7 +4752,7 @@ function asTrimmedString(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
-function asDate(value) {
+function normalizeDateTime(value) {
   if (!value) {
     return null;
   }
@@ -4646,6 +4762,19 @@ function asDate(value) {
   if (value instanceof Date) {
     return value;
   }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  if (typeof value === "object") {
+    const seconds = Number(value.seconds);
+    const nanoseconds = Number(value.nanoseconds || 0);
+    if (Number.isFinite(seconds)) {
+      return new Date(
+          (seconds * 1000) + Math.round(nanoseconds / 1000000),
+      );
+    }
+  }
   if (typeof value.toDate === "function") {
     try {
       return value.toDate();
@@ -4654,6 +4783,31 @@ function asDate(value) {
     }
   }
   return null;
+}
+
+function asDate(value) {
+  return normalizeDateTime(value);
+}
+
+function describeDateValueType(value) {
+  if (value == null) {
+    return "null";
+  }
+  if (value instanceof admin.firestore.Timestamp) {
+    return "FirestoreTimestamp";
+  }
+  if (value instanceof Date) {
+    return "Date";
+  }
+  if (typeof value === "string") {
+    return "string";
+  }
+  if (typeof value === "object") {
+    return value.constructor && value.constructor.name ?
+      value.constructor.name :
+      "object";
+  }
+  return typeof value;
 }
 
 function dateMillis(value) {
